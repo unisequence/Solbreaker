@@ -104,6 +104,9 @@ class TrainingBot:
         self.cover_until = 0.
         self.cover_goal = None
         self.next_cover_check = 0.
+        self.cover_check_at = 0.
+        self.cover_generation = None
+        self.combat_align = False
         self.passing = None
         self.passing_until = 0.
         self.next_pass_check = 0.
@@ -402,16 +405,23 @@ class BotDirector:
         nav=self.navigation
         if nav is None or now<ai.next_cover_check:return
         ai.next_cover_check=now+2.
-        if bot.reload_at-now<3.:return
+        if (bot.reload_at-now<3. or getattr(bot,'burst_pending',False)
+                or ai.cover_goal is not None or now<ai.maneuver_stable_until):return
         x,y,z=bot.pose.position;tx,ty,tz=threat
         angle=math.atan2(tx-x,tz-z)
+        if abs(wrap(angle-bot.pose.yaw))>math.radians(28.):return
         candidates=[]
-        for offset in (math.pi/2,-math.pi/2,math.pi,math.pi*.75,-math.pi*.75):
-            p=(x+math.sin(angle+offset)*12.,y,z+math.cos(angle+offset)*12.)
-            node=nav.nearest(p,2)
+        # Cover is a short reverse move, not a forward route to a point
+        # beside/behind the enemy-facing hull. A distant hidden endpoint
+        # alone never justifies exposing the flank while turning toward it.
+        for offset in (0.,.18,-.18):
+            heading=bot.pose.yaw+offset
+            p=(x-math.sin(heading)*6.,y,z-math.cos(heading)*6.)
+            node=nav.node(p)
             if node is not None:
-                p=nav.point(node)
-                if math.hypot(p[0]-x,p[2]-z)>5.:candidates.append(p)
+                p=(p[0],nav.point(node)[1],p[2])
+                if (self._traffic_corridor_clear(bot,p)
+                        and self._maneuver_clear(bot,ai,p,now)):candidates.append(p)
         if not candidates:return
         ends=[(tx,ty+1.1,tz)]*len(candidates)
         hits=self.arena.world._static_rays([(p[0],p[1]+1.4,p[2]) for p in candidates],ends)
@@ -419,20 +429,50 @@ class BotDirector:
         covered=[p for p,h in zip(candidates,hits) if h[0]>=0 and h[2]<.99]
         if covered:
             goal=min(covered,key=lambda p:math.dist(p,bot.pose.position))
-            changed=ai.cover_goal is None or math.dist(goal,ai.cover_goal)>nav.cell
             ai.cover_goal=goal
             ai.cover_until=min(now+3.,bot.reload_at-1.)
-            if changed:
-                ai.route_kind=None;ai.next_plan=0.
-                self.stats['cover_moves']+=1
+            ai.cover_check_at=now+.35;ai.cover_generation=nav.generation
+            self.stats['cover_moves']+=1
+
+    def _drive_cover(self, bot, ai, threat, now, braking):
+        """Back into a checked corridor without turning the nose away."""
+        goal=ai.cover_goal
+        if goal is None:return None
+        nav=self.navigation
+        x,_,z=bot.pose.position
+        dx,dz=goal[0]-x,goal[2]-z
+        distance=math.hypot(dx,dz)
+        heading=math.atan2(-dx,-dz)
+        threat_angle=math.atan2(threat[0]-x,threat[2]-z)
+        speed=max(0.,-bot.speed)
+        stopping=speed*speed/(2*max(.5,braking*ai.BRAKING_SAFETY_FACTOR))+speed*ai.BRAKING_REACTION_SECONDS
+        stop=(now>=ai.cover_until or bot.reload_at-now<=.75 or getattr(bot,'burst_pending',False)
+              or distance<=.6+stopping or abs(wrap(heading-bot.pose.yaw))>.5
+              or abs(wrap(threat_angle-bot.pose.yaw))>math.radians(35.)
+              or not self._traffic_corridor_clear(bot,goal))
+        if not stop and (now>=ai.cover_check_at or ai.cover_generation!=nav.generation):
+            stop=not self._maneuver_clear(bot,ai,goal,now)
+            ai.cover_check_at=now+.35;ai.cover_generation=nav.generation
+        if stop:
+            ai.cover_goal=None
+            ai.route_kind=None;ai.next_plan=0.
+            ai.maneuver_target=ai.target_id
+            return self._finish_maneuver(ai,now)
+        # Reverse steering has the opposite sign in Arena's drivetrain.
+        error=wrap(heading-bot.pose.yaw)
+        turn=ai.LEFT if error>.045 else ai.RIGHT if error<-.045 else 0
+        return ai.REVERSE|turn
 
     @staticmethod
-    def _needs_hull_aim(bot, goal):
+    def _needs_hull_aim(bot, ai, goal):
         low, high = bot.gun.yaw_limits
-        if high-low >= math.tau-.01:
-            return False
         x,_,z = bot.pose.position
         bearing=wrap(math.atan2(goal[0]-x,goal[2]-z)-bot.pose.yaw)
+        if high-low >= math.tau-.01:
+            # Restore the front after a route/target change, but retain a
+            # useful hull angle instead of chasing the turret's every turn.
+            ai.combat_align=abs(bearing)>math.radians(20. if ai.combat_align else 50.)
+            return ai.combat_align
         # Stop once the gun has a useful traverse margin. Casemates retain
         # hull aiming; turreted tanks do not chase every target-bearing change.
         return not min(low+.05,0.) <= bearing <= max(high-.05,0.)
@@ -898,8 +938,12 @@ class BotDirector:
                          and any(point.contains(position) for point in threatened)]
             if capturers:
                 candidates = capturers
+        previous_target=ai.target_id
         chosen=ai.choose_target(bot.pose.position,candidates)
         seen=chosen in ai.visible
+        if not seen or chosen!=previous_target:
+            ai.cover_goal=None
+            ai.combat_align=False
         if (not seen or chosen!=ai.maneuver_target or now<ai.reverse_until
                 or ai.recovery_replan or ai.passing is not None
                 or bot.entity_id in self.traffic.by_entity):
@@ -955,15 +999,12 @@ class BotDirector:
             if ai.route_watch_pause_at is None:ai.route_watch_pause_at=now
             return
         if self._drive_route_exit(bot,ai,now):return
-        cover=ai.cover_goal is not None and now<ai.cover_until
-        if cover:goal=ai.cover_goal
-        elif ai.cover_goal is not None:
-            ai.cover_goal=None
-            ai.route_kind=None;ai.next_plan=0.
+        # Even an expired retreat goes through its stop/settle transition.
+        cover=ai.cover_goal is not None
         distance=math.hypot(goal[0]-bot.pose.position[0],goal[2]-bot.pose.position[2])
         travelling=cover or order is not None
         if travelling:self._reset_maneuver(ai)
-        align=seen and not travelling and self._needs_hull_aim(bot,goal)
+        align=seen and not travelling and self._needs_hull_aim(bot,ai,goal)
         target=a.vehicles.get(chosen) if seen else None
         closing=a._training_bot_closing_speed(bot,target) if target is not None else abs(bot.speed)
         braking=a._training_bot_braking_acceleration(bot)
@@ -1002,8 +1043,14 @@ class BotDirector:
                                  attempted_forward=bool(flags&ai.FORWARD)):
                 bot.flags=self._avoid(bot,goal,ai.REVERSE,now)
             return
+        cover_flags=self._drive_cover(bot,ai,goal,now,braking)
+        if cover_flags is not None:
+            bot.flags=cover_flags
+            ai.check_at=ai.check_position=ai.check_yaw=None
+            if ai.route_watch_pause_at is None:ai.route_watch_pause_at=now
+            return
         maneuver=self._maneuver(bot,ai,goal,chosen,
-            seen and not travelling
+            seen and not travelling and not align
             and bot.gun.yaw_limits[1]-bot.gun.yaw_limits[0]>=math.tau-.01,now,braking)
         if maneuver is not None:
             bot.flags=maneuver
