@@ -1,0 +1,9 @@
+{
+  "tool": "built-in image_gen",
+  "method": "Independent text-only generation, selected concept 06 typography",
+  "input_images": [],
+  "selected_by": "project owner, 2026-11-10",
+  "prompt": "An editorial typography-led brand banner, disciplined Swiss-inspired layout. Large beautifully typeset white uppercase SOLBREAKER at the left, with the last part of the word subtly illuminated in pale lavender. Exact text SOLBREAKER, one line. On the right an abstract dramatic diagonal fracture made of two offset matte-black stone slabs, with a thin lavender shaft of light emerging from the seam, small suspended fragments and restrained depth. Black graphite background, luxurious matte finish, sparse composition, calm confident science-and-engineering identity. No tank, no existing emblem.",
+  "shared_direction": "Six independent text-only ultra-wide 3:1 Solbreaker launcher concepts, graphite/black/off-white/pale lavender. Left area reserved for launcher title. No previous emblem or game screenshot supplied.",
+  "sha256": "5fcfc5acd69c17d9ddad4958321ebbf302d7849b26fab8793625341ee1aea75d"
+}

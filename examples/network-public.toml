@@ -1,0 +1,17 @@
+version = 2
+
+[listen]
+http = "127.0.0.1:18080"
+login = "0.0.0.0:20016"
+base = "0.0.0.0:20017"
+
+[advertise]
+http = "https://tanks.example.org:443"
+login = "1.1.1.1:20016"
+base = "1.1.1.1:20017"
+
+[services]
+http = "http://127.0.0.1:18080"
+
+[access]
+client_networks = ["127.0.0.0/8", "1.1.1.1/32", "8.8.8.8/32"]

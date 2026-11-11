@@ -1,0 +1,17 @@
+[package]
+name = "tfs_impact_core"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "unwind"
+
+[dependencies]

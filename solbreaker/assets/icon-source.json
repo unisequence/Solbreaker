@@ -1,0 +1,11 @@
+{
+  "tool": "built-in image_gen",
+  "reference": "User-selected image supplied on 2026-11-09",
+  "prompt": "Use case: logo-brand. Clean up the supplied screenshot's white emblem into a crisp square application icon for Solbreaker. Preserve its identity: a fractured circular sun cut by a sharp diagonal black slash descending from upper left to lower right, several angular fragments on the right. Remove the phone status bar and the surrounding black screenshot background. White solid silhouette and transparent negative spaces, genuinely transparent background. Center the emblem with generous equal margins in a 1024x1024 square. Clean hard edges, high contrast, readable at small sizes. No text, no gradients, no shadows, no frame, no extra symbols.",
+  "selected_variant": "User-selected first generated emblem, retained as supplied",
+  "sha256": "df9543a2f9dccf357986686980fa4003a6a6e52152bb52b0424121a9911e617e",
+  "owner_clarification": {
+    "date": "2026-11-10",
+    "statement": "The project owner confirmed that the supplied logo was generated with AI."
+  }
+}

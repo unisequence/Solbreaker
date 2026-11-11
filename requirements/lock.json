@@ -1,0 +1,868 @@
+{
+  "schema": 1,
+  "recorded_on": "2026-11-10",
+  "groups": {
+    "bootstrap": [
+      {
+        "name": "pip",
+        "version": "26.3",
+        "requires_python": ">=3.10",
+        "source": "https://pypi.org/pypi/pip/26.3/json",
+        "files": [
+          {
+            "filename": "pip-26.3-py3-none-any.whl",
+            "sha256": "f3b60b20ffaadd4415ed7957212a38ac63fa4c5fa375bd0f4a797777940fad13"
+          }
+        ]
+      },
+      {
+        "name": "setuptools",
+        "version": "84.2.1",
+        "requires_python": ">=3.10",
+        "source": "https://pypi.org/pypi/setuptools/84.2.1/json",
+        "files": [
+          {
+            "filename": "setuptools-84.2.1-py3-none-any.whl",
+            "sha256": "ca140b45d5325a9478f880e351484f62fef15f336462e449ca0c03c873d589c2"
+          }
+        ]
+      },
+      {
+        "name": "wheel",
+        "version": "0.48.0",
+        "requires_python": ">=3.9",
+        "source": "https://pypi.org/pypi/wheel/0.48.0/json",
+        "files": [
+          {
+            "filename": "wheel-0.48.0-py3-none-any.whl",
+            "sha256": "3217dcc807155e45db462d7ef2431f5ddda0d7273b700d05a67b271ceb1287ab"
+          }
+        ]
+      },
+      {
+        "name": "packaging",
+        "version": "26.3",
+        "requires_python": ">=3.9",
+        "source": "https://pypi.org/pypi/packaging/26.3/json",
+        "files": [
+          {
+            "filename": "packaging-26.3-py3-none-any.whl",
+            "sha256": "d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c"
+          }
+        ]
+      }
+    ],
+    "base": [
+      {
+        "name": "lz4",
+        "version": "4.4.5",
+        "requires_python": ">=3.9",
+        "source": "https://pypi.org/pypi/lz4/4.4.5/json",
+        "files": [
+          {
+            "filename": "lz4-4.4.5-cp310-cp310-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+            "sha256": "2a2b7504d2dffed3fd19d4085fe1cc30cf221263fd01030819bdd8d2bb101cf1"
+          },
+          {
+            "filename": "lz4-4.4.5-cp310-cp310-win_amd64.whl",
+            "sha256": "7c4e7c44b6a31de77d4dc9772b7d2561937c9588a734681f70ec547cfbc51ecd"
+          },
+          {
+            "filename": "lz4-4.4.5-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+            "sha256": "75419bb1a559af00250b8f1360d508444e80ed4b26d9d40ec5b09fe7875cb989"
+          },
+          {
+            "filename": "lz4-4.4.5-cp311-cp311-win_amd64.whl",
+            "sha256": "8a842ead8ca7c0ee2f396ca5d878c4c40439a527ebad2b996b0444f0074ed004"
+          },
+          {
+            "filename": "lz4-4.4.5-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+            "sha256": "24092635f47538b392c4eaeff14c7270d2c8e806bf4be2a6446a378591c5e69e"
+          },
+          {
+            "filename": "lz4-4.4.5-cp312-cp312-win_amd64.whl",
+            "sha256": "713a777de88a73425cf08eb11f742cd2c98628e79a8673d6a52e3c5f0c116f33"
+          },
+          {
+            "filename": "lz4-4.4.5-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+            "sha256": "451039b609b9a88a934800b5fc6ee401c89ad9c175abf2f4d9f8b2e4ef1afc64"
+          },
+          {
+            "filename": "lz4-4.4.5-cp313-cp313t-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+            "sha256": "a2af2897333b421360fdcce895c6f6281dc3fab018d19d341cf64d043fc8d90d"
+          },
+          {
+            "filename": "lz4-4.4.5-cp313-cp313t-win_amd64.whl",
+            "sha256": "cdd4bdcbaf35056086d910d219106f6a04e1ab0daa40ec0eeef1626c27d0fddb"
+          },
+          {
+            "filename": "lz4-4.4.5-cp313-cp313-win_amd64.whl",
+            "sha256": "da68497f78953017deb20edff0dba95641cc86e7423dfadf7c0264e1ac60dc22"
+          },
+          {
+            "filename": "lz4-4.4.5-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+            "sha256": "0bba042ec5a61fa77c7e380351a61cb768277801240249841defd2ff0a10742f"
+          },
+          {
+            "filename": "lz4-4.4.5-cp314-cp314-win_amd64.whl",
+            "sha256": "92159782a4502858a21e0079d77cdcaade23e8a5d252ddf46b0652604300d7be"
+          },
+          {
+            "filename": "lz4-4.4.5-cp39-cp39-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+            "sha256": "1dd4d91d25937c2441b9fc0f4af01704a2d09f30a38c5798bc1d1b5a15ec9581"
+          },
+          {
+            "filename": "lz4-4.4.5-cp39-cp39-win_amd64.whl",
+            "sha256": "f32b9e65d70f3684532358255dc053f143835c5f5991e28a5ac4c93ce94b9ea7"
+          }
+        ]
+      },
+      {
+        "name": "PyYAML",
+        "version": "6.0.3",
+        "requires_python": ">=3.8",
+        "source": "https://pypi.org/pypi/PyYAML/6.0.3/json",
+        "files": [
+          {
+            "filename": "pyyaml-6.0.3-cp310-cp310-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+            "sha256": "9c7708761fccb9397fe64bbc0395abcae8c4bf7b0eac081e12b809bf47700d0b"
+          },
+          {
+            "filename": "pyyaml-6.0.3-cp310-cp310-musllinux_1_2_x86_64.whl",
+            "sha256": "5e0b74767e5f8c593e8c9b5912019159ed0533c70051e9cce3e8b6aa699fcd69"
+          },
+          {
+            "filename": "pyyaml-6.0.3-cp310-cp310-win_amd64.whl",
+            "sha256": "bdb2c67c6c1390b63c6ff89f210c8fd09d9a1217a465701eac7316313c915e4c"
+          },
+          {
+            "filename": "pyyaml-6.0.3-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+            "sha256": "b8bb0864c5a28024fac8a632c443c87c5aa6f215c0b126c449ae1a150412f31d"
+          },
+          {
+            "filename": "pyyaml-6.0.3-cp311-cp311-musllinux_1_2_x86_64.whl",
+            "sha256": "37503bfbfc9d2c40b344d06b2199cf0e96e97957ab1c1b546fd4f87e53e5d3e4"
+          },
+          {
+            "filename": "pyyaml-6.0.3-cp311-cp311-win_amd64.whl",
+            "sha256": "9f3bfb4965eb874431221a3ff3fdcddc7e74e3b07799e0e84ca4a0f867d449bf"
+          },
+          {
+            "filename": "pyyaml-6.0.3-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+            "sha256": "ba1cc08a7ccde2d2ec775841541641e4548226580ab850948cbfda66a1befcdc"
+          },
+          {
+            "filename": "pyyaml-6.0.3-cp312-cp312-musllinux_1_2_x86_64.whl",
+            "sha256": "41715c910c881bc081f1e8872880d3c650acf13dfa8214bad49ed4cede7c34ea"
+          },
+          {
+            "filename": "pyyaml-6.0.3-cp312-cp312-win_amd64.whl",
+            "sha256": "5fcd34e47f6e0b794d17de1b4ff496c00986e1c83f7ab2fb8fcfe9616ff7477b"
+          },
+          {
+            "filename": "pyyaml-6.0.3-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+            "sha256": "0f29edc409a6392443abf94b9cf89ce99889a1dd5376d94316ae5145dfedd5d6"
+          },
+          {
+            "filename": "pyyaml-6.0.3-cp313-cp313-musllinux_1_2_x86_64.whl",
+            "sha256": "eda16858a3cab07b80edaf74336ece1f986ba330fdb8ee0d6c0d68fe82bc96be"
+          },
+          {
+            "filename": "pyyaml-6.0.3-cp313-cp313-win_amd64.whl",
+            "sha256": "79005a0d97d5ddabfeeea4cf676af11e647e41d81c9a7722a193022accdb6b7c"
+          },
+          {
+            "filename": "pyyaml-6.0.3-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+            "sha256": "c458b6d084f9b935061bc36216e8a69a7e293a2f1e68bf956dcd9e6cbcd143f5"
+          },
+          {
+            "filename": "pyyaml-6.0.3-cp314-cp314-musllinux_1_2_x86_64.whl",
+            "sha256": "5190d403f121660ce8d1d2c1bb2ef1bd05b5f68533fc5c2ea899bd15f4399b35"
+          },
+          {
+            "filename": "pyyaml-6.0.3-cp314-cp314t-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+            "sha256": "00c4bdeba853cc34e7dd471f16b4114f4162dc03e6b7afcc2128711f0eca823c"
+          },
+          {
+            "filename": "pyyaml-6.0.3-cp314-cp314t-musllinux_1_2_x86_64.whl",
+            "sha256": "16249ee61e95f858e83976573de0f5b2893b3677ba71c9dd36b9cf8be9ac6d65"
+          },
+          {
+            "filename": "pyyaml-6.0.3-cp314-cp314t-win_amd64.whl",
+            "sha256": "4ad1906908f2f5ae4e5a8ddfce73c320c2a1429ec52eafd27138b7f1cbe341c9"
+          },
+          {
+            "filename": "pyyaml-6.0.3-cp314-cp314-win_amd64.whl",
+            "sha256": "4a2e8cebe2ff6ab7d1050ecd59c25d4c8bd7e6f400f5f82b96557ac0abafd0ac"
+          },
+          {
+            "filename": "PyYAML-6.0.3-cp38-cp38-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+            "sha256": "22ba7cfcad58ef3ecddc7ed1db3409af68d023b7f940da23c6c2a1890976eda6"
+          },
+          {
+            "filename": "PyYAML-6.0.3-cp38-cp38-musllinux_1_2_x86_64.whl",
+            "sha256": "6344df0d5755a2c9a276d4473ae6b90647e216ab4757f8426893b5dd2ac3f369"
+          },
+          {
+            "filename": "PyYAML-6.0.3-cp38-cp38-win_amd64.whl",
+            "sha256": "5cf4e27da7e3fbed4d6c3d8e797387aaad68102272f8f9752883bc32d61cb87b"
+          },
+          {
+            "filename": "pyyaml-6.0.3-cp39-cp39-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+            "sha256": "0150219816b6a1fa26fb4699fb7daa9caf09eb1999f3b70fb6e786805e80375a"
+          },
+          {
+            "filename": "pyyaml-6.0.3-cp39-cp39-musllinux_1_2_x86_64.whl",
+            "sha256": "27c0abcb4a5dac13684a37f76e701e054692a9b2d3064b70f5e4eb54810553d7"
+          },
+          {
+            "filename": "pyyaml-6.0.3-cp39-cp39-win_amd64.whl",
+            "sha256": "2e71d11abed7344e42a8849600193d15b6def118602c4c176f748e4583246007"
+          }
+        ]
+      },
+      {
+        "name": "cryptography",
+        "version": "50.0.2",
+        "requires_python": "!=3.9.0,!=3.9.1,>=3.9",
+        "source": "https://pypi.org/pypi/cryptography/50.0.2/json",
+        "files": [
+          {
+            "filename": "cryptography-50.0.2-cp311-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
+            "sha256": "630ebfea3bf689d075f82316324ff7433dc447fe6bc1bfc76524b74b4a9567d2"
+          },
+          {
+            "filename": "cryptography-50.0.2-cp311-abi3-manylinux_2_28_x86_64.whl",
+            "sha256": "4061c0079120205fb760c58acab6443e217307dcf05e3702cf970e0689972856"
+          },
+          {
+            "filename": "cryptography-50.0.2-cp311-abi3-manylinux_2_34_x86_64.whl",
+            "sha256": "9dab55f57c74c3cad24c323bacbbd04be4705ba6eb0d92e920b1fc4837ed5079"
+          },
+          {
+            "filename": "cryptography-50.0.2-cp311-abi3-musllinux_1_2_x86_64.whl",
+            "sha256": "85d0d9a31b9098e98534226d5686b47264b95e62ce459dc2e62fdfc809f9fe93"
+          },
+          {
+            "filename": "cryptography-50.0.2-cp311-abi3-win_amd64.whl",
+            "sha256": "7afa5a6602a9f29af1f3a2965f831bae7c9d5d597b7cbb716d41ab3b7d89879c"
+          },
+          {
+            "filename": "cryptography-50.0.2-cp314-cp314t-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
+            "sha256": "ab50ee449bf968271e820086f10a33d101dd060370abc10bcd22279be2656539"
+          },
+          {
+            "filename": "cryptography-50.0.2-cp314-cp314t-manylinux_2_28_x86_64.whl",
+            "sha256": "241449bf940a5d27309bd317e6f9a2af6932113818bb2b8f5c59ddc7ef16da18"
+          },
+          {
+            "filename": "cryptography-50.0.2-cp314-cp314t-manylinux_2_34_x86_64.whl",
+            "sha256": "828d49b0ff5a0e3975865571c5d91dbbdd0d38d8289b249a163e9425413a5e05"
+          },
+          {
+            "filename": "cryptography-50.0.2-cp314-cp314t-musllinux_1_2_x86_64.whl",
+            "sha256": "8c71ba2cd31fc93748c38e1b613200ff1c2665cbfd5341fe3a61cfde35a1430e"
+          },
+          {
+            "filename": "cryptography-50.0.2-cp314-cp314t-win_amd64.whl",
+            "sha256": "78198641e5be9521beea5aa782bb551a58068d10e6eb04c9c680c1b69f2e7d45"
+          },
+          {
+            "filename": "cryptography-50.0.2-cp315-abi3.abi3t-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
+            "sha256": "f2f9bd7f90c64fe89253f0a2c05e3c4856072660429ce8831b4235bf29403a67"
+          },
+          {
+            "filename": "cryptography-50.0.2-cp315-abi3.abi3t-manylinux_2_28_x86_64.whl",
+            "sha256": "58a0c478eeca76fe5e07993c5a0703def34a6dc6a0cda4f5564639b33112ffe7"
+          },
+          {
+            "filename": "cryptography-50.0.2-cp315-abi3.abi3t-manylinux_2_34_x86_64.whl",
+            "sha256": "e105ab60406787da31fccc883fc0f733af1efd78f0136a4599692c4083a73d0c"
+          },
+          {
+            "filename": "cryptography-50.0.2-cp315-abi3.abi3t-musllinux_1_2_x86_64.whl",
+            "sha256": "c71be1cbfa5cd9a41ee452acf1eccd82b2c05950358b106ec8ceb83411d1a020"
+          },
+          {
+            "filename": "cryptography-50.0.2-cp315-abi3.abi3t-win_amd64.whl",
+            "sha256": "c423ab384a46c4dff7217b2ea5ba2e11cffdeab6441acd04cf65a369caf0366c"
+          },
+          {
+            "filename": "cryptography-50.0.2-cp39-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
+            "sha256": "ee247f5c245c9a2fe7c8e2214e295918838e44e00a45a6718451e4004219e767"
+          },
+          {
+            "filename": "cryptography-50.0.2-cp39-abi3-manylinux_2_28_x86_64.whl",
+            "sha256": "f21e8a22c8605750c7af886bab299a363721264061b4ac0a30efb73cfd58efc5"
+          },
+          {
+            "filename": "cryptography-50.0.2-cp39-abi3-manylinux_2_34_x86_64.whl",
+            "sha256": "1981f1db4630889b9ef7803fadef12b056f428cb6b85c27ba57b774793b6093c"
+          },
+          {
+            "filename": "cryptography-50.0.2-cp39-abi3-musllinux_1_2_x86_64.whl",
+            "sha256": "ce47f66801c20ec6c6632453bb5960fe38939e9306970b48b3a5a26de7745d94"
+          },
+          {
+            "filename": "cryptography-50.0.2-cp39-abi3-win_amd64.whl",
+            "sha256": "4e81d95e5bafc2d6e34e4bed780e53e4d5b9a2f928573428aa4d35fbec1eb0de"
+          },
+          {
+            "filename": "cryptography-50.0.2-pp311-pypy311_pp73-manylinux_2_28_x86_64.whl",
+            "sha256": "eef4c2f3423810b3070ab391f85436d2f8bbfcb286ac15cbc73190b3563b1f1a"
+          },
+          {
+            "filename": "cryptography-50.0.2-pp311-pypy311_pp73-manylinux_2_34_x86_64.whl",
+            "sha256": "1ba34f04897fcdaa73f74145c25f3ec146fbd56593853e88adc2e811303c5f42"
+          },
+          {
+            "filename": "cryptography-50.0.2-pp311-pypy311_pp80-win_amd64.whl",
+            "sha256": "7b75de3c8b3be1cdb1052747c929440c3eea46c1bc2cb8a6e3a48388e9b7b452"
+          }
+        ]
+      },
+      {
+        "name": "cffi",
+        "version": "2.1.1",
+        "requires_python": ">=3.10",
+        "source": "https://pypi.org/pypi/cffi/2.1.1/json",
+        "files": [
+          {
+            "filename": "cffi-2.1.1-cp310-cp310-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
+            "sha256": "194cffa889098ced9976c3fc6340305e43f6303657d298da55366907c05c22d6"
+          },
+          {
+            "filename": "cffi-2.1.1-cp310-cp310-musllinux_1_2_x86_64.whl",
+            "sha256": "1dea0e4d7d4f11f619fe8c1d76caf49e24405b4b5743c0e3be16a500ecd930c9"
+          },
+          {
+            "filename": "cffi-2.1.1-cp310-cp310-win_amd64.whl",
+            "sha256": "a48d62ab9d6f4f98c983223a547af44be6ca3691074c31cecced6facd3ba2dc1"
+          },
+          {
+            "filename": "cffi-2.1.1-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
+            "sha256": "34e261f78cb6ceaaa36f42f2613f4380d94d9c759a9c73c769ee6e0247364632"
+          },
+          {
+            "filename": "cffi-2.1.1-cp311-cp311-musllinux_1_2_x86_64.whl",
+            "sha256": "f5cfbc5fe74540d335175b656c725d74d90e3730c626d92575eea35029d9afaa"
+          },
+          {
+            "filename": "cffi-2.1.1-cp311-cp311-win_amd64.whl",
+            "sha256": "42f6930c31dc7f50732c9ae793c2786c7b6b044195967bbdde40bb9be81c4cc0"
+          },
+          {
+            "filename": "cffi-2.1.1-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
+            "sha256": "c1453022f490d2459a11819d83ad1d586e9ff65a12ac3e705ffebd46d3685dcf"
+          },
+          {
+            "filename": "cffi-2.1.1-cp312-cp312-musllinux_1_2_x86_64.whl",
+            "sha256": "210019b6c7cf07f081b4c54635c8cf744377001350e29cc0f81c4377b4797735"
+          },
+          {
+            "filename": "cffi-2.1.1-cp312-cp312-win_amd64.whl",
+            "sha256": "f53e442b08449d42821fa4a4fba000095af9f62742a500f978a9f557ec44339a"
+          },
+          {
+            "filename": "cffi-2.1.1-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
+            "sha256": "a931079504ecc49efed7744c476a5c343a92fabf66dec2db95edb1b2fdc770e2"
+          },
+          {
+            "filename": "cffi-2.1.1-cp313-cp313-musllinux_1_2_x86_64.whl",
+            "sha256": "e0bcb7e0f677f543555d2adff3bf19c05f66cdb4796e5ff602442ab2fe3c4ef7"
+          },
+          {
+            "filename": "cffi-2.1.1-cp313-cp313-win_amd64.whl",
+            "sha256": "1aa5645c30469b09530c4ebca77ebf8f17618293c58f8549cb1a543a50236e7d"
+          },
+          {
+            "filename": "cffi-2.1.1-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
+            "sha256": "b0431303acaea1089ad4b3e9ce4e6518193def1118d4073ca848635ee4ea2e96"
+          },
+          {
+            "filename": "cffi-2.1.1-cp314-cp314-musllinux_1_2_x86_64.whl",
+            "sha256": "5c58fe613dc5e5336357eff555824a314d8e43282600435c8d1cb6a7a2fedd13"
+          },
+          {
+            "filename": "cffi-2.1.1-cp314-cp314t-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
+            "sha256": "51b31d1c98274844cfd7838ce00bfc27c7423a4dc00fc0772fc3331c2cc90676"
+          },
+          {
+            "filename": "cffi-2.1.1-cp314-cp314t-musllinux_1_2_x86_64.whl",
+            "sha256": "25792eac27877609e7bb06d42ff88278a6624fff2ba9bbb523c09616b117e80f"
+          },
+          {
+            "filename": "cffi-2.1.1-cp314-cp314t-win_amd64.whl",
+            "sha256": "616f097f2fe415bc92a247f02e11f634e1f9e9a83d327e3c915c15089c87869e"
+          },
+          {
+            "filename": "cffi-2.1.1-cp314-cp314-win_amd64.whl",
+            "sha256": "3222ba5d678f80a030e6afbcc33dc1ae5cb45facabb61cee2c7016b8432fde48"
+          },
+          {
+            "filename": "cffi-2.1.1-cp315-cp315-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
+            "sha256": "aeae0e330c9f6acd681f647d46cefd30c29f93e3392882e792e82080c9691399"
+          },
+          {
+            "filename": "cffi-2.1.1-cp315-cp315-musllinux_1_2_x86_64.whl",
+            "sha256": "cc572dace3f60ef98d7b12ff411d20f5362feb31a0439eab0085bbfd349982d7"
+          },
+          {
+            "filename": "cffi-2.1.1-cp315-cp315t-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
+            "sha256": "363e05fa78e15116c3c32c210ee36884fd6b9afa6d440e47112c3bd511d64cb6"
+          },
+          {
+            "filename": "cffi-2.1.1-cp315-cp315t-musllinux_1_2_x86_64.whl",
+            "sha256": "7da0c5eff80f0197f3b3d1232ec5a682a9325f4ae9016a78f5f5ca35f9ced1f5"
+          },
+          {
+            "filename": "cffi-2.1.1-cp315-cp315t-win_amd64.whl",
+            "sha256": "d9c275eaacd24aa73f94ffd6de08fc3f932424d8b6c376f4bed7cde376fe7bc3"
+          },
+          {
+            "filename": "cffi-2.1.1-cp315-cp315-win_amd64.whl",
+            "sha256": "e6e8cff14d6fb0be70a09c0bdc58096f501952d04624ebf867e0e56da2df8960"
+          }
+        ]
+      },
+      {
+        "name": "pycparser",
+        "version": "3.12",
+        "requires_python": ">=3.11",
+        "source": "https://pypi.org/pypi/pycparser/3.12/json",
+        "files": [
+          {
+            "filename": "pycparser-3.12-py3-none-any.whl",
+            "sha256": "a076f3f489b39b43ed13563a1dafe42447445bec2e294154ec5c57fcdda4c85e"
+          }
+        ]
+      }
+    ],
+    "numpy-legacy": [
+      {
+        "name": "numpy",
+        "version": "1.26.4",
+        "requires_python": ">=3.9",
+        "source": "https://pypi.org/pypi/numpy/1.26.4/json",
+        "files": [
+          {
+            "filename": "numpy-1.26.4-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+            "sha256": "ffa75af20b44f8dba823498024771d5ac50620e6915abac414251bd971b4529f"
+          },
+          {
+            "filename": "numpy-1.26.4-cp310-cp310-musllinux_1_1_x86_64.whl",
+            "sha256": "a4abb4f9001ad2858e7ac189089c42178fcce737e4169dc61321660f1a96c7d2"
+          },
+          {
+            "filename": "numpy-1.26.4-cp310-cp310-win_amd64.whl",
+            "sha256": "b97fe8060236edf3662adfc2c633f56a08ae30560c56310562cb4f95500022d5"
+          },
+          {
+            "filename": "numpy-1.26.4-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+            "sha256": "666dbfb6ec68962c033a450943ded891bed2d54e6755e35e5835d63f4f6931d5"
+          },
+          {
+            "filename": "numpy-1.26.4-cp311-cp311-musllinux_1_1_x86_64.whl",
+            "sha256": "60dedbb91afcbfdc9bc0b1f3f402804070deed7392c23eb7a7f07fa857868e8a"
+          },
+          {
+            "filename": "numpy-1.26.4-cp311-cp311-win_amd64.whl",
+            "sha256": "cd25bcecc4974d09257ffcd1f098ee778f7834c3ad767fe5db785be9a4aa9cb2"
+          },
+          {
+            "filename": "numpy-1.26.4-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+            "sha256": "675d61ffbfa78604709862923189bad94014bef562cc35cf61d3a07bba02a7ed"
+          },
+          {
+            "filename": "numpy-1.26.4-cp312-cp312-musllinux_1_1_x86_64.whl",
+            "sha256": "1dda2e7b4ec9dd512f84935c5f126c8bd8b9f2fc001e9f54af255e8c5f16b0e0"
+          },
+          {
+            "filename": "numpy-1.26.4-cp312-cp312-win_amd64.whl",
+            "sha256": "08beddf13648eb95f8d867350f6a018a4be2e5ad54c8d8caed89ebca558b2818"
+          },
+          {
+            "filename": "numpy-1.26.4-cp39-cp39-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+            "sha256": "f870204a840a60da0b12273ef34f7051e98c3b5961b61b0c2c1be6dfd64fbcd3"
+          },
+          {
+            "filename": "numpy-1.26.4-cp39-cp39-musllinux_1_1_x86_64.whl",
+            "sha256": "47711010ad8555514b434df65f7d7b076bb8261df1ca9bb78f53d3b2db02e95c"
+          },
+          {
+            "filename": "numpy-1.26.4-cp39-cp39-win_amd64.whl",
+            "sha256": "3373d5d70a5fe74a2c1bb6d2cfd9609ecf686d47a2d7b1d37a8f3b6bf6003aea"
+          },
+          {
+            "filename": "numpy-1.26.4-pp39-pypy39_pp73-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+            "sha256": "95a7476c59002f2f6c590b9b7b998306fba6a5aa646b1e22ddfeaf8f78c3a29c"
+          },
+          {
+            "filename": "numpy-1.26.4-pp39-pypy39_pp73-win_amd64.whl",
+            "sha256": "7e50d0a0cc3189f9cb0aeb3a6a6af18c16f59f004b866cd2be1c14b36134a4a0"
+          }
+        ]
+      }
+    ],
+    "numpy-modern": [
+      {
+        "name": "numpy",
+        "version": "2.5.4",
+        "requires_python": ">=3.12",
+        "source": "https://pypi.org/pypi/numpy/2.5.4/json",
+        "files": [
+          {
+            "filename": "numpy-2.5.4-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
+            "sha256": "fbde6962867ee75b48b0ee29b2b9372ec5d617799dbaf38e82dc0596f2f7738a"
+          },
+          {
+            "filename": "numpy-2.5.4-cp312-cp312-musllinux_1_2_x86_64.whl",
+            "sha256": "b89d0aaae2fe498c648f4c4795c084db535af5bd98ef942b2a3681fb74ce8645"
+          },
+          {
+            "filename": "numpy-2.5.4-cp312-cp312-win_amd64.whl",
+            "sha256": "a7b1b6353e36a7e50de2973a38d705c88ee93adcf120673cee7f45a4a3fa223a"
+          },
+          {
+            "filename": "numpy-2.5.4-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
+            "sha256": "6ffa07666f8da0eef81d149934a626d0d95fbd6838432a33e66245423a9062c0"
+          },
+          {
+            "filename": "numpy-2.5.4-cp313-cp313-musllinux_1_2_x86_64.whl",
+            "sha256": "b86966fbe4ad7de710422175572bcdc75fdedadfb54bc6fab7deabccddd7780b"
+          },
+          {
+            "filename": "numpy-2.5.4-cp313-cp313-win_amd64.whl",
+            "sha256": "8b4d2fd2d34e5f8c9235ee787de5631a37a28402b15cb80814df973d2be54129"
+          },
+          {
+            "filename": "numpy-2.5.4-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
+            "sha256": "d549420b8858885cea8838a727842249218b9c1da24dd517e25c9c7a948310a3"
+          },
+          {
+            "filename": "numpy-2.5.4-cp314-cp314-musllinux_1_2_x86_64.whl",
+            "sha256": "4e263278bfb5ee6409db8aedbc4cc32973b1b82bc1e8d3c668551d04d83a7e37"
+          },
+          {
+            "filename": "numpy-2.5.4-cp314-cp314t-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
+            "sha256": "c9b80cdf5cedba0e90d93fa5f9a333c4d65bd545cd669b71bb97ce2b703c9d73"
+          },
+          {
+            "filename": "numpy-2.5.4-cp314-cp314t-musllinux_1_2_x86_64.whl",
+            "sha256": "64f9c9878c1938476365e11ccfb6b770f3b9e5f045ccddc514235041e6959365"
+          },
+          {
+            "filename": "numpy-2.5.4-cp314-cp314t-win_amd64.whl",
+            "sha256": "067374eb538c34c745436365cf7b0112595c1d326f21ce4ff340f61230239fbb"
+          },
+          {
+            "filename": "numpy-2.5.4-cp314-cp314-win_amd64.whl",
+            "sha256": "2ca144f15135b6212a5c47b1e2aeca6e412f102f95a2d5d88d8aec77eb255de3"
+          },
+          {
+            "filename": "numpy-2.5.4-cp315-cp315-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
+            "sha256": "56733449d2544178beaa4545cee357370440cf056c197f9c7bfb19dbfdd0e86d"
+          },
+          {
+            "filename": "numpy-2.5.4-cp315-cp315-musllinux_1_2_x86_64.whl",
+            "sha256": "b1185012870173de7ae33d370bd45b1cf5baee747ea4b97036b65f4e93016877"
+          },
+          {
+            "filename": "numpy-2.5.4-cp315-cp315t-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
+            "sha256": "80d6ef6e8620eb2c2b4c4caad50b5935d6db3cde2d51581b55dcc79e14016d1d"
+          },
+          {
+            "filename": "numpy-2.5.4-cp315-cp315t-musllinux_1_2_x86_64.whl",
+            "sha256": "0f02a46e49cfb6c73bdb7aea1c0d3461dbae9aba613542b65f657cd3d17b9fab"
+          },
+          {
+            "filename": "numpy-2.5.4-cp315-cp315t-win_amd64.whl",
+            "sha256": "38f47be9f74ab870d2633b5456ae519c43758a8d1fd05342f0ce4ecc034396ee"
+          },
+          {
+            "filename": "numpy-2.5.4-cp315-cp315-win_amd64.whl",
+            "sha256": "332f3378fe077dd850e677ec01bdcc4f22368fb5d50ef10b2c79230b1bf5a592"
+          }
+        ]
+      }
+    ],
+    "physics": [
+      {
+        "name": "pybullet",
+        "version": "3.2.7",
+        "requires_python": null,
+        "source": "https://pypi.org/pypi/pybullet/3.2.7/json",
+        "files": [
+          {
+            "filename": "pybullet-3.2.7-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+            "sha256": "814e6b0c035a634b5c46f69065effb085cc451886dda4140576be2f34b461940"
+          },
+          {
+            "filename": "pybullet-3.2.7-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+            "sha256": "5d858abf7c12a21ef3ed351cf81dac1b5e486ec25c9ab59bfc84beb89034edff"
+          },
+          {
+            "filename": "pybullet-3.2.7-cp36-cp36m-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+            "sha256": "ab4b93e47fbea981e4a85c07083288a0af897bfedc1fd005636201c5b36e9a87"
+          },
+          {
+            "filename": "pybullet-3.2.7-cp37-cp37m-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+            "sha256": "f6a23e6e8d59924a7eca3cc1709fac7353a585c4958d610729ca418f3e633a55"
+          },
+          {
+            "filename": "pybullet-3.2.7-cp38-cp38-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+            "sha256": "637be83db2405d4f058a1125bd56bc954f355ff15e519a6738c00d4be3741c4e"
+          },
+          {
+            "filename": "pybullet-3.2.7-cp39-cp39-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+            "sha256": "438a95e9d53af5b2e9bbf7b12e1846485e58532b57580c5290dee305fa8b4a6b"
+          },
+          {
+            "filename": "pybullet-3.2.7-pp37-pypy37_pp73-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+            "sha256": "3138029e00813d8bde6fa2068c8fde44c24adb29b04d39524ca29afc4203e00a"
+          },
+          {
+            "filename": "pybullet-3.2.7-pp38-pypy38_pp73-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+            "sha256": "71e97acbce9a0dab14dc4942bf2134ed50c130c32a85ee18791c9bd08bc953d2"
+          },
+          {
+            "filename": "pybullet-3.2.7-pp39-pypy39_pp73-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+            "sha256": "5457a2f32ea718bf09c5391a6b7695044c80ac6416571388caa56a0ccf67ba9a"
+          },
+          {
+            "filename": "pybullet-3.2.7.tar.gz",
+            "sha256": "042879db8d101ac7590dee475fc6aded508b85fe1273fdbbfde1d88bd200e14f"
+          }
+        ]
+      }
+    ],
+    "gui": [
+      {
+        "name": "PySide6-Essentials",
+        "version": "6.12.0",
+        "requires_python": "<3.16,>=3.10",
+        "source": "https://pypi.org/pypi/PySide6-Essentials/6.12.0/json",
+        "files": [
+          {
+            "filename": "pyside6_essentials-6.12.0-cp310-abi3-manylinux_2_34_x86_64.whl",
+            "sha256": "16f4b5e41daf49235ae048458243da9efe5f3d8040f9cc5aa454ce69893d3bd9"
+          },
+          {
+            "filename": "pyside6_essentials-6.12.0-cp310-abi3-win_amd64.whl",
+            "sha256": "c9a95102aa23c1f86516a30d5a9be37552d324eee7e567eb7508973f1218cb42"
+          }
+        ]
+      },
+      {
+        "name": "shiboken6",
+        "version": "6.12.0",
+        "requires_python": "<3.16,>=3.10",
+        "source": "https://pypi.org/pypi/shiboken6/6.12.0/json",
+        "files": [
+          {
+            "filename": "shiboken6-6.12.0-cp310-abi3-manylinux_2_34_x86_64.whl",
+            "sha256": "3bde565bb0890044b5c7f63808adddede5abc241e9395a2bfed61919884d6240"
+          },
+          {
+            "filename": "shiboken6-6.12.0-cp310-abi3-win_amd64.whl",
+            "sha256": "a1906cb8116869178c64b6bab52623bbc8b4ceed7b30bfc3c9aa0f6e67f6438e"
+          }
+        ]
+      }
+    ],
+    "tui": [
+      {
+        "name": "textual",
+        "version": "8.2.8",
+        "requires_python": "<4.0,>=3.9",
+        "source": "https://pypi.org/pypi/textual/8.2.8/json",
+        "files": [
+          {
+            "filename": "textual-8.2.8-py3-none-any.whl",
+            "sha256": "267375fd402dc8d981457212efa71f0e3365fd17bba144ba9bb3ed7563cb374a"
+          }
+        ]
+      },
+      {
+        "name": "rich",
+        "version": "15.0.0",
+        "requires_python": ">=3.9.0",
+        "source": "https://pypi.org/pypi/rich/15.0.0/json",
+        "files": [
+          {
+            "filename": "rich-15.0.0-py3-none-any.whl",
+            "sha256": "33bd4ef74232fb73fe9279a257718407f169c09b78a87ad3d296f548e27de0bb"
+          }
+        ]
+      },
+      {
+        "name": "markdown-it-py",
+        "version": "4.2.0",
+        "requires_python": ">=3.10",
+        "source": "https://pypi.org/pypi/markdown-it-py/4.2.0/json",
+        "files": [
+          {
+            "filename": "markdown_it_py-4.2.0-py3-none-any.whl",
+            "sha256": "9f7ebbcd14fe59494226453aed97c1070d83f8d24b6fc3a3bcf9a38092641c4a"
+          }
+        ]
+      },
+      {
+        "name": "mdurl",
+        "version": "0.1.2",
+        "requires_python": ">=3.7",
+        "source": "https://pypi.org/pypi/mdurl/0.1.2/json",
+        "files": [
+          {
+            "filename": "mdurl-0.1.2-py3-none-any.whl",
+            "sha256": "84008a41e51615a49fc9966191ff91509e3c40b939176e643fd50a5c2196b8f8"
+          }
+        ]
+      },
+      {
+        "name": "linkify-it-py",
+        "version": "2.2.0",
+        "requires_python": ">=3.10",
+        "source": "https://pypi.org/pypi/linkify-it-py/2.2.0/json",
+        "files": [
+          {
+            "filename": "linkify_it_py-2.2.0-py3-none-any.whl",
+            "sha256": "3adc40eb5af300b2605fcfdb968c24e1d780a90f1f2221af7c15e5111e94d443"
+          }
+        ]
+      },
+      {
+        "name": "mdit-py-plugins",
+        "version": "0.6.1",
+        "requires_python": ">=3.10",
+        "source": "https://pypi.org/pypi/mdit-py-plugins/0.6.1/json",
+        "files": [
+          {
+            "filename": "mdit_py_plugins-0.6.1-py3-none-any.whl",
+            "sha256": "214c82fb2ac524472ab6a5bcab1de80f73b50443e187f401bfd77efbc7c6481d"
+          }
+        ]
+      },
+      {
+        "name": "platformdirs",
+        "version": "4.14.5",
+        "requires_python": ">=3.11",
+        "source": "https://pypi.org/pypi/platformdirs/4.14.5/json",
+        "files": [
+          {
+            "filename": "platformdirs-4.14.5-py3-none-any.whl",
+            "sha256": "8e778c6fa421516f4d3369449f8df3b0e1b72c0e0005fe88e3ec772d0a14e750"
+          }
+        ]
+      },
+      {
+        "name": "Pygments",
+        "version": "2.21.0",
+        "requires_python": ">=3.9",
+        "source": "https://pypi.org/pypi/Pygments/2.21.0/json",
+        "files": [
+          {
+            "filename": "pygments-2.21.0-py3-none-any.whl",
+            "sha256": "2363c69b61c4a97c838da3b130dcd6468f4848992b21a82f2a63ec34377137d9"
+          }
+        ]
+      },
+      {
+        "name": "typing_extensions",
+        "version": "4.16.0",
+        "requires_python": ">=3.9",
+        "source": "https://pypi.org/pypi/typing_extensions/4.16.0/json",
+        "files": [
+          {
+            "filename": "typing_extensions-4.16.0-py3-none-any.whl",
+            "sha256": "481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8"
+          }
+        ]
+      }
+    ],
+    "support": [
+      {
+        "name": "Cython",
+        "version": "3.3.1",
+        "requires_python": ">=3.9",
+        "source": "https://pypi.org/pypi/Cython/3.3.1/json",
+        "files": [
+          {
+            "filename": "cython-3.3.1-cp310-cp310-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+            "sha256": "14bd1521a14d98bed4ae791ace5e830055ffc45a8cbb09f22adf90ee7dca3409"
+          },
+          {
+            "filename": "cython-3.3.1-cp310-cp310-win_amd64.whl",
+            "sha256": "747dade0373011034645ace4e7eb3a54102c52524fc0675dea76e655e9c1dcff"
+          },
+          {
+            "filename": "cython-3.3.1-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+            "sha256": "26a28e0ca5dffe9c7d69d1e3a0f78cb74f41b2b6b40771f620262a5d04862a00"
+          },
+          {
+            "filename": "cython-3.3.1-cp311-cp311-win_amd64.whl",
+            "sha256": "298d3e46d1d4e2f4405d2c934b51899482101a0b0dc43b1b13b2e38f87addf52"
+          },
+          {
+            "filename": "cython-3.3.1-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+            "sha256": "215669fd0ce792080cd4d0748db7e1e31f424b6706a6220d08339895e6a3a03a"
+          },
+          {
+            "filename": "cython-3.3.1-cp312-cp312-win_amd64.whl",
+            "sha256": "fd81cfc6e94c43c5c0fe50439c11b90dc89cc6b323f92b37edc6a951d0a619d7"
+          },
+          {
+            "filename": "cython-3.3.1-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+            "sha256": "85be5442e8f465c7c5e80837ac2a85a2ce04034e616445113092e85b65d0ab94"
+          },
+          {
+            "filename": "cython-3.3.1-cp313-cp313-win_amd64.whl",
+            "sha256": "0f7d52979bf7730351cf9ca2e9257d4b80f729053b521159bab8666e6be7e3bd"
+          },
+          {
+            "filename": "cython-3.3.1-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+            "sha256": "7a6c191617853f2e0d5936c73f5d5cd096548f4d9e0fa37612ef721591c42cb3"
+          },
+          {
+            "filename": "cython-3.3.1-cp314-cp314-win_amd64.whl",
+            "sha256": "7bcc6de1603d8180667b40f4014be142d7d62cfc10af0184ad8d6a83847a2ced"
+          },
+          {
+            "filename": "cython-3.3.1-cp315-cp315-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+            "sha256": "fcb6c86dddaedd1da5d77ba2469c1a4bea52442e02d8f0653ff78667fbaaa8d9"
+          },
+          {
+            "filename": "cython-3.3.1-cp315-cp315-win_amd64.whl",
+            "sha256": "45dd533a87c9629d02d77c9a5b48cf399907a99e4bb556aebafd2ac4b68580d2"
+          },
+          {
+            "filename": "cython-3.3.1-cp39-abi3-musllinux_1_2_x86_64.whl",
+            "sha256": "5febfc8c52aced0cf9360e6f2304428a5fa0e66fd9aa7338d5c41f0ce26dd104"
+          },
+          {
+            "filename": "cython-3.3.1-cp39-cp39-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+            "sha256": "55102da0e7700c533cea2bec1456ee6169cc13ace6b9f6048c31f55cca76bc51"
+          },
+          {
+            "filename": "cython-3.3.1-cp39-cp39-win_amd64.whl",
+            "sha256": "39a070cfd465ab44e4fc027f655df38e7d37c32d16262b254390a1015a0691e9"
+          },
+          {
+            "filename": "cython-3.3.1-py3-none-any.whl",
+            "sha256": "61abc7feedd20dac6c4ff7ab3a30e17136a067b242ab9253e2b4a6d9a72c2b61"
+          }
+        ]
+      }
+    ]
+  },
+  "native_windows_physics": {
+    "name": "pybullet",
+    "version": "3.2.7",
+    "files": [
+      {
+        "filename": "pybullet-3.2.7-cp312-cp312-win_amd64.whl",
+        "sha256": "db9ef1370abd2d989ccf3b14b8d581410aaf6a8e3723d6c953f4980525266945"
+      }
+    ]
+  }
+}

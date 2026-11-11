@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "sha256": {
+    "tfs_sim_core.dll": "5350c4bb4e3cdb8bb641c294bd8580b1417f6c8170be21248c0452b190d6b061",
+    "tfs_impact_core.dll": "401af3b8e629fa57c93af978b77bfaa7ebad1ae7776a7c19e0c29f8d1d553787",
+    "tfs_armor_query.dll": "0fd2869e669d2bc60eadd4e42d2073ec7589a3da6dba5bbbe56f4e29400ac381",
+    "tfs_rapier_dynamic.dll": "ea20098f0188193f70076a5444ff0bb692118c9d44ac8dffad5f28b1abb92911",
+    "pybullet-3.2.7-cp312-cp312-win_amd64.whl": "db9ef1370abd2d989ccf3b14b8d581410aaf6a8e3723d6c953f4980525266945",
+    "_contact_queries.pyd": "7ec894ef9027be9dfeb0fbd6259bc68ad6bb14657dc069c15e07632e3456fb7d"
+  }
+}

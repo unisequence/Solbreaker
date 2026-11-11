@@ -1,0 +1,73 @@
+# Native picker identifiers for pinned 11.21 maps.yaml.
+# The private user_map row matches tools/register_user_map_picker.py.
+.balign 4
+map_keys:
+    .long 1, map_key_1-0x400000
+    .long 2, map_key_2-0x400000
+    .long 3, map_key_3-0x400000
+    .long 4, map_key_4-0x400000
+    .long 5, map_key_5-0x400000
+    .long 6, map_key_6-0x400000
+    .long 7, map_key_7-0x400000
+    .long 8, map_key_8-0x400000
+    .long 9, map_key_9-0x400000
+    .long 10, map_key_10-0x400000
+    .long 11, map_key_11-0x400000
+    .long 12, map_key_12-0x400000
+    .long 13, map_key_13-0x400000
+    .long 14, map_key_14-0x400000
+    .long 15, map_key_15-0x400000
+    .long 19, map_key_19-0x400000
+    .long 20, map_key_20-0x400000
+    .long 21, map_key_21-0x400000
+    .long 23, map_key_23-0x400000
+    .long 25, map_key_25-0x400000
+    .long 26, map_key_26-0x400000
+    .long 27, map_key_27-0x400000
+    .long 30, map_key_30-0x400000
+    .long 31, map_key_31-0x400000
+    .long 35, map_key_35-0x400000
+    .long 38, map_key_38-0x400000
+    .long 39, map_key_39-0x400000
+    .long 40, map_key_40-0x400000
+    .long 42, map_key_42-0x400000
+    .long 43, map_key_43-0x400000
+    .long 83, map_key_83-0x400000
+    .long 85, map_key_85-0x400000
+    .long 89, map_key_89-0x400000
+    .long 100, map_key_100-0x400000
+    .long 0,0
+map_key_1: .asciz "#maps:karelia:17_karelia_ka/17_karelia_ka.sc2"
+map_key_2: .asciz "#maps:desert_train:02_desert_train_dt/02_desert_train_dt.sc2"
+map_key_3: .asciz "#maps:erlenberg:03_erlenberg_er/03_erlenberg_er.sc2"
+map_key_4: .asciz "#maps:karieri:23_karieri_kr/23_karieri_kr.sc2"
+map_key_5: .asciz "#maps:amigosville:05_amigosville_am/05_amigosville_am.sc2"
+map_key_6: .asciz "#maps:rudniki:06_rudniki_rd/06_rudniki_rd.sc2"
+map_key_7: .asciz "#maps:medvedkovo:04_medvedkovo_md/04_medvedkovo_md.sc2"
+map_key_8: .asciz "#maps:fort:07_fort_ft/07_fort_ft.sc2"
+map_key_9: .asciz "#maps:himmelsdorf:19_himmelsdorf_hm/19_himmelsdorf_hm.sc2"
+map_key_10: .asciz "#maps:mountain:21_mountain_mnt/21_mountain_mnt.sc2"
+map_key_11: .asciz "#maps:savanna:09_savanna_sv/09_savanna_sv.sc2"
+map_key_12: .asciz "#maps:plant:11_plant_pn/11_plant_pn.sc2"
+map_key_13: .asciz "#maps:idle:08_idle_id/08_idle_id.sc2"
+map_key_14: .asciz "#maps:holland:16_holland_hl/16_holland_hl.sc2"
+map_key_15: .asciz "#maps:port:14_port_pt/14_port_pt.sc2"
+map_key_19: .asciz "#maps:malinovka:12_malinovka_ma/12_malinovka_ma.sc2"
+map_key_20: .asciz "#maps:pliego:13_pliego_pl/13_pliego_pl.sc2"
+map_key_21: .asciz "#maps:canal:18_canal_cn/18_canal_cn.sc2"
+map_key_23: .asciz "#maps:italy:22_italy_it/22_italy_it.sc2"
+map_key_25: .asciz "#maps:milbase:24_milibase_mlb/24_milibase_mlb.sc2"
+map_key_26: .asciz "#maps:lagoon:15_lagoon_ln/15_lagoon_ln.sc2"
+map_key_27: .asciz "#maps:canyon:25_canyon_ca/25_canyon_ca.sc2"
+map_key_30: .asciz "#maps:rock:28_rock_rc/28_rock_rc.sc2"
+map_key_31: .asciz "#maps:grossberg:30_grossberg_sh/30_grossberg_sh.sc2"
+map_key_35: .asciz "#maps:skit:29_skit_sk/29_skit_sk.sc2"
+map_key_38: .asciz "#maps:lumber:31_lumber_lm/31_lumber_lm.sc2"
+map_key_39: .asciz "#maps:faust:32_faust_fa_night/32_faust_fa_night.sc2"
+map_key_40: .asciz "#maps:forgecity:34_forgecity_fc/34_forgecity_fc.sc2"
+map_key_42: .asciz "#maps:neptune:33_neptune_nt/33_neptune_nt.sc2"
+map_key_43: .asciz "#maps:rift:35_rift_rt/35_rift_rt.sc2"
+map_key_83: .asciz "#maps:erlenberg_old:erlenberg_old/erlenberg_old.sc2"
+map_key_85: .asciz "#maps:amigosville_old:amigosville_old/amigosville_old.sc2"
+map_key_89: .asciz "#maps:savanna_old:savanna_old/savanna_old.sc2"
+map_key_100: .asciz "#maps:user_map:06_rudniki_rd/user_map.sc2"
