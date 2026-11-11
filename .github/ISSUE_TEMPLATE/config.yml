@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Private security report / Уязвимость
+    url: https://github.com/unisequence/Solbreaker/security/advisories/new
+    about: Report vulnerabilities privately; do not include exploits or credentials in public issues.

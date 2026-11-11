@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "solbreaker-server"
-version = "0.1.0"
+version = "0.1.0a1"
 description = "Solbreaker multiplayer tank server compatible with build 11.21.0.1235_7376187"
 requires-python = ">=3.11"
 license = "AGPL-3.0-only"
@@ -13,6 +13,11 @@ dependencies = ["lz4>=4.3,<5", "PyYAML>=6,<7", "cryptography>=43", "numpy>=1.24,
 
 [project.scripts]
 solbreaker = "solbreaker.cli:main"
+
+[project.urls]
+Repository = "https://github.com/unisequence/Solbreaker"
+Issues = "https://github.com/unisequence/Solbreaker/issues"
+Changelog = "https://github.com/unisequence/Solbreaker/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 server = ["pybullet==3.2.7; sys_platform == 'win32'", "numpy>=1.24,<2; sys_platform == 'win32'"]

@@ -4,7 +4,7 @@ Solbreaker is an independent project for the pinned World of Tanks Blitz 11.21 c
 
 ## Distributed native components
 
-The Windows native package includes Solbreaker's four Rust libraries and a locally built PyBullet 3.2.7 wheel for CPython 3.12 x64.
+The Windows native package includes Solbreaker's five Rust libraries and a locally built PyBullet 3.2.7 wheel for CPython 3.12 x64.
 
 | Component | Use | Terms and notices |
 | --- | --- | --- |

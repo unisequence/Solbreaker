@@ -1,0 +1,16 @@
+name: Feature request / Предложение
+description: Suggest an improvement to Solbreaker.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What would you like to improve? / Что хочется улучшить?
+      description: Explain the problem or use case. English or Russian is fine.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Suggested behavior / Предлагаемое поведение
+      description: How should it work? Screenshots or examples are welcome.

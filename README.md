@@ -1,417 +1,121 @@
 # Solbreaker
 
-Игровой сервер Solbreaker. Compatible with build 11.21.0.1235_7376187.
-Python отвечает за
-протокол и игровые правила, Rust — за тяжёлые расчёты, Rapier и Bullet —
-за свободную физику и запросы геометрии.
+![Solbreaker](solbreaker/assets/launcher-cover.png)
 
-Проект содержит сервер и подготовку отдельного клиента. Поддерживаются ангар, аккаунты и прогресс,
-комнаты, бои 7×7 с ботами, захват базы, превосходство и результаты боя.
-Решатель работает с шагом 1/60 с, свободная физика использует подшаг до 1/240 с.
+A self-hosted multiplayer tank server with a desktop launcher and terminal interface.
+**Compatible with build 11.21.0.1235_7376187.**
 
-Наземная физика по умолчанию работает в Rust; отдельный флаг запуска не нужен.
-Этот режим принят на Linux x86-64. Сборка, диагностика и ограничения Windows описаны в
-[Native physics](docs/NATIVE_PHYSICS.md).
+[Download the alpha](https://github.com/unisequence/Solbreaker/releases/tag/v0.1.0-alpha.1) ·
+[Report a bug](https://github.com/unisequence/Solbreaker/issues/new/choose) ·
+[Руководство на русском](README.ru.md)
 
-В перестрелке боты с полноповоротной башней делают короткие выезды и откаты
-на своей перезарядке, оставляя время на остановку перед выстрелом. Манёвры
-учитывают препятствия и известные танки; решения остаются на 15 Гц.
+Solbreaker includes accounts, a garage, multiplayer rooms, 7×7 bot battles,
+base capture, supremacy and battle results. Run a local server for yourself,
+host a LAN game, or connect to another server. Tanks, maps and bot settings
+are selected inside the game.
 
-## Требования
+This is the first public alpha. Expect bugs, incomplete mechanics and changes
+between versions. Back up server data before updating. The project does not
+include the game client or its assets; you need your own compatible copy.
 
-- Linux или Windows x86-64. Самодостаточный Windows-пакет содержит Python и зависимости.
-- Для запуска из исходников нужен Python 3.11 или новее.
-- Для сборки серверных библиотек из исходников нужен Rust/Cargo 1.85 или новее.
-- C/C++ toolchain и заголовки Python для сборки нативных зависимостей.
-- Собственные ресурсы совместимой сборки `11.21.0.1235_7376187`. Команда подготовки
-  проверяет версию и SHA-256 оригинального `wotblitz.exe`.
-- Для Linux-клиента нужны установленный Steam и Proton.
-- Windows-сервер и клиент запускаются нативно. WSL2 доступна как дополнительный путь.
+## Start playing
 
-## Графический лаунчер
+### Windows x64
 
-На Linux откройте окно Solbreaker из папки проекта.
+1. Download `Solbreaker-0.1.0-alpha.1-windows-x64.zip` from the release page.
+2. Extract it into a writable folder and open **`launch-gui.vbs`**.
+3. Click **Set up game**. Select your compatible game folder and a separate
+   destination for the Solbreaker client.
+4. Choose **On this computer** to prepare a local server, or **On another
+   server** to use a server owner's connection profile. Finish setup and click
+   **Play**.
+
+The Windows archive contains a private Python runtime, GUI/TUI dependencies,
+PyBullet and all five native libraries. No separate Python, Rust or WSL
+installation is needed. `launch-tui.cmd` opens the terminal interface.
+
+If you do not have the pinned game build, the setup wizard can open Steam's
+console and provide the depot command. Sign in with your own Steam account,
+complete the download and return to the wizard to verify the files.
+
+### Linux x86-64
+
+Install Python 3.11+, its development headers, a C/C++ toolchain and Rust 1.85+.
+On Debian/Ubuntu, the system dependencies are:
+
+```sh
+sudo apt install python3 python3-venv python3-dev build-essential pkg-config curl
+```
+
+Install Rust using [rustup](https://rust-lang.org/tools/install/) if it is not
+already available. Extract the source archive, enter its `Solbreaker` folder
+and run:
 
 ```sh
 ./launch-gui.sh
 ```
 
-На Windows откройте `launch-gui.vbs` двойным щелчком. GUI и служебные процессы работают без консольных окон. Ошибки запуска сохраняются в `runtime/launcher-bootstrap.log` и `runtime/launcher-gui.log`. Можно также использовать
-PowerShell. Самодостаточный Windows-пакет использует частный Python из `runtime/python`.
-При запуске из исходников лаунчер создаёт `.venv-gui`, в котором работает и сервер.
+The launcher installs its Python dependencies and guides you through setup.
+For the Linux game client, select your Steam installation and Proton runtime.
+Keep the original game folder in place: the separate client links to its assets.
 
-```powershell
-.\launch-gui.ps1
-```
+### Server only
 
-В самодостаточном Windows-пакете зависимости GUI, TUI и сервера уже установлены.
-При первом запуске из исходников скрипты устанавливают зависимости интерфейса
-из закреплённого набора с проверкой SHA-256. Общий установщик описан в [requirements](requirements/README.md).
-Для подключения игрока к готовому серверу Rust и локальный сервер не требуются.
-
-В первом шаге мастера есть кнопка «Скачать совместимую сборку через Steam».
-Нужен установленный Steam с аккаунтом, которому доступна игра. Лаунчер
-открывает консоль Steam и копирует команду с закреплённым manifest.
-Вставьте её в консоль и нажмите Enter. Когда Steam сообщит
-`Depot download complete`, нажмите «Проверить файлы» в лаунчере.
-Папка depot определяется автоматически, также её можно выбрать вручную.
-Проверка сверяет версию и SHA-256 всех 46 235 файлов по каталогу сборки.
-Она выполняется в фоне и допускает отмену. После проверки мастер создаёт
-отдельную рабочую копию и применяет к ней патчи Solbreaker.
-Скорость и пауза скачивания управляются в настройках Steam.
-
-Язык лаунчера выбирается в верхней части окна — Русский или English.
-Выбор сохраняется, сервер и клиент продолжают работать при переключении.
-
-На главной странице есть галочка «Входить автоматически в последний аккаунт».
-Она использует штатный токен повторного входа клиента. Выбор сохраняется сразу
-и применяется к приватному профилю при следующем запуске игры.
-
-Во вкладке «Мой сервер» можно задать своё название длиной до 48 символов.
-Останови сервер, введи имя, нажми «Сохранить название» и запусти сервер снова.
-Название передаётся в профиле подключения и отображается на экране входа игры.
-При подключении через ранее экспортированный файл обнови его у владельца сервера.
-Для сервера без GUI используй `.venv/bin/python -m solbreaker configure-server --state data --name "Мой сервер"`.
-
-Главная страница предлагает выбрать свой или внешний сервер и показывает
-готовность файлов игры, клиента и подключения. Кнопка «Настроить игру»
-открывает мастер из трёх шагов.
-
-1. Выбрать папку игры и место для отдельного клиента. В Linux указать Steam
-   и Proton.
-2. Выбрать свой сервер либо указать адрес или файл подключения от владельца
-   внешнего сервера.
-3. Нажать «Подготовить». Мастер последовательно выполнит нужные операции
-   и предложит «Играть» после успешной подготовки.
-
-Для своего сервера мастер создаёт серверное состояние и профиль автоматически.
-Для внешнего сервера подготавливается клиент. При повторной настройке уже
-созданные компоненты используются повторно, при смене сервера обновляется
-подключение клиента. Ошибка останавливает дальнейшую подготовку и показывается
-в мастере вместе с подробностями.
-При копировании Windows-клиента отображаются объём и прогресс копирования.
-
-- «Начать игру» показывает основное действие и поясняет, что произойдёт при
-  запуске. Для локального профиля сервер запускается автоматически.
-- «Мой сервер» позволяет запустить и остановить собственный процесс,
-  создать резервную копию и сохранить подключение для друга.
-- «Параметры» содержит дополнительные пути, порты и сетевой TOML, включая
-  настройку HTTPS. Выпуск сертификата выполняется отдельно.
-- «Журнал» показывает вывод подготовки и запуска и записи сервера.
-
-По умолчанию используется тёмная тема с сиреневым акцентом. Справа вверху
-есть переключатель светлой и тёмной темы. Выбор темы и варианта подключения
-сохраняется между запусками. Начальный серверный аккаунт находится в
-`data/private/initial-login.txt`. Регистрация доступна внутри игры.
-
-Пути сохраняются в `runtime/manager.json`. Другой набор настроек можно открыть
-аргументом `--config`. Игровые настройки, карты и состав ботов меняются в игре.
-Локальный сервер, запущенный из интерфейса, останавливается при его закрытии.
-Отдельно запущенные серверы управляются своим терминалом или сервисом.
-Уже открытый игровой клиент продолжает работать после закрытия лаунчера.
-
-## Терминальный интерфейс
-
-Для сервера в терминале или через SSH доступен TUI.
-
-```sh
-./launch-tui.sh
-```
-
-Он использует те же команды и настройки, что и GUI. Вкладки переключаются
-мышью или клавиатурой, Tab перемещает фокус. F5 открывает серверный журнал,
-Ctrl+Q завершает интерфейс. В узком терминале содержимое прокручивается.
-Для фоновой службы используйте обычный CLI-запуск сервера.
-
-## Резервные копии
-
-GUI и TUI создают ZIP-архив в выбранной папке резервных копий. Сервер должен
-быть остановлен. Архив содержит аккаунты, прогресс, конфигурацию и закрытый
-ключ сервера. SQLite копируется через backup API вместе с данными из WAL.
-Журналы, captures, runtime и lock-файлы в архив не входят.
-
-```sh
-.venv/bin/python -m solbreaker backup-state --state data --output backups
-```
-
-Иконка приложения перерисована встроенным image_gen по присланному знаку.
-PNG и ICO находятся в `solbreaker/assets`, использованный промпт сохранён
-в `solbreaker/assets/icon-source.json`.
-
-Фон главного экрана создан в image_gen по текстовому описанию. Выбран вариант
-с названием Solbreaker, каменным разломом и сиреневым светом. Входные изображения
-для него не использовались. Промпт и SHA-256 сохранены в
-`solbreaker/assets/launcher-cover-source.json`.
-Кнопка «Играть» закреплена внизу окна, разделы управления находятся слева.
-
-## Установка на Linux
-
-Для Debian/Ubuntu сначала установите системные зависимости.
-
-```sh
-sudo apt update
-sudo apt install python3 python3-venv python3-dev build-essential pkg-config curl
-```
-
-Нужен Rust/Cargo версии 1.85 или новее. Его можно установить через rustup,
-затем открыть новый терминал. Команда и варианты установки приведены
-в [официальной инструкции Rust](https://rust-lang.org/tools/install/).
-
-Из папки проекта запустите установщик с путём к собственной игре.
+The server needs the compatible game resources even when no client is running
+on the host. It does not need Steam or a graphical session.
 
 ```sh
 ./setup.sh --game /path/to/owned/game
 ./start-server.sh --state data --log-file data/server.log
 ```
 
-Установщик создаёт `.venv`, устанавливает Python-зависимости, последовательно
-собирает четыре Rust-ядра, проверяет их загрузку и создаёт состояние сервера.
-Обычный запуск использует loopback HTTP `127.0.0.1:18080` и UDP 20016/20017.
-Первый аккаунт сохранён в `data/private/initial-login.txt`.
-Публичный профиль подключения появляется в `data/connection.json`.
+On Windows, use `setup.ps1 -Game 'D:\Games\CompatibleBuild'` followed by
+`start-server.ps1`. The portable archive supplies the runtime and native libraries.
+The initial account is written to `data/private/initial-login.txt`; players can
+also register an email, nickname and password inside the game.
 
-Для отдельного Linux-клиента укажите установленный Proton и папку Steam.
+For network hosting, configure the addresses, ports and HTTPS profile before
+sharing `data/connection.json`. See the [network guide](README.ru.md#сеть-и-https)
+and [example configuration](examples/network-public.toml).
 
-```sh
-./setup.sh --game /path/to/owned/game \
-  --client ./lab-client \
-  --proton /path/to/proton/proton \
-  --steam "$HOME/.local/share/Steam"
-```
+## What is included
 
-После запуска сервера игру открывает `./lab-client/start-client.sh`.
-Клиент получает отдельный EXE, профиль `documents/DAVAProject` и Proton-prefix.
-Большие ресурсы доступны через ссылки на выбранную игру. Сохраняйте исходную
-папку игры на месте. При первом входе пользователь подтверждает лицензионное
-соглашение и создаёт аккаунт либо использует начальный логин сервера.
+- Native ground physics in Rust, with Rapier dynamics and Bullet geometry queries.
+- A 60 Hz simulation; bot decisions run at 15 Hz.
+- GUI and TUI launchers, with Russian and English in the GUI.
+- Local and remote server profiles, account registration and server backups.
+- Bot navigation, combat maneuvers, several battle rules and post-battle results.
+- Optional detailed diagnostic logging for reproducing bugs.
 
-В свежем профиле сначала выбран «Полигон». Для боя 7×7 выберите «Бой с ботами»
-в переключателе режима справа от кнопки «В бой!».
+This is not a complete reproduction of every feature of the original service.
+Internal damage-module coverage is incomplete. Bot decisions and terrain
+interactions still need broader testing. See [native physics](docs/NATIVE_PHYSICS.md)
+for implementation details and the limits of the recorded performance results.
 
-Существующее состояние переиспользуется только с явным `--resume`.
-Укажите прежние адрес и порты. Существующая папка клиента отклоняется,
-для повторной подготовки клиента выберите новую папку.
+## Report a problem
 
-## Нативная установка на Windows
+Open an [issue](https://github.com/unisequence/Solbreaker/issues/new/choose) with
+your release version, client/server OS, map, tank and reproduction steps.
+A short replay or the relevant log excerpt helps. Reports in English or
+Russian are welcome. Remove passwords and tokens before attaching anything;
+do not upload server databases, backups or the game files.
 
-Распакуйте самодостаточный Windows x64 архив в доступную для записи папку и
-откройте `launch-gui.vbs`. В комплект входят Python 3.12.16, зависимости GUI/TUI
-и сервера, четыре нативные библиотеки и PyBullet. Подготовка и запуск сервера
-используют этот Python. Для TUI откройте `launch-tui.cmd`.
-
-Мастер предложит выбрать собственную копию совместимой сборки и место
-для отдельного клиента. Интернет нужен для получения игровых файлов, если
-они ещё не скачаны. Уже подготовленная локальная игра запускается офлайн.
-Папку Solbreaker можно переместить до настройки. После настройки пути к
-игре, клиенту и данным сервера сохраняются в конфигурации.
-
-При работе из исходников установите Rust. На Windows доступен GNU toolchain,
-который использован для проверки нативных DLL. Для самостоятельной сборки
-PyBullet понадобятся MSVC Build Tools с компонентами C++ и Windows SDK.
-Выбор Rust toolchain описан в [руководстве rustup](https://rust-lang.github.io/rustup/installation/windows.html).
-
-Подготовка через PowerShell выполняется следующими командами.
-
-```powershell
-.\setup.ps1 -Game 'D:\Games\Build-11.21.0.1235_7376187' -Client 'D:\SolbreakerClient'
-.\start-server.ps1
-```
-
-Если готовые DLL уже находятся в исходной папке, добавьте `-SkipBuild` к
-`setup.ps1`. У игры и клиента должны быть отдельные папки. Windows-клиент
-копируется полностью, поэтому требуется место под всю игру и дополнительный
-1 GiB. При первом запуске системы брандмауэр может запросить доступ сервера
-к сети. Для локальной игры используются адреса loopback.
-
-## Дополнительный запуск через WSL2
-
-Сервер работает внутри WSL2, клиент запускается обычным Windows EXE.
-Подготовьте WSL2 с Ubuntu. Первый запуск дистрибутива требует создания
-Linux-пользователя. Шаги описаны в
-[инструкции Microsoft](https://learn.microsoft.com/en-us/windows/wsl/install).
-
-```powershell
-wsl --install -d Ubuntu
-```
-
-В терминале Ubuntu установите Linux-зависимости и Rust, перечисленные выше.
-Распакуйте проект и закреплённую игру в обычные папки Windows. Из PowerShell
-в папке проекта запустите подготовку.
-
-```powershell
-.\setup.ps1 -UseWsl -Game 'D:\Games\Build-11.21.0.1235_7376187' -Client 'D:\SolbreakerClient'
-.\start-server.ps1 -UseWsl
-```
-
-Для другого WSL-дистрибутива добавьте `-Distribution Debian` к обеим командам.
-Игру запускает `D:\SolbreakerClient\start-client.cmd`. Для этого режима создаётся
-полная независимая копия игровых файлов. На диске нужно место под всю игру
-и дополнительный 1 GiB. Исходная игра нужна также серверу, сохраняйте её путь.
-
-Windows-клиент соединяется с IPv4 WSL напрямую, включая игровые UDP-порты.
-`start-server.ps1` перед запуском сервера обновляет адреса в серверном
-состоянии и в подготовленном клиенте. Ключ сервера, аккаунты и EXE сохраняются.
-Этот автоматический путь рассчитан на локальный HTTP-профиль установщика.
-Для собственного HTTPS или внешнего сервера используйте сетевую конфигурацию.
-
-WSL2-обёртки пока требуют игровой проверки на Windows. На Linux
-проверены подготовка из исходной игры, запуск нового Proton-prefix, вход,
-движение и выстрел в полигоне, бой 7×7, результаты и возврат в ангар.
-Также проверены сохранение состояния и смена локального адреса.
-В локальной проверке использованы ранее принятые нативные библиотеки через
-`--skip-build`. Полная Rust-сборка новым установщиком пока не проверена.
-
-## Ручная подготовка сервера
-
-При необходимости шаги установщика можно выполнить отдельно.
-
-```sh
-python3 -m venv .venv
-.venv/bin/python tools/install_dependencies.py --profile server
-.venv/bin/python tools/build_native.py --jobs 2
-.venv/bin/python -m solbreaker init --game /path/to/owned/game --state data
-```
-
-`tools/build_native.py` собирает все пять Rust-библиотек, включая наземный
-контроллер `physics_core`. Установщик проверяет их также при `--skip-build`.
-Отсутствующая или несовместимая библиотека останавливает загрузку физики с ошибкой.
-
-`start-server.sh` включает Rust/Rapier, отдельный процесс арены и принятый
-набор ускорений. По умолчанию одна арена, 6 союзных ботов, 7 противников
-и workers 0. Значения переменных
-окружения можно переопределить перед запуском.
-
-Для дополнительного ускорения NumPy-проверок доступен отдельный Cython-модуль.
-Он собирается после установки базовых зависимостей.
-
-```sh
-.venv/bin/python tools/install_dependencies.py --profile support
-.venv/bin/python tools/build_support_checks.py
-```
-
-## Подключение клиента
-
-Экспортируйте публичный профиль сервера и импортируйте его в совместимом
-лаунчере клиента. Файл содержит адреса, публичный ключ входа и при настройке
-собственного TLS CA — его публичный сертификат.
-
-```sh
-.venv/bin/python -m solbreaker export-connection --state data --output connection.json
-```
-
-Для импорта профиля в уже подготовленный закрытый клиент доступна команда.
-
-```sh
-.venv/bin/python -m solbreaker connect-client \
-  --lab /path/to/prepared/client --connection connection.json
-```
-
-Состояние аккаунтов хранится в SQLite внутри `data/private/`. Закрывайте
-сервер штатно через Ctrl+C перед обслуживанием или резервным копированием
-состояния. Одновременный запуск двух серверов на одном состоянии отклоняется.
-
-## Регистрация
-
-В штатной форме «Создать аккаунт» вводятся почта, ник и пароль.
-Имя сохраняет выбранный регистр, проверка занятости выполняется без учёта
-регистра. Допустимы 3–24 латинские буквы, цифры и подчёркивания.
-При нажатии «Создать» проверяется занятость почты и имени.
-Клиент получает сообщение с причиной отказа.
-Успешная регистрация сразу переходит ко входу в игру.
-
-Подготовленный клиент можно настроить отдельной командой при закрытой игре.
-Она адаптирует штатные UI-ресурсы закреплённой версии и пропускает выбор
-страны. Почта используется как логин. Подтверждение по письму не требуется.
-
-```sh
-.venv/bin/python -m solbreaker prepare-client-registration --lab /path/to/prepared/client
-```
-
-Пароли сохраняются в SQLite как индивидуально посоленные PBKDF2-HMAC-SHA256-хеши.
-Вход с неизвестной почтой требует регистрации. Повторное создание
-существующего аккаунта отклоняется и сохраняет его прежний пароль.
-
-## Сеть и HTTPS
-
-Сетевой файл находится в `data/network.toml`. Его можно подготовить отдельно
-и применить к остановленному серверу.
-
-```sh
-.venv/bin/python -m solbreaker configure-network --state data --config network.toml
-```
-
-Публичный профиль v2 поддерживает HTTPS с DNS-именем или IPv4. Игровые
-login/base передаются отдельными IPv4-адресами. Пример
-[network-public.toml](examples/network-public.toml) предполагает HTTPS-прокси
-перед loopback HTTP API. Замените демонстрационные IP, домен и список
-допущенных клиентских адресов своими значениями. Сертификат и его продление
-настраиваются на HTTPS-прокси.
-
-При прямом TLS укажите HTTPS также в `services.http` и добавьте в manifest
-пути `http_tls.certificate` и `http_tls.private_key`. Для собственного CA
-доступно поле `tls_ca_file`. Пути считаются от папки состояния.
-Проверка сертификатов выполняется в подготовленном клиенте.
-
-## Диагностика
-
-Обычный журнал включается через `--log-file`. Подробный flight recorder
-включается отдельно и записывает контекст кадров, сетевых событий и арены.
+For a diagnostic server run:
 
 ```sh
 ./start-server.sh --state data --log-file data/server.log --diagnostic-log
 ```
 
-## Исходники
+Security reports go through [private vulnerability reporting](SECURITY.md).
+Development and contribution notes are in [CONTRIBUTING.md](CONTRIBUTING.md).
 
-| Каталог | Назначение |
-| --- | --- |
-| `solbreaker/` | Протокол, аккаунты, бой, карты, физика и процессы арен |
-| `solbreaker/native/` | Четыре Rust-ядра и исходник ускорителя NumPy-проверок |
-| `tools/` | Установка, сборка нативных компонентов и обновление локальной сети WSL |
-| `examples/` | Пример публичной сетевой конфигурации |
+## License and credits
 
-Библиотеки с ABI-префиксом `tfs_` используются внутри движка. Имена пакета,
-команды и пользовательская документация используют Solbreaker.
-Ресурсы игры задаются внешним путём. Локальное состояние и сборочные
-результаты исключены из Git.
+Solbreaker's own code is licensed under **AGPL-3.0-only**. See [LICENSE](LICENSE).
+The source and Windows release archives include the project sources and build
+scripts. Third-party components retain their own licenses, listed in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and [licenses](licenses/README.md).
 
-## Авторы, источники и лицензии
-
-Используемые библиотеки, авторы и условия распространения перечислены в
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Оригинальные тексты лицензий
-и инвентарь точных версий находятся в [licenses](licenses/README.md).
-Источники технических сведений, исследование клиента и происхождение
-изображений описаны в [Sources and credits](docs/SOURCES.md).
-
-Официальные условия Blitz, Steam и WOTInspector приведены отдельными ссылками.
-Эти материалы сохраняют права своих авторов. Собственный код Solbreaker
-распространяется по GNU Affero General Public License version 3,
-SPDX `AGPL-3.0-only`. Полный текст находится в [LICENSE](LICENSE).
-
-При передаче сборки необходимо предоставить соответствующие исходники
-на условиях лицензии. При изменении программы и сетевом взаимодействии
-с пользователями раздел 13 требует заметно предложить им бесплатный доступ
-к соответствующим исходникам изменённой версии. В предложение входят код
-и необходимые скрипты сборки и установки именно запущенной версии.
-Релизные архивы Solbreaker содержат собственные исходники и скрипты.
-Оператор изменённого сервера отвечает за доступ пользователей к его версии.
-Имена, копирайты и условия сторонних компонентов сохраняются отдельно.
-
-## Переменные окружения
-
-Собственные флаги сервера используют префикс `SOLBREAKER_`. Например,
-`SOLBREAKER_SIM_BACKEND=rust`, `SOLBREAKER_DYNAMIC_BACKEND=rapier`,
-`SOLBREAKER_ARENA_OWNERS=1`, `SOLBREAKER_OWNER_IPC=socket` и
-`SOLBREAKER_SIM_WORKERS=0`. Скрипты запуска задают принятые значения по умолчанию.
-При обновлении старых ручных команд и служб замените прежний префикс флагов
-на `SOLBREAKER_`.
-
-## Состав релизного архива
-
-`release-files.txt` содержит проверенный список исходных файлов, документации,
-ресурсов проекта и уведомлений о лицензиях. Упаковщик отказывает при неожиданных
-файлах внутри этих каталогов, ссылках, признаках секретов и совпадении с
-исходными файлами игры по каталогу SHA-256. Нативные Windows-входы проверяются
-по отдельному списку принятых хешей. При неуспешной записи неполный ZIP удаляется.
-Локальные данные, аккаунты, окружения и приватные свидетельства находятся
-вне допустимого состава. Обновление списка файлов требует отдельного просмотра.
+This is an independent community project. Game files remain separately obtained
+resources. Compatibility research, library references and AI-assisted development
+and artwork are documented in [Sources and credits](docs/SOURCES.md).

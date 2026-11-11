@@ -1,7 +1,14 @@
-# Reviewed release inputs. New files require an explicit review and list update.
+# Reviewed source release inputs; local state and build products are excluded.
+.github/ISSUE_TEMPLATE/bug_report.yml
+.github/ISSUE_TEMPLATE/config.yml
+.github/ISSUE_TEMPLATE/feature_request.yml
 .gitignore
+CHANGELOG.md
+CONTRIBUTING.md
 LICENSE
 README.md
+README.ru.md
+SECURITY.md
 THIRD_PARTY_NOTICES.md
 docs/NATIVE_PHYSICS.md
 docs/SOURCES.md
