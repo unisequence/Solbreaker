@@ -1,9 +1,9 @@
-"""Experimental native physics owner, with setup and result marshalling."""
+"""Native ground physics owner, with setup and result marshalling."""
 import ctypes as C
 import json
 import math
-import os
 import struct
+import sys
 from pathlib import Path
 import threading
 
@@ -96,29 +96,44 @@ def fixture(world):
         dimensions=(terrain.WIDTH, terrain.DEPTH), vertical=(terrain.HEIGHT_MIN, terrain.HEIGHT)))
 
 
-class NativePhysics:
-    def __init__(self, world):
-        filename = 'solbreaker_physics_core.dll' if os.name == 'nt' else 'libsolbreaker_physics_core.so'
-        path = Path(__file__).with_name('native')/'physics_core'/filename
-        self.library = C.CDLL(str(path))
-        self.library.solbreaker_physics_abi_sizes.argtypes = []
-        self.library.solbreaker_physics_abi_sizes.restype = C.c_uint64
+def library_path():
+    filename = ('solbreaker_physics_core.dll' if sys.platform == 'win32'
+                else 'libsolbreaker_physics_core.so')
+    return Path(__file__).with_name('native')/'physics_core'/filename
+
+
+def load_library():
+    """Load the required ground controller and validate its complete public ABI."""
+    path = library_path()
+    try:
+        library = C.CDLL(str(path))
+        library.solbreaker_physics_abi_sizes.argtypes = []
+        library.solbreaker_physics_abi_sizes.restype = C.c_uint64
         expected = (C.sizeof(StepInput) << 32) | (C.sizeof(StepOutput) << 16) | C.sizeof(SensorState)
-        if (self.library.solbreaker_physics_abi_sizes() != expected
+        if (library.solbreaker_physics_abi_sizes() != expected
                 or STEP_PACKER.size != StepInput.support_count.offset):
             raise RuntimeError('Incompatible native physics ABI')
-        self.library.solbreaker_physics_create.argtypes = [C.c_char_p, C.c_char_p]
-        self.library.solbreaker_physics_create.restype = C.c_void_p
-        self.library.solbreaker_physics_query.argtypes = [C.c_void_p, C.c_char_p, C.c_void_p, C.c_size_t]
-        self.library.solbreaker_physics_query.restype = C.c_int32
-        self.library.solbreaker_physics_close.argtypes = [C.c_void_p]
-        self.library.solbreaker_physics_close.restype = None
-        self.library.solbreaker_physics_error.argtypes = [C.c_void_p, C.c_void_p, C.c_size_t]
-        self.library.solbreaker_physics_error.restype = C.c_size_t
-        self.library.solbreaker_physics_step.argtypes = [C.c_void_p, C.POINTER(StepInput), C.POINTER(StepOutput)]
-        self.library.solbreaker_physics_step.restype = C.c_int32
-        self.library.solbreaker_physics_sync.argtypes = [C.c_void_p, C.POINTER(SensorState), C.c_size_t]
-        self.library.solbreaker_physics_sync.restype = C.c_int32
+        signatures = {
+            'create': ([C.c_char_p, C.c_char_p], C.c_void_p),
+            'query': ([C.c_void_p, C.c_char_p, C.c_void_p, C.c_size_t], C.c_int32),
+            'close': ([C.c_void_p], None),
+            'error': ([C.c_void_p, C.c_void_p, C.c_size_t], C.c_size_t),
+            'step': ([C.c_void_p, C.POINTER(StepInput), C.POINTER(StepOutput)], C.c_int32),
+            'sync': ([C.c_void_p, C.POINTER(SensorState), C.c_size_t], C.c_int32),
+        }
+        for name, (arguments, result) in signatures.items():
+            function = getattr(library, 'solbreaker_physics_'+name)
+            function.argtypes, function.restype = arguments, result
+    except (OSError, AttributeError, RuntimeError) as error:
+        raise RuntimeError(f'Native ground physics library missing or incompatible: {path}. '
+                           'Run python tools/build_native.py or install a complete native package. '
+                           f'Cause: {error}') from error
+    return library
+
+
+class NativePhysics:
+    def __init__(self, world):
+        self.library = load_library()
         self._lock = threading.RLock()
         self._output = C.create_string_buffer(4*1024*1024)
         self.handle = self.library.solbreaker_physics_create(

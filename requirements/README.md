@@ -1,6 +1,6 @@
 # Locked release dependencies
 
-`lock.json` pins the Python package versions and SHA-256 values of accepted distributions. The Windows native wheel has its own accepted digest. `native-artifacts.json` pins the four accepted DLLs and that wheel for release assembly.
+`lock.json` pins the Python package versions and SHA-256 values of accepted distributions. The Windows native wheel has its own accepted digest. `native-artifacts.json` pins the accepted Windows DLLs and that wheel for release assembly. The new ground controller needs a fifth DLL, `solbreaker_physics_core.dll`; its Windows build has not passed runtime acceptance and has no pinned digest yet. Native Windows packaging fails until that acceptance is complete.
 
 The GUI, TUI and server setup scripts call `tools/install_dependencies.py`. The installer works inside the project's private virtual environment.
 
@@ -19,7 +19,9 @@ A matching receipt and installed versions make subsequent starts local checks. W
 - `tui` adds Textual and its formatting dependencies.
 - `support` adds the optional Cython build tool.
 
-`tools/build_native.py` also tries to compile the contact-query collector using
+`tools/build_native.py` builds all five Rust libraries, including the default
+ground controller. Setup checks every library and the ground controller ABI
+when reusing an existing build. `tools/build_native.py` also tries to compile the contact-query collector using
 the C compiler and Python development headers. This small extension uses
 CPython's stable ABI from 3.11 and requires no extra runtime package. If the
 compiler is unavailable, the server retains its Python query path. To build

@@ -3,7 +3,7 @@
 The runner cannot safely replace a process it did not start: it may be a
 manual local server with an active battle.  Instead it compares this digest
 with ``/health`` before launching a client.  The digest covers all shipped
-server Python/Rust sources, the installed native simulation library, and the
+server Python/Rust sources, the installed native simulation libraries, and the
 pinned game provenance used to build catalogs.
 """
 import hashlib
@@ -35,6 +35,11 @@ def implementation_revision(lab: Path) -> str:
     sources.extend([impact/'Cargo.toml',impact/'Cargo.lock',
                     *sorted((impact/'src').glob('*.rs')),
                     impact/('tfs_impact_core'+suffix)])
+    physics = package/'native/physics_core'
+    sources.extend([physics/'Cargo.toml', physics/'Cargo.lock',
+                    *sorted((physics/'src').glob('*.rs')),
+                    physics/('solbreaker_physics_core.dll' if sys.platform == 'win32'
+                             else 'libsolbreaker_physics_core.so')])
     for source in sources:
         if source.is_file():
             digest.update(source.relative_to(package).as_posix().encode('utf-8'))

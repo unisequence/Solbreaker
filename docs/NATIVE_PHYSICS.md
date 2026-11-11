@@ -1,20 +1,30 @@
-# Experimental native physics
+# Native ground physics
 
-The `experiment/native-physics` branch adds a stateful Rust ground controller.
-Enable it with `SOLBREAKER_NATIVE_PHYSICS=1`. It requires the sprung tracked
-controller and separate track colliders in the vehicle proxies.
+The stateful Rust ground controller is the default for ordinary server, GUI
+and TUI launches. No environment flag is required. It uses the accepted sprung
+tracked controller and separate track colliders in the vehicle proxies.
 
-Build the experimental library with the other native libraries.
+The normal build includes all five native libraries, including `physics_core`.
 
 ```sh
-python tools/build_native.py --physics-core --jobs 2
-SOLBREAKER_NATIVE_PHYSICS=1 ./start-server.sh --state /path/to/server-state
+python tools/build_native.py --jobs 2
+./start-server.sh --state /path/to/server-state
 ```
 
 On the development host, Rust libraries are built under the `claude-ops` OS
-account as required by `AGENTS.md`. The source and tests support the existing
-Linux/Windows build selection. Runtime verification of this experimental
-backend has been performed on Linux x86-64.
+account as required by `AGENTS.md`. Linux x86-64 is the accepted runtime.
+Windows build and DLL selection are implemented, but the new controller has
+not passed runtime acceptance on Windows. The pinned PyBullet wheel exports
+all 38 Bullet C API symbols used by the controller. The Windows assembler requires
+`solbreaker_physics_core.dll` as its fifth DLL and an accepted SHA-256 in
+`requirements/native-artifacts.json`. That digest is not recorded yet, so a
+Windows release cannot be assembled from the old four-DLL set.
+
+Setup validates all five libraries, including the ground controller ABI, even
+with `--skip-build`. A missing or incompatible controller produces an error;
+the server does not switch solvers automatically. For explicit comparison or
+legacy diagnostics, use `SOLBREAKER_NATIVE_PHYSICS=0`. Older controller flags
+that disable sprung tracks require this diagnostic setting too.
 
 ## Execution
 
@@ -32,7 +42,7 @@ The adapter mirrors measured support and recoil state for the remaining physical
 handoff code and diagnostics. Native errors propagate through the arena owner.
 
 The drivetrain, short-flight handling, Rapier activation/landing/recovery and
-ground-contact collection still have Python orchestration. This branch is an
+ground-contact collection still have Python orchestration. This is an
 intermediate stage of the physics migration. The established speculative drive
 worker pool is bypassed while the native owner is active.
 
@@ -49,8 +59,8 @@ contact functions with failures while the native movement loop runs.
 
 Simple ground, wall and prop trajectories agree with the established solver.
 Degenerate support systems use a native least-squares fallback. A six-second
-synthetic low-rock drive differs by up to 0.30 m between backends. Numerical
-contact behavior and the remaining handoff code require further acceptance.
+synthetic low-rock drive differs by up to 0.30 m between backends. This numerical
+contact difference remains a documented limit; the handoff code is still Python.
 
 The geometry copy increases resident memory. In the initial 14-connection
 capacity comparison, the full isolated test scope peaked at about 1290 MiB,
