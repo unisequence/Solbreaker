@@ -452,6 +452,7 @@ solbreaker/windows_profile_patch.py
 start-server.ps1
 start-server.sh
 tests/__init__.py
+tests/test_bot_combat.py
 tests/test_captures.py
 tests/test_collision_queries.py
 tests/test_contact_queries.py

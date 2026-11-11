@@ -114,6 +114,13 @@ class TrainingBot:
         self.maneuver_goal = None
         self.maneuver_until = 0.
         self.maneuver_target = None
+        self.maneuver_origin = None
+        self.maneuver_heading = 0.
+        self.maneuver_direction = 1
+        self.maneuver_step = 0
+        self.maneuver_check_at = 0.
+        self.maneuver_generation = None
+        self.maneuver_stable_until = 0.
         self.travel_look = 0.
         self.travel_look_at = None
         self.travel_look_active = False
@@ -282,7 +289,10 @@ class BotDirector:
                       if len(bots)>1 else len(goals)//2)
                 arena.training_bots[eid].patrol_index=2*lane
         self.stats = dict(decisions=0,max_decisions_per_step=0,perception_rays=0,
-                          avoidance=0,cover_moves=0,route_entries=0,combat_moves=0)
+                          avoidance=0,cover_moves=0,route_entries=0,combat_moves=0,
+                          combat_forward_moves=0,combat_reverse_moves=0,
+                          combat_drive_ticks=0,combat_hold_ticks=0,
+                          combat_blocked=0,combat_corridor_checks=0)
 
     def patrol_goal(self, bot, ai):
         goals=self.objectives[bot.team]
@@ -427,51 +437,109 @@ class BotDirector:
         # hull aiming; turreted tanks do not chase every target-bearing change.
         return not min(low+.05,0.) <= bearing <= max(high-.05,0.)
 
-    def _maneuver(self, bot, ai, threat, chosen, eligible, now, *, continue_existing=True):
+    @staticmethod
+    def _reset_maneuver(ai):
+        ai.maneuver_goal=ai.maneuver_origin=None
+        ai.maneuver_target=None
+        ai.next_maneuver=ai.maneuver_stable_until=0.
+
+    def _finish_maneuver(self, ai, now):
+        ai.maneuver_goal=ai.maneuver_origin=None
+        # Release the tracks early enough for the physical chassis and gun
+        # to settle. No aim/reaction state or gun reload timer is changed.
+        ai.maneuver_stable_until=now+1.2+(ai.entity_id%3)*.15
+        ai.next_maneuver=max(ai.next_maneuver,now+2.8+(ai.entity_id%4)*.2)
+        self.stats['combat_hold_ticks']+=1
+        return 0
+
+    def _maneuver_clear(self, bot, ai, point, now):
         nav=self.navigation
-        if ai.maneuver_goal is not None:
-            arrived=math.hypot(ai.maneuver_goal[0]-bot.pose.position[0],
-                               ai.maneuver_goal[2]-bot.pose.position[2]) < 2.
-            if continue_existing and chosen==ai.maneuver_target and now<ai.maneuver_until and not arrived:
-                return True
-            ai.maneuver_goal=None
-            # Finish one committed displacement, then give the gun a short
-            # stable firing window before choosing another destination.
-            ai.next_maneuver=max(ai.next_maneuver,now+1.5+(ai.entity_id%3)*.25)
-            ai.route_kind=None;ai.next_plan=0.
-        if not eligible or nav is None or now<ai.reverse_until or ai.passing is not None:
-            ai.next_maneuver=0.
-            return False
-        if not ai.next_maneuver:
-            # Keep an initial aiming window, without parking for most of a
-            # reload cycle. Per-entity offsets stagger the next small move.
-            ai.next_maneuver=now+1.8+(ai.entity_id%4)*.3
-            return False
-        if now<ai.next_maneuver:return False
-        ai.next_maneuver=now+5.+(ai.entity_id%4)*.5
+        self.stats['combat_corridor_checks']+=1
+        return nav.clear(bot.pose.position,point,
+            blocked=tuple(node for node,until in ai.route_bad_cells.items() if now<until),
+            climb_edges=nav.actor_climb_edges.get(bot.entity_id))
+
+    def _maneuver(self, bot, ai, threat, chosen, eligible, now, braking):
+        """Short reload-time track inputs, independent of the global route.
+
+        Only the visible threat and our own gun state are used. Static grid
+        checks are cached briefly; nearby known hulls are checked every drive
+        decision. No rays, nearest-node searches or A* requests are added.
+        """
+        nav=self.navigation
+        if (not eligible or nav is None or now<ai.reverse_until or ai.recovery_replan
+                or ai.passing is not None or bot.entity_id in self.traffic.by_entity):
+            self._reset_maneuver(ai)
+            return None
         x,y,z=bot.pose.position;tx,_,tz=threat
+        distance=math.hypot(tx-x,tz-z)
         bearing=math.atan2(tx-x,tz-z)
-        forward=bot.definition.drive.forward if bot.definition is not None else 20.
-        travel=max(10.,min(16.,forward*.8))
-        radius=max(ai.STOP_DISTANCE,math.hypot(tx-x,tz-z))
-        side=1. if ai.entity_id%2 else -1.
-        # Two short, footprint-checked corridors; no new world-ray batches or
-        # unbounded goal search. An arc around the seen enemy preserves the
-        # fighting distance instead of alternating approach and hard braking.
-        for direction in (side,-side):
-            angle=bearing+math.pi-direction*travel/radius
-            point=(tx+math.sin(angle)*radius,y,tz+math.cos(angle)*radius)
-            node=nav.nearest(point,2)
-            if node is None:continue
-            point=nav.point(node)
-            if (math.hypot(point[0]-x,point[2]-z)<6.
-                    or not nav.clear(bot.pose.position,point)):continue
-            ai.maneuver_goal=point;ai.maneuver_target=chosen
-            ai.maneuver_until=now+8.
-            ai.route_kind=None;ai.next_plan=0.
-            self.stats['combat_moves']+=1
-            return True
-        return False
+        if not 12.<=distance<=160. or abs(wrap(bearing-bot.pose.yaw))>math.radians(28.):
+            self._reset_maneuver(ai)
+            return None
+        if chosen!=ai.maneuver_target:
+            self._reset_maneuver(ai)
+            ai.maneuver_target=chosen
+            ai.next_maneuver=now+.8+(ai.entity_id%4)*.15
+        reload_left=bot.reload_at-now
+        burst=getattr(bot,'burst_pending',False)
+        if ai.maneuver_goal is not None:
+            ox,_,oz=ai.maneuver_origin
+            dx=math.sin(ai.maneuver_heading)*ai.maneuver_direction
+            dz=math.cos(ai.maneuver_heading)*ai.maneuver_direction
+            remaining=(ai.maneuver_goal[0]-x)*dx+(ai.maneuver_goal[2]-z)*dz
+            lateral=abs((x-ox)*dz-(z-oz)*dx)
+            speed=max(0.,bot.speed*ai.maneuver_direction*math.cos(bot.pose.yaw-ai.maneuver_heading))
+            deceleration=max(.5,braking*ai.BRAKING_SAFETY_FACTOR)
+            stopping=speed*speed/(2*deceleration)+speed*ai.BRAKING_REACTION_SECONDS
+            if (burst or reload_left<=.75 or now>=ai.maneuver_until
+                    or remaining<=.35+stopping or lateral>.75):
+                return self._finish_maneuver(ai,now)
+            if not self._traffic_corridor_clear(bot,ai.maneuver_goal):
+                self.stats['combat_blocked']+=1
+                return self._finish_maneuver(ai,now)
+            if now>=ai.maneuver_check_at or ai.maneuver_generation!=nav.generation:
+                if not self._maneuver_clear(bot,ai,ai.maneuver_goal,now):
+                    self.stats['combat_blocked']+=1
+                    return self._finish_maneuver(ai,now)
+                ai.maneuver_check_at=now+.35
+                ai.maneuver_generation=nav.generation
+        else:
+            if now<ai.maneuver_stable_until:
+                self.stats['combat_hold_ticks']+=1
+                return 0
+            # Moving approaches already provide evasive motion. Keep short
+            # bursts and a loaded gun's firing opportunity free of new jinks.
+            if burst or reload_left<1.8 or abs(bot.speed)>1.5 or now<ai.next_maneuver:
+                return None
+            ai.next_maneuver=now+2.8+(ai.entity_id%4)*.2
+            travel=2.4+(ai.entity_id%4)*.4
+            side=1. if (ai.entity_id+ai.maneuver_step//2)%2 else -1.
+            change=max(-.18,min(.18,wrap(bearing+side*.2-bot.pose.yaw)))
+            heading=bot.pose.yaw+change
+            preferred=1 if (ai.entity_id+ai.maneuver_step)%2 else -1
+            for direction in (preferred,-preferred):
+                point=(x+math.sin(heading)*travel*direction,y,
+                       z+math.cos(heading)*travel*direction)
+                if (not self._traffic_corridor_clear(bot,point)
+                        or not self._maneuver_clear(bot,ai,point,now)):continue
+                ai.maneuver_goal=point;ai.maneuver_origin=bot.pose.position
+                ai.maneuver_heading=heading;ai.maneuver_direction=direction
+                ai.maneuver_until=min(now+2.4,bot.reload_at-.75)
+                ai.maneuver_check_at=now+.35;ai.maneuver_generation=nav.generation
+                ai.maneuver_step+=1
+                self.stats['combat_moves']+=1
+                self.stats['combat_forward_moves' if direction>0 else 'combat_reverse_moves']+=1
+                break
+            else:
+                self.stats['combat_blocked']+=1
+                return None
+        # Arena reverses steering while backing: invert the turn input so
+        # both directions preserve the same modest, front-facing hull angle.
+        error=wrap(ai.maneuver_heading-bot.pose.yaw)*ai.maneuver_direction
+        turn=ai.RIGHT if error>.045 else ai.LEFT if error<-.045 else 0
+        self.stats['combat_drive_ticks']+=1
+        return (ai.FORWARD if ai.maneuver_direction>0 else ai.REVERSE)|turn
 
     def _traffic_size(self, bot):
         nav=self.navigation
@@ -832,6 +900,10 @@ class BotDirector:
                 candidates = capturers
         chosen=ai.choose_target(bot.pose.position,candidates)
         seen=chosen in ai.visible
+        if (not seen or chosen!=ai.maneuver_target or now<ai.reverse_until
+                or ai.recovery_replan or ai.passing is not None
+                or bot.entity_id in self.traffic.by_entity):
+            self._reset_maneuver(ai)
         if seen:ai.route_exit=None
         order=self.orders.select(bot,ai,now,chosen)
         kind='combat' if seen else order.kind if order is not None else 'patrol'
@@ -839,7 +911,7 @@ class BotDirector:
             # Brief sight loss must not cancel the same approach search on
             # every visibility edge. Regroup/patrol changes own new routes.
             if {kind,ai.order_kind}!={'combat','investigate'}:
-                ai.passing=None;ai.cover_goal=None;ai.maneuver_goal=None
+                ai.passing=None;ai.cover_goal=None;self._reset_maneuver(ai)
                 ai.route_kind=None;ai.next_plan=0.
             ai.order_kind=kind
         if chosen is not None:
@@ -853,11 +925,13 @@ class BotDirector:
             bot.flags=0
             ai.check_at=ai.check_position=ai.check_yaw=None
             ai.reverse_until=min(ai.reverse_until,now)
+            self._reset_maneuver(ai)
             if ai.route_watch_pause_at is None:ai.route_watch_pause_at=now
             return
         if order is not None and order.kind == 'defend':
             goal = order.goal
-            ai.cover_goal = ai.maneuver_goal = None
+            ai.cover_goal = None
+            self._reset_maneuver(ai)
         elif seen:
             goal=ai.known[chosen][0];self._cover(bot,ai,goal,now)
         elif order is not None:
@@ -887,25 +961,21 @@ class BotDirector:
             ai.cover_goal=None
             ai.route_kind=None;ai.next_plan=0.
         distance=math.hypot(goal[0]-bot.pose.position[0],goal[2]-bot.pose.position[2])
-        maneuver=self._maneuver(bot,ai,goal,chosen,
-            seen and not cover and distance <= ai.STOP_DISTANCE+8.
-            and bot.gun.yaw_limits[1]-bot.gun.yaw_limits[0] >= math.tau-.01,now,
-            continue_existing=not cover and kind in ('combat','investigate'))
-        if maneuver:
-            goal=ai.maneuver_goal
-            distance=math.hypot(goal[0]-bot.pose.position[0],goal[2]-bot.pose.position[2])
-        travelling=cover or maneuver or order is not None
+        travelling=cover or order is not None
+        if travelling:self._reset_maneuver(ai)
         align=seen and not travelling and self._needs_hull_aim(bot,goal)
         target=a.vehicles.get(chosen) if seen else None
         closing=a._training_bot_closing_speed(bot,target) if target is not None else abs(bot.speed)
         braking=a._training_bot_braking_acceleration(bot)
         if nav is None:
+            self._reset_maneuver(ai)
             bot.flags=ai.controls(bot.pose,goal,now,closing_speed=closing,
                 braking_acceleration=braking,align_at_stop=align,
                 stop_distance=order.stop_distance if order is not None else None)
             return
         escape=self._margin_escape(bot,ai,now)
         if escape is not None:
+            self._reset_maneuver(ai)
             flags=ai.controls(bot.pose,escape,now,closing_speed=abs(bot.speed),
                 braking_acceleration=braking,stop_distance=.5)
             bot.flags=self._avoid(bot,escape,flags,now)
@@ -931,6 +1001,14 @@ class BotDirector:
             if self._watch_route(bot,ai,goal,passing,math.dist(bot.pose.position,passing),now,
                                  attempted_forward=bool(flags&ai.FORWARD)):
                 bot.flags=self._avoid(bot,goal,ai.REVERSE,now)
+            return
+        maneuver=self._maneuver(bot,ai,goal,chosen,
+            seen and not travelling
+            and bot.gun.yaw_limits[1]-bot.gun.yaw_limits[0]>=math.tau-.01,now,braking)
+        if maneuver is not None:
+            bot.flags=maneuver
+            ai.check_at=ai.check_position=ai.check_yaw=None
+            if ai.route_watch_pause_at is None:ai.route_watch_pause_at=now
             return
         if seen and not travelling and distance<=ai.STOP_DISTANCE+max(0.,closing)**2/max(1.,braking):
             bot.flags=ai.controls(bot.pose,goal,now,closing_speed=closing,
@@ -1047,6 +1125,7 @@ class BotDirector:
                 bot.flags=0
                 ai=a.training_bots[eid]
                 ai.check_at=ai.check_position=ai.check_yaw=None
+                self._reset_maneuver(ai)
                 if ai.route_watch_pause_at is None:ai.route_watch_pause_at=now
                 continue
             self._decide(bot,a.training_bots[eid],now)
