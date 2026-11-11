@@ -525,6 +525,10 @@ class CollisionWorld:
         self.sprung_tracks = (self.experimental_6dof and not self.wall_trampoline
                              and os.environ.get('SOLBREAKER_SPRUNG_TRACKS', '1') == '1'
                              if sprung_tracks is None else bool(sprung_tracks))
+        native = os.environ.get('SOLBREAKER_NATIVE_PHYSICS', '1')
+        if native not in ('0', '1'):
+            raise ValueError('SOLBREAKER_NATIVE_PHYSICS must be 0 or 1')
+        self._native_physics_enabled = native == '1'
         self.cid = None
         self._visibility = None
         self.closed = False
@@ -713,9 +717,10 @@ class CollisionWorld:
             # loading, rather than adding an allocation to the first input.
             self._rust_drive._prepare_terrain()
             yield
-        if os.environ.get('SOLBREAKER_NATIVE_PHYSICS') == '1':
+        if self._native_physics_enabled:
             if not self.sprung_tracks or self.wall_trampoline:
-                raise ValueError('Native physics requires sprung tracked physics')
+                raise ValueError('Native physics requires sprung tracked physics; '
+                                 'set SOLBREAKER_NATIVE_PHYSICS=0 for legacy diagnostics')
             from .native_physics import NativePhysics
             self._native_physics = NativePhysics(self)
             yield

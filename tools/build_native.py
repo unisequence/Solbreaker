@@ -12,7 +12,8 @@ import tempfile
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--jobs', type=int, default=2)
-    parser.add_argument('--physics-core', action='store_true', help='Also build the experimental native physics owner')
+    parser.add_argument('--physics-core', action='store_true',
+                        help='Compatibility option; the native ground controller is always built')
     args = parser.parse_args()
     if (sys.platform not in ('linux', 'win32') or platform.machine().lower() not in ('amd64', 'x86_64')
             or not 1 <= args.jobs <= 8):
@@ -20,8 +21,7 @@ def main():
     root = Path(__file__).resolve().parents[1]/'solbreaker/native'
     names = dict(sim_core='tfs_sim_core', impact_core='tfs_impact_core',
                  armor_query='tfs_armor_query', rapier_dynamic='tfs_rapier_dynamic')
-    if args.physics_core:
-        names['physics_core'] = 'solbreaker_physics_core'
+    names['physics_core'] = 'solbreaker_physics_core'
     for directory, name in names.items():
         crate = root/directory
         subprocess.run(['cargo', 'build', '--locked', '--release', '--jobs', str(args.jobs),

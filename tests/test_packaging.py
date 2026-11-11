@@ -10,7 +10,7 @@ import tomllib
 from unittest.mock import patch
 import zipfile
 
-from tools.package_source import FILES, FOLDERS, GAME_CATALOG, SOURCE_CRATES, WHEEL, package
+from tools.package_source import FILES, FOLDERS, GAME_CATALOG, SOURCE_CRATES, WHEEL, WINDOWS_LIBRARIES, package
 from solbreaker.resource_copy import copy_resource_tree, resource_tree_facts
 
 
@@ -97,14 +97,13 @@ class PackagingTests(unittest.TestCase):
                     package(root/'result.zip')
 
     def test_native_wheel_must_match_accepted_digest(self):
-        from tools.package_source import CRATES
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
             self.source_fixture(root)
             binaries = root/'binaries'
             binaries.mkdir()
-            for crate in CRATES:
-                (binaries/('tfs_'+crate+'.dll')).write_bytes(b'synthetic library')
+            for filename in WINDOWS_LIBRARIES.values():
+                (binaries/filename).write_bytes(b'synthetic library')
             wheel = binaries/WHEEL
             wheel.write_bytes(b'accepted synthetic wheel')
             expected = {path.name: hashlib.sha256(path.read_bytes()).hexdigest()
@@ -116,6 +115,41 @@ class PackagingTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, 'accepted SHA-256'):
                     package(root/'result.zip', windows_native=binaries, windows_wheel=wheel)
             self.assertFalse((root/'result.zip').exists())
+
+    def test_windows_package_requires_pinned_ground_controller(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.source_fixture(root)
+            binaries = root/'binaries'
+            binaries.mkdir()
+            for filename in WINDOWS_LIBRARIES.values():
+                (binaries/filename).write_bytes(b'synthetic library')
+            wheel = binaries/WHEEL
+            wheel.write_bytes(b'synthetic wheel')
+            expected = {path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+                        for path in binaries.iterdir()}
+            lock = root/'requirements/native-artifacts.json'
+            lock.write_text(json.dumps(dict(sha256=expected)))
+            self.write_file_list(root)
+            physics = binaries/'solbreaker_physics_core.dll'
+            physics.unlink()
+            output = root/'result.zip'
+            with patch('tools.package_source.ROOT', root):
+                with self.assertRaisesRegex(ValueError, 'missing: solbreaker_physics_core.dll'):
+                    package(output, windows_native=binaries, windows_wheel=wheel)
+                self.assertFalse(output.exists())
+                physics.write_bytes(b'synthetic library')
+                expected.pop(physics.name)
+                lock.write_text(json.dumps(dict(sha256=expected)))
+                with self.assertRaisesRegex(ValueError, 'No accepted Windows SHA-256.*physics_core.dll'):
+                    package(output, windows_native=binaries, windows_wheel=wheel)
+                self.assertFalse(output.exists())
+                expected[physics.name] = hashlib.sha256(physics.read_bytes()).hexdigest()
+                lock.write_text(json.dumps(dict(sha256=expected)))
+                package(output, windows_native=binaries, windows_wheel=wheel)
+            with zipfile.ZipFile(output) as archive:
+                self.assertEqual(archive.read('Solbreaker/solbreaker/native/physics_core/'+physics.name),
+                                 b'synthetic library')
 
     def test_write_failure_removes_partial_archive_and_existing_output_is_preserved(self):
         with TemporaryDirectory() as temporary:

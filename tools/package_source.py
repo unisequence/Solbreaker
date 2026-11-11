@@ -21,8 +21,10 @@ FILES = ('README.md', 'pyproject.toml', '.gitignore', 'setup.sh', 'setup.ps1',
          'release-files.txt', 'launch-tui.cmd')
 FOLDERS = ('solbreaker', 'tools', 'tests', 'examples', 'licenses', 'docs', 'requirements')
 OPTIONAL = ('LICENSE', 'LICENSE.md', 'LICENSE.txt')
-CRATES = ('sim_core', 'impact_core', 'armor_query', 'rapier_dynamic')
-SOURCE_CRATES = CRATES + ('physics_core',)
+CRATES = ('sim_core', 'impact_core', 'armor_query', 'rapier_dynamic', 'physics_core')
+SOURCE_CRATES = CRATES
+WINDOWS_LIBRARIES = {crate: 'tfs_'+crate+'.dll' for crate in CRATES}
+WINDOWS_LIBRARIES['physics_core'] = 'solbreaker_physics_core.dll'
 WHEEL = 'pybullet-3.2.7-cp312-cp312-win_amd64.whl'
 GAME_CATALOG = 'solbreaker/assets/build-11.21.0.1235_7376187-files.json.gz'
 FORBIDDEN_SUFFIXES = frozenset(('.pem', '.key', '.p12', '.pfx', '.sqlite', '.sqlite3',
@@ -132,8 +134,8 @@ def package(output, *, windows_native=None, windows_wheel=None, windows_runtime=
     validate_contents(payloads)
     if windows_native:
         expected = json.loads(payloads['requirements/native-artifacts.json'])['sha256']
-        binaries = {'solbreaker/native/'+crate+'/tfs_'+crate+'.dll':
-                    Path(windows_native)/('tfs_'+crate+'.dll') for crate in CRATES}
+        binaries = {'solbreaker/native/'+crate+'/'+filename:
+                    Path(windows_native)/filename for crate, filename in WINDOWS_LIBRARIES.items()}
         # Older accepted native sets retain the Python contact-query fallback.
         contact = Path(windows_native)/'_contact_queries.pyd'
         if contact.exists():
@@ -143,6 +145,11 @@ def package(output, *, windows_native=None, windows_wheel=None, windows_runtime=
             raise ValueError('Expected the accepted CPython 3.12 x64 Bullet wheel')
         binaries['wheels/'+WHEEL] = wheel
         for name, path in binaries.items():
+            if not re.fullmatch(r'[0-9a-f]{64}', str(expected.get(path.name, ''))):
+                raise ValueError('No accepted Windows SHA-256 for '+path.name+
+                                 '; validate the native build before packaging')
+            if not path.is_file():
+                raise ValueError('Required Windows native package input is missing: '+path.name)
             content = read_input(path)
             if hashlib.sha256(content).hexdigest() != expected[path.name]:
                 raise ValueError('Native package input differs from accepted SHA-256: '+path.name)

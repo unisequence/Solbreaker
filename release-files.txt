@@ -461,6 +461,7 @@ tests/test_diagnostic_fast_paths.py
 tests/test_launcher_stdin.py
 tests/test_login_preferences.py
 tests/test_management.py
+tests/test_native_build.py
 tests/test_native_physics.py
 tests/test_native_windows.py
 tests/test_packaging.py

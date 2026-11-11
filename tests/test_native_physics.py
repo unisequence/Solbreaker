@@ -1,17 +1,18 @@
-"""Exercise the experimental native owner through CollisionWorld.move."""
+"""Exercise the default native owner through CollisionWorld.move."""
 import ctypes as C
 import math
 import os
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 
 from solbreaker.collision import CollisionWorld, Destructible, Motion, Pose
 from solbreaker.mesh_files import MeshFiles
-from solbreaker.native_physics import StepInput, StepOutput
+from solbreaker.native_physics import SensorState, StepInput, StepOutput, library_path, load_library
 from solbreaker.physics_proxy import vehicle_proxies
 from solbreaker.terrain import MapTerrain
 
@@ -70,16 +71,64 @@ def terrain():
     return result
 
 
-@unittest.skipUnless(LIBRARY.exists(), 'Build the experimental physics_core library first')
+class NativeLibraryTests(unittest.TestCase):
+    def test_invalid_backend_setting_is_rejected(self):
+        with patch.dict(os.environ, SOLBREAKER_NATIVE_PHYSICS='auto'):
+            with self.assertRaisesRegex(ValueError, 'SOLBREAKER_NATIVE_PHYSICS must be 0 or 1'):
+                CollisionWorld(None, None)
+
+    def test_platform_selection(self):
+        with patch('solbreaker.native_physics.sys.platform', 'win32'):
+            self.assertEqual(library_path().name, 'solbreaker_physics_core.dll')
+        with patch('solbreaker.native_physics.sys.platform', 'linux'):
+            self.assertEqual(library_path().name, 'libsolbreaker_physics_core.so')
+
+    def test_missing_library_reports_required_build(self):
+        with patch('solbreaker.native_physics.C.CDLL', side_effect=OSError('missing library')):
+            with self.assertRaisesRegex(RuntimeError, 'build_native.py'):
+                load_library()
+
+    def test_incompatible_abi_and_missing_export_are_rejected(self):
+        library = MagicMock()
+        library.solbreaker_physics_abi_sizes.return_value = 0
+        with patch('solbreaker.native_physics.C.CDLL', return_value=library):
+            with self.assertRaisesRegex(RuntimeError, 'Incompatible native physics ABI'):
+                load_library()
+            library.solbreaker_physics_abi_sizes.return_value = (
+                C.sizeof(StepInput) << 32) | (C.sizeof(StepOutput) << 16) | C.sizeof(SensorState)
+            del library.solbreaker_physics_sync
+            with self.assertRaisesRegex(RuntimeError, 'solbreaker_physics_sync'):
+                load_library()
+
+
+@unittest.skipUnless(LIBRARY.exists(), 'Build the physics_core library first')
 class NativePhysicsTests(unittest.TestCase):
-    def world(self, assets, enabled=True):
-        with patch.dict(os.environ, {'SOLBREAKER_NATIVE_PHYSICS':str(int(enabled))}):
+    def world(self, assets, enabled=None):
+        with patch.dict(os.environ):
+            if enabled is None:
+                os.environ.pop('SOLBREAKER_NATIVE_PHYSICS', None)
+            else:
+                os.environ['SOLBREAKER_NATIVE_PHYSICS'] = str(int(enabled))
             result = CollisionWorld(assets, terrain(),
                 vehicles={200:Pose((0.,0.,0.),0.), 201:Pose((15.,0.,10.),0.)},
                 experimental_6dof=True, experimental_ground_impacts=True,
                 sprung_tracks=True, wall_trampoline=False)
         self.addCleanup(result.close)
         return result
+
+    def test_no_flag_uses_native_and_explicit_zero_uses_legacy(self):
+        assets = self.assets('flat')
+        native, legacy = self.world(assets), self.world(assets, False)
+        self.assertIsNotNone(native._native_physics)
+        self.assertIsNone(legacy._native_physics)
+        native.move(.05, 0., 200, dt=1/60)
+        self.assertEqual(native._native_physics.steps, 1)
+
+    def test_default_does_not_fall_back_when_native_library_is_missing(self):
+        with TemporaryDirectory() as temporary:
+            with patch('solbreaker.native_physics.library_path', return_value=Path(temporary)/LIBRARY.name):
+                with self.assertRaisesRegex(RuntimeError, 'Native ground physics library missing'):
+                    self.world(self.assets('flat'))
 
     def assets(self, scenario):
         result = QueryAssets(scenario)

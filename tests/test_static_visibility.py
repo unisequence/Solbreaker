@@ -30,6 +30,7 @@ class StaticVisibilityTests(unittest.TestCase):
         self.addCleanup(bullet.disconnect, world.cid)
         world._mesh_body_paths = {}
         world._rapier = None
+        world._native_physics = None
         world._rapier_query_backend = 'bullet'
         world._ray_threads = 1
         world._visibility = self.query

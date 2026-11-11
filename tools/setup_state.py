@@ -27,7 +27,9 @@ def verify_native():
     library = ctypes.CDLL(str(path))
     for name in ('create', 'close', 'step', 'activate', 'sync', 'set_mass', 'deactivate', 'destroy'):
         getattr(library, 'tfs_rapier_'+name)
-    print('Four native libraries loaded successfully', flush=True)
+    from solbreaker.native_physics import load_library
+    load_library()
+    print('Five native libraries loaded successfully', flush=True)
 
 
 def finish(options):
@@ -92,5 +94,5 @@ if __name__ == '__main__':
     parser.add_argument('--options', required=True)
     try:
         finish(json.loads(parser.parse_args().options))
-    except (OSError, ValueError, AttributeError, subprocess.CalledProcessError) as error:
+    except (OSError, ValueError, AttributeError, RuntimeError, subprocess.CalledProcessError) as error:
         parser.exit(1, f'Setup failed: {error}\n')
