@@ -1,7 +1,7 @@
 {
   "schema": 1,
-  "recorded_on": "2026-11-10",
-  "scope": "Rust lockfile closure and all Python versions pinned in requirements/lock.json. Python packages are installed separately using verified hashes. Includes additional dependencies of the experimental physics_core lockfile.",
+  "recorded_on": "2026-11-11",
+  "scope": "Rust lockfile closure and all Python versions pinned in requirements/lock.json. Python packages are installed separately using verified hashes. Includes additional dependencies of the experimental physics_core lockfile. Includes notices for the GNU Windows cross-toolchain runtime statically linked into the five native DLLs.",
   "components": [
     {
       "ecosystem": "crates.io",
@@ -2388,6 +2388,34 @@
         {
           "path": "licenses/rust/windows-link-0.2.1/license-mit",
           "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+        }
+      ]
+    },
+    {
+      "ecosystem": "native-runtime",
+      "name": "mingw-w64",
+      "version": "12.0.0-5",
+      "license": "ZPL-2.1 and per-file terms",
+      "source": "https://sources.debian.org/src/mingw-w64/12.0.0-5/",
+      "provenance": "Original copyright notice shipped with the Debian cross-toolchain used for this Windows build.",
+      "texts": [
+        {
+          "path": "licenses/native-runtime/mingw-w64-common-COPYRIGHT.txt",
+          "sha256": "50e5bb66d222c7d4692c2d13670ddcd3664779358e389a026b69a0e0e18e7be5"
+        }
+      ]
+    },
+    {
+      "ecosystem": "native-runtime",
+      "name": "gcc-mingw-w64 runtime",
+      "version": "14",
+      "license": "GCC runtime exception and per-component terms",
+      "source": "https://gcc.gnu.org/onlinedocs/libstdc++/manual/license.html",
+      "provenance": "Original copyright notice shipped with the Debian cross-toolchain used for this Windows build.",
+      "texts": [
+        {
+          "path": "licenses/native-runtime/gcc-mingw-w64-base-COPYRIGHT.txt",
+          "sha256": "f891d7e0c56f503a92c7258d540b3d8215852d8387cbca8f1f07c6f4b6e67da6"
         }
       ]
     }

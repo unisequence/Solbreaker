@@ -6,6 +6,13 @@ Solbreaker is an independent project for the pinned World of Tanks Blitz 11.21 c
 
 The Windows native package includes Solbreaker's five Rust libraries and a locally built PyBullet 3.2.7 wheel for CPython 3.12 x64.
 
+The five Windows DLLs are cross-compiled with GNU tools and statically link
+their runtime support. Original MinGW-w64 and GCC cross-toolchain copyright
+notices, including runtime exceptions and per-file terms, are preserved under
+`licenses/native-runtime/` and in `licenses/BUNDLED_LICENSES.txt`. The inventory
+records the copied notices and their hashes. The DLLs require no separately
+installed MinGW runtime DLLs.
+
 | Component | Use | Terms and notices |
 | --- | --- | --- |
 | Rapier 3D f64 0.26.1, Dimforge and contributors | Free rigid-body physics | Apache-2.0. Original text in [Rapier LICENSE](licenses/rust/rapier3d-f64-0.26.1/LICENSE). |
