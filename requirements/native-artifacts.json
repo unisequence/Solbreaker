@@ -1,11 +1,12 @@
 {
   "schema": 1,
   "sha256": {
-    "tfs_sim_core.dll": "5350c4bb4e3cdb8bb641c294bd8580b1417f6c8170be21248c0452b190d6b061",
-    "tfs_impact_core.dll": "401af3b8e629fa57c93af978b77bfaa7ebad1ae7776a7c19e0c29f8d1d553787",
-    "tfs_armor_query.dll": "0fd2869e669d2bc60eadd4e42d2073ec7589a3da6dba5bbbe56f4e29400ac381",
-    "tfs_rapier_dynamic.dll": "ea20098f0188193f70076a5444ff0bb692118c9d44ac8dffad5f28b1abb92911",
+    "tfs_sim_core.dll": "e21fe63dbc24c16a79da388847c6accdcd91ea3e686353ec46418ad2fcf6a997",
+    "tfs_impact_core.dll": "360eb44f8a8591ae4263b78a891776339b0632920e203c8b98dfdb9c1b53dc05",
+    "tfs_armor_query.dll": "a830d47dccbecea95c03332b86cff564833f62ba366f120891bb42047e3b5962",
+    "tfs_rapier_dynamic.dll": "fb6502c3bc6e814dddbdc78b1924bd0dc860c6ca173fdc4ebe9babbb8134ac2e",
     "pybullet-3.2.7-cp312-cp312-win_amd64.whl": "db9ef1370abd2d989ccf3b14b8d581410aaf6a8e3723d6c953f4980525266945",
-    "_contact_queries.pyd": "7ec894ef9027be9dfeb0fbd6259bc68ad6bb14657dc069c15e07632e3456fb7d"
+    "_contact_queries.pyd": "7ec894ef9027be9dfeb0fbd6259bc68ad6bb14657dc069c15e07632e3456fb7d",
+    "solbreaker_physics_core.dll": "a564bb395ce315a3e99616d4804fa51bf371a921c0178ceab284a58e1f7c7187"
   }
 }

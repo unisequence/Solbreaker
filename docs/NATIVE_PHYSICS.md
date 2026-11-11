@@ -12,13 +12,20 @@ python tools/build_native.py --jobs 2
 ```
 
 On the development host, Rust libraries are built under the `claude-ops` OS
-account as required by `AGENTS.md`. Linux x86-64 is the accepted runtime.
-Windows build and DLL selection are implemented, but the new controller has
-not passed runtime acceptance on Windows. The pinned PyBullet wheel exports
-all 38 Bullet C API symbols used by the controller. The Windows assembler requires
-`solbreaker_physics_core.dll` as its fifth DLL and an accepted SHA-256 in
-`requirements/native-artifacts.json`. That digest is not recorded yet, so a
-Windows release cannot be assembled from the old four-DLL set.
+account as required by `AGENTS.md`. The controller has been checked on
+Linux x86-64 and Windows x86-64. The Windows package includes all five DLLs,
+including `solbreaker_physics_core.dll`; their accepted SHA-256 values are
+recorded in `requirements/native-artifacts.json`. The pinned PyBullet wheel
+exports all 38 Bullet C API symbols used by the controller.
+
+The Windows DLLs were built from the current sources with Rust 1.85.0 for
+`x86_64-pc-windows-gnu`, with the GCC runtime linked statically. PE imports
+contain only Windows system libraries; an installed MinGW runtime is not needed.
+On 11 November 2026 the bundled CPython 3.12.16 passed 36 focused physics,
+bot-control and Windows owner-transport tests. A headless Fort arena then ran
+14 vehicles for 720 fixed steps with 10,080 native ground calls; the controlled
+vehicle travelled 51.13 m. This checks the new Windows runtime and real map
+movement. It is not a full graphical battle or a capacity benchmark.
 
 Setup validates all five libraries, including the ground controller ABI, even
 with `--skip-build`. A missing or incompatible controller produces an error;

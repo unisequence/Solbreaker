@@ -24,6 +24,8 @@ licenses/BLITZ.md
 licenses/BUNDLED_LICENSES.txt
 licenses/README.md
 licenses/manifest.json
+licenses/native-runtime/gcc-mingw-w64-base-COPYRIGHT.txt
+licenses/native-runtime/mingw-w64-common-COPYRIGHT.txt
 licenses/python-runtime/LICENSE.bdb.txt
 licenses/python-runtime/LICENSE.bzip2.txt
 licenses/python-runtime/LICENSE.cpython.txt
