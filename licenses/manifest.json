@@ -1,0 +1,2291 @@
+{
+  "schema": 1,
+  "recorded_on": "2026-11-10",
+  "scope": "Rust lockfile closure and all Python versions pinned in requirements/lock.json. Python packages are installed separately using verified hashes.",
+  "components": [
+    {
+      "ecosystem": "crates.io",
+      "name": "allocator-api2",
+      "version": "0.2.21",
+      "license": "MIT OR Apache-2.0",
+      "authors": [
+        "Zakarum <zaq.dev@icloud.com>"
+      ],
+      "source": "https://crates.io/api/v1/crates/allocator-api2/0.2.21/download",
+      "source_sha256": "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923",
+      "repository": "https://github.com/zakarumych/allocator-api2",
+      "texts": [
+        {
+          "path": "licenses/rust/allocator-api2-0.2.21/LICENSE-APACHE",
+          "sha256": "20fe7b00e904ed690e3b9fd6073784d3fc428141dbd10b81c01fd143d0797f58"
+        },
+        {
+          "path": "licenses/rust/allocator-api2-0.2.21/LICENSE-MIT",
+          "sha256": "36516aefdc84c5d5a1e7485425913a22dbda69eb1930c5e84d6ae4972b5194b9"
+        }
+      ]
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "approx",
+      "version": "0.5.1",
+      "license": "Apache-2.0",
+      "authors": [
+        "Brendan Zabarauskas <bjzaba@yahoo.com.au>"
+      ],
+      "source": "https://crates.io/api/v1/crates/approx/0.5.1/download",
+      "source_sha256": "cab112f0a86d568ea0e627cc1d6be74a1e9cd55214684db5561995f6dad897c6",
+      "repository": "https://github.com/brendanzab/approx",
+      "texts": [
+        {
+          "path": "licenses/rust/approx-0.5.1/LICENSE",
+          "sha256": "3ddf9be5c28fe27dad143a5dc76eea25222ad1dd68934a047064e56ed2fa40c5"
+        }
+      ]
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "arrayvec",
+      "version": "0.7.8",
+      "license": "MIT OR Apache-2.0",
+      "authors": [
+        "bluss"
+      ],
+      "source": "https://crates.io/api/v1/crates/arrayvec/0.7.8/download",
+      "source_sha256": "d3fb67a6e08acf24fdeccbac2cb6ac4305825bd1f117462e0e6f2f193345ad56",
+      "repository": "https://github.com/bluss/arrayvec",
+      "texts": [
+        {
+          "path": "licenses/rust/arrayvec-0.7.8/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "path": "licenses/rust/arrayvec-0.7.8/LICENSE-MIT",
+          "sha256": "4da95ec4ecb65b738d470b7d762894ad9c97da93e6cbfb18b570fc2c96f4b871"
+        }
+      ]
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "autocfg",
+      "version": "1.5.1",
+      "license": "Apache-2.0 OR MIT",
+      "authors": [
+        "Josh Stone <cuviper@gmail.com>"
+      ],
+      "source": "https://crates.io/api/v1/crates/autocfg/1.5.1/download",
+      "source_sha256": "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53",
+      "repository": "https://github.com/cuviper/autocfg",
+      "texts": [
+        {
+          "path": "licenses/rust/autocfg-1.5.1/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "path": "licenses/rust/autocfg-1.5.1/LICENSE-MIT",
+          "sha256": "27995d58ad5c1145c1a8cd86244ce844886958a35eb2b78c6b772748669999ac"
+        }
+      ]
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "bit-vec",
+      "version": "0.8.0",
+      "license": "Apache-2.0 OR MIT",
+      "authors": [
+        "Alexis Beingessner <a.beingessner@gmail.com>"
+      ],
+      "source": "https://crates.io/api/v1/crates/bit-vec/0.8.0/download",
+      "source_sha256": "5e764a1d40d510daf35e07be9eb06e75770908c27d411ee6c92109c9840eaaf7",
+      "repository": "https://github.com/contain-rs/bit-vec",
+      "texts": [
+        {
+          "path": "licenses/rust/bit-vec-0.8.0/LICENSE-APACHE",
+          "sha256": "8173d5c29b4f956d532781d2b86e4e30f83e6b7878dce18c919451d6ba707c90"
+        },
+        {
+          "path": "licenses/rust/bit-vec-0.8.0/LICENSE-MIT",
+          "sha256": "f51ac2c59a222f7476ce507ca879960e2b64ea64bb2786eefdbeb7b0b538d1b7"
+        }
+      ]
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "bitflags",
+      "version": "2.13.2",
+      "license": "MIT OR Apache-2.0",
+      "authors": [
+        "The Rust Project Developers"
+      ],
+      "source": "https://crates.io/api/v1/crates/bitflags/2.13.2/download",
+      "source_sha256": "3ded4057c258ba199e2d26386d3af3780957ecaee6c4ef4041c6b4b8b97c0b06",
+      "repository": "https://github.com/bitflags/bitflags",
+      "texts": [
+        {
+          "path": "licenses/rust/bitflags-2.13.2/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "path": "licenses/rust/bitflags-2.13.2/LICENSE-MIT",
+          "sha256": "6485b8ed310d3f0340bf1ad1f47645069ce4069dcc6bb46c7d5c6faf41de1fdb"
+        }
+      ]
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "bytemuck",
+      "version": "1.25.2",
+      "license": "Zlib OR Apache-2.0 OR MIT",
+      "authors": [
+        "Lokathor <zefria@gmail.com>"
+      ],
+      "source": "https://crates.io/api/v1/crates/bytemuck/1.25.2/download",
+      "source_sha256": "95832e849adfb21180ccb6826a99da14e5d266ae5c2e668e1602cf234f153797",
+      "repository": "https://github.com/Lokathor/bytemuck",
+      "texts": [
+        {
+          "path": "licenses/rust/bytemuck-1.25.2/LICENSE-APACHE",
+          "sha256": "e3ba223bb1423f0aad8c3dfce0fe3148db48926d41e6fbc3afbbf5ff9e1c89cb"
+        },
+        {
+          "path": "licenses/rust/bytemuck-1.25.2/LICENSE-ZLIB",
+          "sha256": "84b34dd7608f7fb9b17bd588a6bf392bf7de504e2716f024a77d89f1b145a151"
+        },
+        {
+          "path": "licenses/rust/bytemuck-1.25.2/LICENSE-MIT",
+          "sha256": "9df9ba60a11af705f2e451b53762686e615d86f76b169cf075c3237730dbd7e2"
+        }
+      ]
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "byteorder",
+      "version": "1.5.0",
+      "license": "Unlicense OR MIT",
+      "authors": [
+        "Andrew Gallant <jamslam@gmail.com>"
+      ],
+      "source": "https://crates.io/api/v1/crates/byteorder/1.5.0/download",
+      "source_sha256": "1fd0f2584146f6f2ef48085050886acf353beff7305ebd1ae69500e27c67f64b",
+      "repository": "https://github.com/BurntSushi/byteorder",
+      "texts": [
+        {
+          "path": "licenses/rust/byteorder-1.5.0/COPYING",
+          "sha256": "01c266bced4a434da0051174d6bee16a4c82cf634e2679b6155d40d75012390f"
+        },
+        {
+          "path": "licenses/rust/byteorder-1.5.0/LICENSE-MIT",
+          "sha256": "0f96a83840e146e43c0ec96a22ec1f392e0680e6c1226e6f3ba87e0740af850f"
+        }
+      ]
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "crossbeam",
+      "version": "0.8.5",
+      "license": "MIT OR Apache-2.0",
+      "authors": [],
+      "source": "https://crates.io/api/v1/crates/crossbeam/0.8.5/download",
+      "source_sha256": "e71406cd8807725f7ac2f999a4cdd32e98f829fdf65f528343cebf945e41df1e",
+      "repository": "https://github.com/crossbeam-rs/crossbeam",
+      "texts": [
+        {
+          "path": "licenses/rust/crossbeam-0.8.5/LICENSE-APACHE",
+          "sha256": "6f712474a3e3be1386d2d0c29449850ea788da64d35cff0fc8799acf741e9ecd"
+        },
+        {
+          "path": "licenses/rust/crossbeam-0.8.5/LICENSE-MIT",
+          "sha256": "5734ed989dfca1f625b40281ee9f4530f91b2411ec01cb748223e7eb87e201ab"
+        }
+      ]
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "crossbeam-channel",
+      "version": "0.5.17",
+      "license": "MIT OR Apache-2.0",
+      "authors": [],
+      "source": "https://crates.io/api/v1/crates/crossbeam-channel/0.5.17/download",
+      "source_sha256": "98b0cc327b5bc766e7fda9c9260cc0fa81b43a8e240440422dff70788e3f9ef1",
+      "repository": "https://github.com/crossbeam-rs/crossbeam",
+      "texts": [
+        {
+          "path": "licenses/rust/crossbeam-channel-0.5.17/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "path": "licenses/rust/crossbeam-channel-0.5.17/LICENSE-THIRD-PARTY",
+          "sha256": "b16db96b93b1d7cf7bea533f572091ec6bca3234fbe0a83038be772ff391a44c"
+        },
+        {
+          "path": "licenses/rust/crossbeam-channel-0.5.17/LICENSE-MIT",
+          "sha256": "5734ed989dfca1f625b40281ee9f4530f91b2411ec01cb748223e7eb87e201ab"
+        }
+      ]
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "crossbeam-deque",
+      "version": "0.8.8",
+      "license": "MIT OR Apache-2.0",
+      "authors": [],
+      "source": "https://crates.io/api/v1/crates/crossbeam-deque/0.8.8/download",
+      "source_sha256": "622f3fc73690be383c7214310406f28a90e6edeadc3cea882f9d71e495b9711a",
+      "repository": "https://github.com/crossbeam-rs/crossbeam",
+      "texts": [
+        {
+          "path": "licenses/rust/crossbeam-deque-0.8.8/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "path": "licenses/rust/crossbeam-deque-0.8.8/LICENSE-MIT",
+          "sha256": "5734ed989dfca1f625b40281ee9f4530f91b2411ec01cb748223e7eb87e201ab"
+        }
+      ]
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "crossbeam-epoch",
+      "version": "0.9.21",
+      "license": "MIT OR Apache-2.0",
+      "authors": [],
+      "source": "https://crates.io/api/v1/crates/crossbeam-epoch/0.9.21/download",
+      "source_sha256": "dc74980687109a3b14c72fd458107bf0baa1da1a1a805e178d15501ba9b86d9d",
+      "repository": "https://github.com/crossbeam-rs/crossbeam",
+      "texts": [
+        {
+          "path": "licenses/rust/crossbeam-epoch-0.9.21/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "path": "licenses/rust/crossbeam-epoch-0.9.21/LICENSE-MIT",
+          "sha256": "5734ed989dfca1f625b40281ee9f4530f91b2411ec01cb748223e7eb87e201ab"
+        }
+      ]
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "crossbeam-queue",
+      "version": "0.3.14",
+      "license": "MIT OR Apache-2.0",
+      "authors": [],
+      "source": "https://crates.io/api/v1/crates/crossbeam-queue/0.3.14/download",
+      "source_sha256": "03e8bd762f7479489c70ed6c768ddca99d7296857de437a68dcb2a94365b3fae",
+      "repository": "https://github.com/crossbeam-rs/crossbeam",
+      "texts": [
+        {
+          "path": "licenses/rust/crossbeam-queue-0.3.14/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "path": "licenses/rust/crossbeam-queue-0.3.14/LICENSE-MIT",
+          "sha256": "5734ed989dfca1f625b40281ee9f4530f91b2411ec01cb748223e7eb87e201ab"
+        }
+      ]
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "crossbeam-utils",
+      "version": "0.8.23",
+      "license": "MIT OR Apache-2.0",
+      "authors": [],
+      "source": "https://crates.io/api/v1/crates/crossbeam-utils/0.8.23/download",
+      "source_sha256": "a31eee39dddec8330830986fcd7625edb5a24ec90ea038215273bbc3adb08ac6",
+      "repository": "https://github.com/crossbeam-rs/crossbeam",
+      "texts": [
+        {
+          "path": "licenses/rust/crossbeam-utils-0.8.23/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "path": "licenses/rust/crossbeam-utils-0.8.23/LICENSE-MIT",
+          "sha256": "5734ed989dfca1f625b40281ee9f4530f91b2411ec01cb748223e7eb87e201ab"
+        }
+      ]
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "downcast-rs",
+      "version": "2.0.2",
+      "license": "MIT OR Apache-2.0",
+      "authors": [],
+      "source": "https://crates.io/api/v1/crates/downcast-rs/2.0.2/download",
+      "source_sha256": "117240f60069e65410b3ae1bb213295bd828f707b5bec6596a1afc8793ce0cbc",
+      "repository": "https://github.com/marcianx/downcast-rs",
+      "texts": [
+        {
+          "path": "licenses/rust/downcast-rs-2.0.2/LICENSE-APACHE",
+          "sha256": "8173d5c29b4f956d532781d2b86e4e30f83e6b7878dce18c919451d6ba707c90"
+        },
+        {
+          "path": "licenses/rust/downcast-rs-2.0.2/LICENSE-MIT",
+          "sha256": "fb252fecf98d9af8f1d9201c5860319a514f5a8a24700dc84fc6ea287a7a4958"
+        }
+      ]
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "either",
+      "version": "1.19.0",
+      "license": "MIT OR Apache-2.0",
+      "authors": [],
+      "source": "https://crates.io/api/v1/crates/either/1.19.0/download",
+      "source_sha256": "0e9c71c2167ca323c882b99918929403426e2373ea17242ff5653e0d5e1058be",
+      "repository": "https://github.com/rayon-rs/either",
+      "texts": [
+        {
+          "path": "licenses/rust/either-1.19.0/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "path": "licenses/rust/either-1.19.0/LICENSE-MIT",
+          "sha256": "7576269ea71f767b99297934c0b2367532690f8c4badc695edf8e04ab6a1e545"
+        }
+      ]
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "ena",
+      "version": "0.14.4",
+      "license": "MIT OR Apache-2.0",
+      "authors": [
+        "Niko Matsakis <niko@alum.mit.edu>"
+      ],
+      "source": "https://crates.io/api/v1/crates/ena/0.14.4/download",
+      "source_sha256": "eabffdaee24bd1bf95c5ef7cec31260444317e72ea56c4c91750e8b7ee58d5f1",
+      "repository": "https://github.com/rust-lang/ena",
+      "texts": [
+        {
+          "path": "licenses/rust/ena-0.14.4/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "path": "licenses/rust/ena-0.14.4/LICENSE-MIT",
+          "sha256": "0621878e61f0d0fda054bcbe02df75192c28bde1ecc8289cbd86aeba2dd72720"
+        }
+      ]
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "equivalent",
+      "version": "1.0.3",
+      "license": "Apache-2.0 OR MIT",
+      "authors": [],
+      "source": "https://crates.io/api/v1/crates/equivalent/1.0.3/download",
+      "source_sha256": "00d174d5400e5e8fd687ad1049e2f578285fa914201b1af7e8b112a4546bd826",
+      "repository": "https://github.com/indexmap-rs/equivalent",
+      "texts": [
+        {
+          "path": "licenses/rust/equivalent-1.0.3/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "path": "licenses/rust/equivalent-1.0.3/LICENSE-MIT",
+          "sha256": "7365cc8878a1d7ce155a58c4ca09c3d7a6be413efa5334a80ea842912b669349"
+        }
+      ]
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "foldhash",
+      "version": "0.1.5",
+      "license": "Zlib",
+      "authors": [
+        "Orson Peters <orsonpeters@gmail.com>"
+      ],
+      "source": "https://crates.io/api/v1/crates/foldhash/0.1.5/download",
+      "source_sha256": "d9c4f5dac5e15c24eb999c26181a6ca40b39fe946cbe4c263c7209467bc83af2",
+      "repository": "https://github.com/orlp/foldhash",
+      "texts": [
+        {
+          "path": "licenses/rust/foldhash-0.1.5/LICENSE",
+          "sha256": "b1181a40b2a7b25cf66fd01481713bc1005df082c53ef73e851e55071b102744"
+        }
+      ]
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "foldhash",
+      "version": "0.2.0",
+      "license": "Zlib",
+      "authors": [
+        "Orson Peters <orsonpeters@gmail.com>"
+      ],
+      "source": "https://crates.io/api/v1/crates/foldhash/0.2.0/download",
+      "source_sha256": "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb",
+      "repository": "https://github.com/orlp/foldhash",
+      "texts": [
+        {
+          "path": "licenses/rust/foldhash-0.2.0/LICENSE",
+          "sha256": "b1181a40b2a7b25cf66fd01481713bc1005df082c53ef73e851e55071b102744"
+        }
+      ]
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "hash32",
+      "version": "0.3.1",
+      "license": "MIT OR Apache-2.0",
+      "authors": [
+        "Jorge Aparicio <jorge@japaric.io>"
+      ],
+      "source": "https://crates.io/api/v1/crates/hash32/0.3.1/download",
+      "source_sha256": "47d60b12902ba28e2730cd37e95b8c9223af2808df9e902d4df49588d1470606",
+      "repository": "https://github.com/japaric/hash32",
+      "texts": [
+        {
+          "path": "licenses/rust/hash32-0.3.1/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "path": "licenses/rust/hash32-0.3.1/LICENSE-MIT",
+          "sha256": "c986bcdb83103d4ddf58aeb7b5302359782e54dc4eea14a0cc27c62dcbd50729"
+        }
+      ]
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "hashbrown",
+      "version": "0.15.5",
+      "license": "MIT OR Apache-2.0",
+      "authors": [
+        "Amanieu d'Antras <amanieu@gmail.com>"
+      ],
+      "source": "https://crates.io/api/v1/crates/hashbrown/0.15.5/download",
+      "source_sha256": "9229cfe53dfd69f0609a49f65461bd93001ea1ef889cd5529dd176593f5338a1",
+      "repository": "https://github.com/rust-lang/hashbrown",
+      "texts": [
+        {
+          "path": "licenses/rust/hashbrown-0.15.5/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "path": "licenses/rust/hashbrown-0.15.5/LICENSE-MIT",
+          "sha256": "ff8f68cb076caf8cefe7a6430d4ac086ce6af2ca8ce2c4e5a2004d4552ef52a2"
+        }
+      ]
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "hashbrown",
+      "version": "0.16.1",
+      "license": "MIT OR Apache-2.0",
+      "authors": [
+        "Amanieu d'Antras <amanieu@gmail.com>"
+      ],
+      "source": "https://crates.io/api/v1/crates/hashbrown/0.16.1/download",
+      "source_sha256": "841d1cc9bed7f9236f321df977030373f4a4163ae1a7dbfe1a51a2c1a51d9100",
+      "repository": "https://github.com/rust-lang/hashbrown",
+      "texts": [
+        {
+          "path": "licenses/rust/hashbrown-0.16.1/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "path": "licenses/rust/hashbrown-0.16.1/LICENSE-MIT",
+          "sha256": "ff8f68cb076caf8cefe7a6430d4ac086ce6af2ca8ce2c4e5a2004d4552ef52a2"
+        }
+      ]
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "hashbrown",
+      "version": "0.17.1",
+      "license": "MIT OR Apache-2.0",
+      "authors": [],
+      "source": "https://crates.io/api/v1/crates/hashbrown/0.17.1/download",
+      "source_sha256": "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a",
+      "repository": "https://github.com/rust-lang/hashbrown",
+      "texts": [
+        {
+          "path": "licenses/rust/hashbrown-0.17.1/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "path": "licenses/rust/hashbrown-0.17.1/LICENSE-MIT",
+          "sha256": "ff8f68cb076caf8cefe7a6430d4ac086ce6af2ca8ce2c4e5a2004d4552ef52a2"
+        }
+      ]
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "heapless",
+      "version": "0.8.0",
+      "license": "MIT OR Apache-2.0",
+      "authors": [
+        "Jorge Aparicio <jorge@japaric.io>",
+        "Per Lindgren <per.lindgren@ltu.se>",
+        "Emil Fresk <emil.fresk@gmail.com>"
+      ],
+      "source": "https://crates.io/api/v1/crates/heapless/0.8.0/download",
+      "source_sha256": "0bfb9eb618601c89945a70e254898da93b13be0388091d42117462b265bb3fad",
+      "repository": "https://github.com/rust-embedded/heapless",
+      "texts": [
+        {
+          "path": "licenses/rust/heapless-0.8.0/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "path": "licenses/rust/heapless-0.8.0/LICENSE-MIT",
+          "sha256": "035e70219855119df4273b3c5b97543ae82e0dd60c520416e759107c602f651b"
+        }
+      ]
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "indexmap",
+      "version": "2.14.2",
+      "license": "Apache-2.0 OR MIT",
+      "authors": [],
+      "source": "https://crates.io/api/v1/crates/indexmap/2.14.2/download",
+      "source_sha256": "cc4e190f5d26ca7051642629da2c52fc03bde85a03197c99408dcd291734c855",
+      "repository": "https://github.com/indexmap-rs/indexmap",
+      "texts": [
+        {
+          "path": "licenses/rust/indexmap-2.14.2/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "path": "licenses/rust/indexmap-2.14.2/LICENSE-MIT",
+          "sha256": "ecc269ef87fd38a1d98e30bfac9ba964a9dbd9315c3770fed98d4d7cb5882055"
+        }
+      ]
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "itoa",
+      "version": "1.0.18",
+      "license": "MIT OR Apache-2.0",
+      "authors": [
+        "David Tolnay <dtolnay@gmail.com>"
+      ],
+      "source": "https://crates.io/api/v1/crates/itoa/1.0.18/download",
+      "source_sha256": "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682",
+      "repository": "https://github.com/dtolnay/itoa",
+      "texts": [
+        {
+          "path": "licenses/rust/itoa-1.0.18/LICENSE-APACHE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a"
+        },
+        {
+          "path": "licenses/rust/itoa-1.0.18/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+        }
+      ]
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "libm",
+      "version": "0.2.16",
+      "license": "MIT",
+      "authors": [
+        "Alex Crichton <alex@alexcrichton.com>",
+        "Amanieu d'Antras <amanieu@gmail.com>",
+        "Jorge Aparicio <japaricious@gmail.com>",
+        "Trevor Gross <tg@trevorgross.com>"
+      ],
+      "source": "https://crates.io/api/v1/crates/libm/0.2.16/download",
+      "source_sha256": "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981",
+      "repository": "https://github.com/rust-lang/compiler-builtins",
+      "texts": [
+        {
+          "path": "licenses/rust/libm-0.2.16/LICENSE.txt",
+          "sha256": "3823dda7cf046602f4b4e77ec8e227863dc4736037cc85bb33d9f19febe16bb7"
+        }
+      ]
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "log",
+      "version": "0.4.35",
+      "license": "MIT OR Apache-2.0",
+      "authors": [
+        "The Rust Project Developers"
+      ],
+      "source": "https://crates.io/api/v1/crates/log/0.4.35/download",
+      "source_sha256": "5d15f86d12da44cd8d4ec3c73984537eb7f4cadcb9776a575a0a8a05ca11005c",
+      "repository": "https://github.com/rust-lang/log",
+      "texts": [
+        {
+          "path": "licenses/rust/log-0.4.35/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "path": "licenses/rust/log-0.4.35/LICENSE-MIT",
+          "sha256": "6485b8ed310d3f0340bf1ad1f47645069ce4069dcc6bb46c7d5c6faf41de1fdb"
+        }
+      ]
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "matrixmultiply",
+      "version": "0.3.11",
+      "license": "MIT/Apache-2.0",
+      "authors": [
+        "bluss",
+        "R. Janis Goldschmidt"
+      ],
+      "source": "https://crates.io/api/v1/crates/matrixmultiply/0.3.11/download",
+      "source_sha256": "3f607c237553f086e7043417a51df26b2eb899d3caff94e6a67592ff992fedc7",
+      "repository": "https://github.com/bluss/matrixmultiply/",
+      "texts": [
+        {
+          "path": "licenses/rust/matrixmultiply-0.3.11/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "path": "licenses/rust/matrixmultiply-0.3.11/LICENSE-MIT",
+          "sha256": "792d075c7bad6dac258a44e799eb64cbf465e24d9932d27669be08c5ec957e27"
+        }
+      ]
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "memchr",
+      "version": "2.8.3",
+      "license": "Unlicense OR MIT",
+      "authors": [
+        "Andrew Gallant <jamslam@gmail.com>",
+        "bluss"
+      ],
+      "source": "https://crates.io/api/v1/crates/memchr/2.8.3/download",
+      "source_sha256": "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98",
+      "repository": "https://github.com/BurntSushi/memchr",
+      "texts": [
+        {
+          "path": "licenses/rust/memchr-2.8.3/COPYING",
+          "sha256": "01c266bced4a434da0051174d6bee16a4c82cf634e2679b6155d40d75012390f"
+        },
+        {
+          "path": "licenses/rust/memchr-2.8.3/LICENSE-MIT",
+          "sha256": "0f96a83840e146e43c0ec96a22ec1f392e0680e6c1226e6f3ba87e0740af850f"
+        }
+      ]
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "nalgebra",
+      "version": "0.33.3",
+      "license": "Apache-2.0",
+      "authors": [
+        "Sébastien Crozet <developer@crozet.re>"
+      ],
+      "source": "https://crates.io/api/v1/crates/nalgebra/0.33.3/download",
+      "source_sha256": "9d43ddcacf343185dfd6de2ee786d9e8b1c2301622afab66b6c73baf9882abfd",
+      "repository": "https://github.com/dimforge/nalgebra",
+      "texts": [
+        {
+          "path": "licenses/rust/nalgebra-0.33.3/LICENSE",
+          "sha256": "86ae51c591e742d80ce56823d35e2e176b53e38a99bd8499c85dae31ef4fe1f7"
+        }
+      ]
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "nalgebra-macros",
+      "version": "0.2.2",
+      "license": "Apache-2.0",
+      "authors": [
+        "Andreas Longva",
+        "Sébastien Crozet <developer@crozet.re>"
+      ],
+      "source": "https://crates.io/api/v1/crates/nalgebra-macros/0.2.2/download",
+      "source_sha256": "254a5372af8fc138e36684761d3c0cdb758a4410e938babcff1c860ce14ddbfc",
+      "repository": "https://github.com/dimforge/nalgebra",
+      "texts": [
+        {
+          "path": "licenses/rust/nalgebra-macros-0.2.2/LICENSE",
+          "sha256": "1e881ecf2862d01e6e5bc2b861e46886d2a6fb01499c0c508a209a7271b13cf2"
+        }
+      ]
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "num-bigint",
+      "version": "0.4.8",
+      "license": "MIT OR Apache-2.0",
+      "authors": [
+        "The Rust Project Developers"
+      ],
+      "source": "https://crates.io/api/v1/crates/num-bigint/0.4.8/download",
+      "source_sha256": "c89e69e7e0f03bea5ef08013795c25018e101932225a656383bd384495ecc367",
+      "repository": "https://github.com/rust-num/num-bigint",
+      "texts": [
+        {
+          "path": "licenses/rust/num-bigint-0.4.8/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "path": "licenses/rust/num-bigint-0.4.8/LICENSE-MIT",
+          "sha256": "6485b8ed310d3f0340bf1ad1f47645069ce4069dcc6bb46c7d5c6faf41de1fdb"
+        }
+      ]
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "num-complex",
+      "version": "0.4.6",
+      "license": "MIT OR Apache-2.0",
+      "authors": [
+        "The Rust Project Developers"
+      ],
+      "source": "https://crates.io/api/v1/crates/num-complex/0.4.6/download",
+      "source_sha256": "73f88a1307638156682bada9d7604135552957b7818057dcef22705b4d509495",
+      "repository": "https://github.com/rust-num/num-complex",
+      "texts": [
+        {
+          "path": "licenses/rust/num-complex-0.4.6/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "path": "licenses/rust/num-complex-0.4.6/LICENSE-MIT",
+          "sha256": "6485b8ed310d3f0340bf1ad1f47645069ce4069dcc6bb46c7d5c6faf41de1fdb"
+        }
+      ]
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "num-derive",
+      "version": "0.4.2",
+      "license": "MIT OR Apache-2.0",
+      "authors": [
+        "The Rust Project Developers"
+      ],
+      "source": "https://crates.io/api/v1/crates/num-derive/0.4.2/download",
+      "source_sha256": "ed3955f1a9c7c0c15e092f9c887db08b1fc683305fdf6eb6684f22555355e202",
+      "repository": "https://github.com/rust-num/num-derive",
+      "texts": [
+        {
+          "path": "licenses/rust/num-derive-0.4.2/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "path": "licenses/rust/num-derive-0.4.2/LICENSE-MIT",
+          "sha256": "6485b8ed310d3f0340bf1ad1f47645069ce4069dcc6bb46c7d5c6faf41de1fdb"
+        }
+      ]
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "num-integer",
+      "version": "0.1.47",
+      "license": "MIT OR Apache-2.0",
+      "authors": [
+        "The Rust Project Developers"
+      ],
+      "source": "https://crates.io/api/v1/crates/num-integer/0.1.47/download",
+      "source_sha256": "7ce2d95d4b3734dc35aa2f45e1aa22cd416814592a4f9d9205e11affd5b8e10b",
+      "repository": "https://github.com/rust-num/num-integer",
+      "texts": [
+        {
+          "path": "licenses/rust/num-integer-0.1.47/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "path": "licenses/rust/num-integer-0.1.47/LICENSE-MIT",
+          "sha256": "6485b8ed310d3f0340bf1ad1f47645069ce4069dcc6bb46c7d5c6faf41de1fdb"
+        }
+      ]
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "num-rational",
+      "version": "0.4.2",
+      "license": "MIT OR Apache-2.0",
+      "authors": [
+        "The Rust Project Developers"
+      ],
+      "source": "https://crates.io/api/v1/crates/num-rational/0.4.2/download",
+      "source_sha256": "f83d14da390562dca69fc84082e73e548e1ad308d24accdedd2720017cb37824",
+      "repository": "https://github.com/rust-num/num-rational",
+      "texts": [
+        {
+          "path": "licenses/rust/num-rational-0.4.2/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "path": "licenses/rust/num-rational-0.4.2/LICENSE-MIT",
+          "sha256": "6485b8ed310d3f0340bf1ad1f47645069ce4069dcc6bb46c7d5c6faf41de1fdb"
+        }
+      ]
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "num-traits",
+      "version": "0.2.19",
+      "license": "MIT OR Apache-2.0",
+      "authors": [
+        "The Rust Project Developers"
+      ],
+      "source": "https://crates.io/api/v1/crates/num-traits/0.2.19/download",
+      "source_sha256": "071dfc062690e90b734c0b2273ce72ad0ffa95f0c74596bc250dcfd960262841",
+      "repository": "https://github.com/rust-num/num-traits",
+      "texts": [
+        {
+          "path": "licenses/rust/num-traits-0.2.19/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "path": "licenses/rust/num-traits-0.2.19/LICENSE-MIT",
+          "sha256": "6485b8ed310d3f0340bf1ad1f47645069ce4069dcc6bb46c7d5c6faf41de1fdb"
+        }
+      ]
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "ordered-float",
+      "version": "5.4.0",
+      "license": "MIT",
+      "authors": [
+        "Jonathan Reem <jonathan.reem@gmail.com>",
+        "Matt Brubeck <mbrubeck@limpet.net>"
+      ],
+      "source": "https://crates.io/api/v1/crates/ordered-float/5.4.0/download",
+      "source_sha256": "c860fd3227ca4ac3cc032e2cd20cba3f02ccdf4b610538f8ee6584d56bb62e96",
+      "repository": "https://github.com/reem/rust-ordered-float",
+      "texts": [
+        {
+          "path": "licenses/rust/ordered-float-5.4.0/LICENSE-MIT",
+          "sha256": "f7715d38a3fa1b4ac97c5729740752505a39cb92ee83ab5b102aeb5eaa7cdea4"
+        }
+      ]
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "parry3d-f64",
+      "version": "0.21.1",
+      "license": "Apache-2.0",
+      "authors": [
+        "Sébastien Crozet <developer@crozet.re>"
+      ],
+      "source": "https://crates.io/api/v1/crates/parry3d-f64/0.21.1/download",
+      "source_sha256": "95ba84fdf1b5b1579829399cee5e1e78d52ad0e376a17e8bd56768568080821d",
+      "repository": "https://github.com/dimforge/parry",
+      "texts": [
+        {
+          "path": "licenses/rust/parry3d-f64-0.21.1/LICENSE",
+          "sha256": "ceacfa4d7fa67df64ab09a56fe248c50a3bfc9bc00374d69bd74ad763b14b89c"
+        }
+      ]
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "paste",
+      "version": "1.0.15",
+      "license": "MIT OR Apache-2.0",
+      "authors": [
+        "David Tolnay <dtolnay@gmail.com>"
+      ],
+      "source": "https://crates.io/api/v1/crates/paste/1.0.15/download",
+      "source_sha256": "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a",
+      "repository": "https://github.com/dtolnay/paste",
+      "texts": [
+        {
+          "path": "licenses/rust/paste-1.0.15/LICENSE-APACHE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a"
+        },
+        {
+          "path": "licenses/rust/paste-1.0.15/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+        }
+      ]
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "proc-macro2",
+      "version": "1.0.107",
+      "license": "MIT OR Apache-2.0",
+      "authors": [
+        "David Tolnay <dtolnay@gmail.com>",
+        "Alex Crichton <alex@alexcrichton.com>"
+      ],
+      "source": "https://crates.io/api/v1/crates/proc-macro2/1.0.107/download",
+      "source_sha256": "985e7ec9bb745e6ce6535b544d84d6cd6f7ad8bd711c398938ae983b91a766d9",
+      "repository": "https://github.com/dtolnay/proc-macro2",
+      "texts": [
+        {
+          "path": "licenses/rust/proc-macro2-1.0.107/LICENSE-APACHE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a"
+        },
+        {
+          "path": "licenses/rust/proc-macro2-1.0.107/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+        }
+      ]
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "profiling",
+      "version": "1.0.18",
+      "license": "MIT OR Apache-2.0",
+      "authors": [
+        "Philip Degarmo <aclysma@gmail.com>"
+      ],
+      "source": "https://crates.io/api/v1/crates/profiling/1.0.18/download",
+      "source_sha256": "3d595e54a326bc53c1c197b32d295e14b169e3cfeaa8dc82b529f947fba6bcf5",
+      "repository": "https://github.com/aclysma/profiling",
+      "texts": [
+        {
+          "path": "licenses/rust/profiling-1.0.18/LICENSE-MIT",
+          "sha256": "c8167fdeeed46d3f244d3f85c5bf998ce889343691c32be2c61a8bc4b5c08333",
+          "source": "https://raw.githubusercontent.com/aclysma/profiling/8271551172eb6fa4cba47369aedd93790c623df9/LICENSE-MIT"
+        },
+        {
+          "path": "licenses/rust/profiling-1.0.18/LICENSE-APACHE",
+          "sha256": "10d30a673cd5e9349bdc02aeb48f14b3386d27d0da32df8f0a555d4aa16aa551",
+          "source": "https://raw.githubusercontent.com/aclysma/profiling/8271551172eb6fa4cba47369aedd93790c623df9/LICENSE-APACHE"
+        }
+      ]
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "profiling-procmacros",
+      "version": "1.0.18",
+      "license": "MIT OR Apache-2.0",
+      "authors": [
+        "Philip Degarmo <aclysma@gmail.com>"
+      ],
+      "source": "https://crates.io/api/v1/crates/profiling-procmacros/1.0.18/download",
+      "source_sha256": "4488a4a36b9a4ba6b9334a32a39971f77c1436ec82c38707bce707699cc3bbcb",
+      "repository": "https://github.com/aclysma/profiling",
+      "texts": [
+        {
+          "path": "licenses/rust/profiling-procmacros-1.0.18/LICENSE-MIT",
+          "sha256": "c8167fdeeed46d3f244d3f85c5bf998ce889343691c32be2c61a8bc4b5c08333",
+          "source": "https://raw.githubusercontent.com/aclysma/profiling/8271551172eb6fa4cba47369aedd93790c623df9/LICENSE-MIT"
+        },
+        {
+          "path": "licenses/rust/profiling-procmacros-1.0.18/LICENSE-APACHE",
+          "sha256": "10d30a673cd5e9349bdc02aeb48f14b3386d27d0da32df8f0a555d4aa16aa551",
+          "source": "https://raw.githubusercontent.com/aclysma/profiling/8271551172eb6fa4cba47369aedd93790c623df9/LICENSE-APACHE"
+        }
+      ]
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "quote",
+      "version": "1.0.47",
+      "license": "MIT OR Apache-2.0",
+      "authors": [
+        "David Tolnay <dtolnay@gmail.com>"
+      ],
+      "source": "https://crates.io/api/v1/crates/quote/1.0.47/download",
+      "source_sha256": "1fbf4db142a473a8d80c26bbf18454ed458bf8d26c8219c331daecfdbd079001",
+      "repository": "https://github.com/dtolnay/quote",
+      "texts": [
+        {
+          "path": "licenses/rust/quote-1.0.47/LICENSE-APACHE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a"
+        },
+        {
+          "path": "licenses/rust/quote-1.0.47/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+        }
+      ]
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "rapier3d-f64",
+      "version": "0.26.1",
+      "license": "Apache-2.0",
+      "authors": [
+        "Sébastien Crozet <sebcrozet@dimforge.com>"
+      ],
+      "source": "https://crates.io/api/v1/crates/rapier3d-f64/0.26.1/download",
+      "source_sha256": "209a048b3b7818b2209ea20c9519a4c3d14fa4ab430af84fc7cf6d8106fa4ed4",
+      "repository": "https://github.com/dimforge/rapier",
+      "texts": [
+        {
+          "path": "licenses/rust/rapier3d-f64-0.26.1/LICENSE",
+          "sha256": "ceacfa4d7fa67df64ab09a56fe248c50a3bfc9bc00374d69bd74ad763b14b89c"
+        }
+      ]
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "rawpointer",
+      "version": "0.2.1",
+      "license": "MIT/Apache-2.0",
+      "authors": [
+        "bluss"
+      ],
+      "source": "https://crates.io/api/v1/crates/rawpointer/0.2.1/download",
+      "source_sha256": "60a357793950651c4ed0f3f52338f53b2f809f32d83a07f72909fa13e4c6c1e3",
+      "repository": "https://github.com/bluss/rawpointer/",
+      "texts": [
+        {
+          "path": "licenses/rust/rawpointer-0.2.1/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "path": "licenses/rust/rawpointer-0.2.1/LICENSE-MIT",
+          "sha256": "7576269ea71f767b99297934c0b2367532690f8c4badc695edf8e04ab6a1e545"
+        }
+      ]
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "robust",
+      "version": "1.2.0",
+      "license": "MIT OR Apache-2.0",
+      "authors": [
+        "The Spade Developers",
+        "The GeoRust Developers"
+      ],
+      "source": "https://crates.io/api/v1/crates/robust/1.2.0/download",
+      "source_sha256": "4e27ee8bb91ca0adcf0ecb116293afa12d393f9c2b9b9cd54d33e8078fe19839",
+      "repository": "https://github.com/georust/robust",
+      "texts": [
+        {
+          "path": "licenses/rust/robust-1.2.0/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "path": "licenses/rust/robust-1.2.0/LICENSE-MIT",
+          "sha256": "ddb606a4226673241b8dedb155a25b271178d028a2bf74c90ee47fe495f4d9bc"
+        }
+      ]
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "rstar",
+      "version": "0.12.2",
+      "license": "MIT OR Apache-2.0",
+      "authors": [
+        "Stefan Altmayer <stoeoef@gmail.com>",
+        "The Georust Developers <mods@georust.org>"
+      ],
+      "source": "https://crates.io/api/v1/crates/rstar/0.12.2/download",
+      "source_sha256": "421400d13ccfd26dfa5858199c30a5d76f9c54e0dba7575273025b43c5175dbb",
+      "repository": "https://github.com/georust/rstar",
+      "texts": [
+        {
+          "path": "licenses/rust/rstar-0.12.2/LICENSE-MIT",
+          "sha256": "9b3a76c27bac8f3e0ff2d1f64f65941c50310ae3ff69318cea230bd4a36822c5",
+          "source": "https://raw.githubusercontent.com/georust/rstar/c8c5bf9e41468281d030869d409e3f67f1aaf5b7/LICENSE-MIT"
+        },
+        {
+          "path": "licenses/rust/rstar-0.12.2/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+          "source": "https://raw.githubusercontent.com/georust/rstar/c8c5bf9e41468281d030869d409e3f67f1aaf5b7/LICENSE-APACHE"
+        }
+      ]
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "rustc-hash",
+      "version": "2.1.3",
+      "license": "Apache-2.0 OR MIT",
+      "authors": [
+        "The Rust Project Developers"
+      ],
+      "source": "https://crates.io/api/v1/crates/rustc-hash/2.1.3/download",
+      "source_sha256": "6b1e7f9a428571be2dc5bc0505c13fb6bf936822b894ec87abf8a08a4e51742d",
+      "repository": "https://github.com/rust-lang/rustc-hash",
+      "texts": [
+        {
+          "path": "licenses/rust/rustc-hash-2.1.3/LICENSE-APACHE",
+          "sha256": "95bd3988beee069fa2848f648dab43cc6e0b2add2ad6bcb17360caf749802bcc"
+        },
+        {
+          "path": "licenses/rust/rustc-hash-2.1.3/LICENSE-MIT",
+          "sha256": "30fefc3a7d6a0041541858293bcbea2dde4caa4c0a5802f996a7f7e8c0085652"
+        }
+      ]
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "safe_arch",
+      "version": "0.7.4",
+      "license": "Zlib OR Apache-2.0 OR MIT",
+      "authors": [
+        "Lokathor <zefria@gmail.com>"
+      ],
+      "source": "https://crates.io/api/v1/crates/safe_arch/0.7.4/download",
+      "source_sha256": "96b02de82ddbe1b636e6170c21be622223aea188ef2e139be0a5b219ec215323",
+      "repository": "https://github.com/Lokathor/safe_arch",
+      "texts": [
+        {
+          "path": "licenses/rust/safe_arch-0.7.4/LICENSE-APACHE.md",
+          "sha256": "e3ba223bb1423f0aad8c3dfce0fe3148db48926d41e6fbc3afbbf5ff9e1c89cb"
+        },
+        {
+          "path": "licenses/rust/safe_arch-0.7.4/LICENSE-MIT.md",
+          "sha256": "e57011537d230b14e790f6666dc00816f7b371ebbd7da8a12491e51086fec278"
+        },
+        {
+          "path": "licenses/rust/safe_arch-0.7.4/LICENSE-ZLIB.md",
+          "sha256": "c43b9a9b1387ed53d2c49263838261129a010e280e3a174a792242c3e2c98db9"
+        }
+      ]
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "serde",
+      "version": "1.0.229",
+      "license": "MIT OR Apache-2.0",
+      "authors": [
+        "Erick Tryzelaar <erick.tryzelaar@gmail.com>",
+        "David Tolnay <dtolnay@gmail.com>"
+      ],
+      "source": "https://crates.io/api/v1/crates/serde/1.0.229/download",
+      "source_sha256": "4148590afebada386688f18773da617792bf2ef03ffc1e4cbd2b1d45b023e0ba",
+      "repository": "https://github.com/serde-rs/serde",
+      "texts": [
+        {
+          "path": "licenses/rust/serde-1.0.229/LICENSE-APACHE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a"
+        },
+        {
+          "path": "licenses/rust/serde-1.0.229/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+        }
+      ]
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "serde_core",
+      "version": "1.0.229",
+      "license": "MIT OR Apache-2.0",
+      "authors": [
+        "Erick Tryzelaar <erick.tryzelaar@gmail.com>",
+        "David Tolnay <dtolnay@gmail.com>"
+      ],
+      "source": "https://crates.io/api/v1/crates/serde_core/1.0.229/download",
+      "source_sha256": "67dca2c9c51e58a4791a4b1ed58308b39c64224d349a935ab5039aa360942a48",
+      "repository": "https://github.com/serde-rs/serde",
+      "texts": [
+        {
+          "path": "licenses/rust/serde_core-1.0.229/LICENSE-APACHE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a"
+        },
+        {
+          "path": "licenses/rust/serde_core-1.0.229/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+        }
+      ]
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "serde_derive",
+      "version": "1.0.229",
+      "license": "MIT OR Apache-2.0",
+      "authors": [
+        "Erick Tryzelaar <erick.tryzelaar@gmail.com>",
+        "David Tolnay <dtolnay@gmail.com>"
+      ],
+      "source": "https://crates.io/api/v1/crates/serde_derive/1.0.229/download",
+      "source_sha256": "e7a5d71263a5a7d47b41f6b3f06ba276f10cc18b0931f1799f710578e2309348",
+      "repository": "https://github.com/serde-rs/serde",
+      "texts": [
+        {
+          "path": "licenses/rust/serde_derive-1.0.229/LICENSE-APACHE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a"
+        },
+        {
+          "path": "licenses/rust/serde_derive-1.0.229/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+        }
+      ]
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "serde_json",
+      "version": "1.0.154",
+      "license": "MIT OR Apache-2.0",
+      "authors": [],
+      "source": "https://crates.io/api/v1/crates/serde_json/1.0.154/download",
+      "source_sha256": "e7e9cc8b1b85264074fbcc02a88680c4096b1e47df8f739dceb03bf482f04bd6",
+      "repository": "https://github.com/serde-rs/json",
+      "texts": [
+        {
+          "path": "licenses/rust/serde_json-1.0.154/LICENSE-APACHE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a"
+        },
+        {
+          "path": "licenses/rust/serde_json-1.0.154/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+        }
+      ]
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "simba",
+      "version": "0.9.1",
+      "license": "Apache-2.0",
+      "authors": [
+        "sebcrozet <developer@crozet.re>"
+      ],
+      "source": "https://crates.io/api/v1/crates/simba/0.9.1/download",
+      "source_sha256": "c99284beb21666094ba2b75bbceda012e610f5479dfcc2d6e2426f53197ffd95",
+      "repository": "https://github.com/dimforge/simba",
+      "texts": [
+        {
+          "path": "licenses/rust/simba-0.9.1/LICENSE",
+          "sha256": "ceacfa4d7fa67df64ab09a56fe248c50a3bfc9bc00374d69bd74ad763b14b89c"
+        }
+      ]
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "slab",
+      "version": "0.4.12",
+      "license": "MIT",
+      "authors": [
+        "Carl Lerche <me@carllerche.com>"
+      ],
+      "source": "https://crates.io/api/v1/crates/slab/0.4.12/download",
+      "source_sha256": "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5",
+      "repository": "https://github.com/tokio-rs/slab",
+      "texts": [
+        {
+          "path": "licenses/rust/slab-0.4.12/LICENSE",
+          "sha256": "8ce0830173fdac609dfb4ea603fdc002c2f4af0dc9b1a005653f5da9cf534b18"
+        }
+      ]
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "smallvec",
+      "version": "1.16.4",
+      "license": "MIT OR Apache-2.0",
+      "authors": [
+        "The Servo Project Developers"
+      ],
+      "source": "https://crates.io/api/v1/crates/smallvec/1.16.4/download",
+      "source_sha256": "d0d5d4b1981b8bbbb7aed204cae5726d683d5d6ac7e74ec54122ea28f315e7c8",
+      "repository": "https://github.com/servo/rust-smallvec",
+      "texts": [
+        {
+          "path": "licenses/rust/smallvec-1.16.4/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "path": "licenses/rust/smallvec-1.16.4/LICENSE-MIT",
+          "sha256": "0b28172679e0009b655da42797c03fd163a3379d5cfa67ba1f1655e974a2a1a9"
+        }
+      ]
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "spade",
+      "version": "2.15.1",
+      "license": "MIT OR Apache-2.0",
+      "authors": [
+        "Stefan Altmayer <stoeoef@gmail.com>"
+      ],
+      "source": "https://crates.io/api/v1/crates/spade/2.15.1/download",
+      "source_sha256": "9699399fd9349b00b184f5635b074f9ec93afffef30c853f8c875b32c0f8c7fa",
+      "repository": "https://github.com/Stoeoef/spade",
+      "texts": [
+        {
+          "path": "licenses/rust/spade-2.15.1/LICENSE-APACHE",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+        },
+        {
+          "path": "licenses/rust/spade-2.15.1/LICENSE-MIT",
+          "sha256": "fc1a4c9482e823f450af4c85471ca6e58d1fd0b3bd0998be4547b1be4a5bc4af"
+        }
+      ]
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "stable_deref_trait",
+      "version": "1.2.1",
+      "license": "MIT OR Apache-2.0",
+      "authors": [
+        "Robert Grosse <n210241048576@gmail.com>"
+      ],
+      "source": "https://crates.io/api/v1/crates/stable_deref_trait/1.2.1/download",
+      "source_sha256": "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596",
+      "repository": "https://github.com/storyyeller/stable_deref_trait",
+      "texts": [
+        {
+          "path": "licenses/rust/stable_deref_trait-1.2.1/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "path": "licenses/rust/stable_deref_trait-1.2.1/LICENSE-MIT",
+          "sha256": "5e05b024f653a5ce199e77cbbbd42fb5553562ec714b819421ed0c3e552a75d7"
+        }
+      ]
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "syn",
+      "version": "2.0.119",
+      "license": "MIT OR Apache-2.0",
+      "authors": [
+        "David Tolnay <dtolnay@gmail.com>"
+      ],
+      "source": "https://crates.io/api/v1/crates/syn/2.0.119/download",
+      "source_sha256": "872831b642d1a07999a962a351ed35b955ea2cfc8f3862091e2a240a84f17297",
+      "repository": "https://github.com/dtolnay/syn",
+      "texts": [
+        {
+          "path": "licenses/rust/syn-2.0.119/LICENSE-APACHE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a"
+        },
+        {
+          "path": "licenses/rust/syn-2.0.119/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+        }
+      ]
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "syn",
+      "version": "3.0.9",
+      "license": "MIT OR Apache-2.0",
+      "authors": [
+        "David Tolnay <dtolnay@gmail.com>"
+      ],
+      "source": "https://crates.io/api/v1/crates/syn/3.0.9/download",
+      "source_sha256": "d78c8dee4c7bf0e14673097256fed6142ce9d3b85a408189d07482442145823b",
+      "repository": "https://github.com/dtolnay/syn",
+      "texts": [
+        {
+          "path": "licenses/rust/syn-3.0.9/LICENSE-APACHE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a"
+        },
+        {
+          "path": "licenses/rust/syn-3.0.9/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+        }
+      ]
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "thiserror",
+      "version": "2.0.21",
+      "license": "MIT OR Apache-2.0",
+      "authors": [
+        "David Tolnay <dtolnay@gmail.com>"
+      ],
+      "source": "https://crates.io/api/v1/crates/thiserror/2.0.21/download",
+      "source_sha256": "09e52cb86a36cede5cb101bf8908837b3e4c6e5e59fe7fd85c23fb56200d189e",
+      "repository": "https://github.com/dtolnay/thiserror",
+      "texts": [
+        {
+          "path": "licenses/rust/thiserror-2.0.21/LICENSE-APACHE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a"
+        },
+        {
+          "path": "licenses/rust/thiserror-2.0.21/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+        }
+      ]
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "thiserror-impl",
+      "version": "2.0.21",
+      "license": "MIT OR Apache-2.0",
+      "authors": [
+        "David Tolnay <dtolnay@gmail.com>"
+      ],
+      "source": "https://crates.io/api/v1/crates/thiserror-impl/2.0.21/download",
+      "source_sha256": "fe5197923287db20a58125f0bc85c062f7f2c892de97b18c356f9efb14b28524",
+      "repository": "https://github.com/dtolnay/thiserror",
+      "texts": [
+        {
+          "path": "licenses/rust/thiserror-impl-2.0.21/LICENSE-APACHE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a"
+        },
+        {
+          "path": "licenses/rust/thiserror-impl-2.0.21/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+        }
+      ]
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "typenum",
+      "version": "1.20.1",
+      "license": "MIT OR Apache-2.0",
+      "authors": [],
+      "source": "https://crates.io/api/v1/crates/typenum/1.20.1/download",
+      "source_sha256": "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20",
+      "repository": "https://github.com/paholg/typenum",
+      "texts": [
+        {
+          "path": "licenses/rust/typenum-1.20.1/LICENSE-APACHE",
+          "sha256": "516b24e051bf5630880ebbd55c40a25ce9552ebaf8970a53e8976eb70e522406"
+        },
+        {
+          "path": "licenses/rust/typenum-1.20.1/LICENSE-MIT",
+          "sha256": "a825bd853ab71619a4923d7b4311221427848070ff44d990da39b0b274c1683f"
+        },
+        {
+          "path": "licenses/rust/typenum-1.20.1/LICENSE",
+          "sha256": "db11fec9946737df39ca3898d9cd8c10ec6f6c3a884a6802b0ad0b81b4e8f23a"
+        }
+      ]
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "unicode-ident",
+      "version": "1.0.27",
+      "license": "(MIT OR Apache-2.0) AND Unicode-3.0",
+      "authors": [
+        "David Tolnay <dtolnay@gmail.com>"
+      ],
+      "source": "https://crates.io/api/v1/crates/unicode-ident/1.0.27/download",
+      "source_sha256": "a2c754d6c33795a1c324727428e5a7dedb5b06195f9890bdbcba760d3e246563",
+      "repository": "https://github.com/dtolnay/unicode-ident",
+      "texts": [
+        {
+          "path": "licenses/rust/unicode-ident-1.0.27/LICENSE-APACHE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a"
+        },
+        {
+          "path": "licenses/rust/unicode-ident-1.0.27/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+        },
+        {
+          "path": "licenses/rust/unicode-ident-1.0.27/LICENSE-UNICODE",
+          "sha256": "f7db81051789b729fea528a63ec4c938fdcb93d9d61d97dc8cc2e9df6d47f2a1"
+        }
+      ]
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "wide",
+      "version": "0.7.33",
+      "license": "Zlib OR Apache-2.0 OR MIT",
+      "authors": [
+        "Lokathor <zefria@gmail.com>"
+      ],
+      "source": "https://crates.io/api/v1/crates/wide/0.7.33/download",
+      "source_sha256": "0ce5da8ecb62bcd8ec8b7ea19f69a51275e91299be594ea5cc6ef7819e16cd03",
+      "repository": "https://github.com/Lokathor/wide",
+      "texts": [
+        {
+          "path": "licenses/rust/wide-0.7.33/LICENSE-ZLIB.md",
+          "sha256": "c43b9a9b1387ed53d2c49263838261129a010e280e3a174a792242c3e2c98db9"
+        }
+      ]
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "zmij",
+      "version": "1.0.23",
+      "license": "MIT",
+      "authors": [
+        "David Tolnay <dtolnay@gmail.com>"
+      ],
+      "source": "https://crates.io/api/v1/crates/zmij/1.0.23/download",
+      "source_sha256": "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b",
+      "repository": "https://github.com/dtolnay/zmij",
+      "texts": [
+        {
+          "path": "licenses/rust/zmij-1.0.23/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+        }
+      ]
+    },
+    {
+      "ecosystem": "PyPI",
+      "name": "cffi",
+      "version": "2.1.1",
+      "license": "MIT-0",
+      "authors": "Armin Rigo, Maciej Fijalkowski",
+      "source": "https://pypi.org/project/cffi/2.1.1/",
+      "scope": "locked release dependency, selected by platform and installer profile",
+      "texts": [
+        {
+          "path": "licenses/python/cffi-2.1.1/licenses/LICENSE",
+          "sha256": "5ba24ddc57067f9249add644c3afc41a5d6dc37e23433ef759d95df370b0af63"
+        }
+      ]
+    },
+    {
+      "ecosystem": "PyPI",
+      "name": "cryptography",
+      "version": "50.0.2",
+      "license": "Apache-2.0 OR BSD-3-Clause",
+      "authors": "The Python Cryptographic Authority and individual contributors <cryptography-dev@python.org>",
+      "source": "https://pypi.org/project/cryptography/50.0.2/",
+      "scope": "locked release dependency, selected by platform and installer profile",
+      "texts": [
+        {
+          "path": "licenses/python/cryptography-50.0.2/licenses/LICENSE",
+          "sha256": "3e0c7c091a948b82533ba98fd7cbb40432d6f1a9acbf85f5922d2f99a93ae6bb"
+        },
+        {
+          "path": "licenses/python/cryptography-50.0.2/licenses/LICENSE.APACHE",
+          "sha256": "aac73b3148f6d1d7111dbca32099f68d26c644c6813ae1e4f05f6579aa2663fe"
+        },
+        {
+          "path": "licenses/python/cryptography-50.0.2/licenses/LICENSE.BSD",
+          "sha256": "602c4c7482de6479dd2e9793cda275e5e63d773dacd1eca689232ab7008fb4fb"
+        }
+      ]
+    },
+    {
+      "ecosystem": "PyPI",
+      "name": "Cython",
+      "version": "3.3.1",
+      "license": "Apache-2.0",
+      "authors": "Robert Bradshaw, Stefan Behnel, David Woods, Greg Ewing, et al.",
+      "source": "https://pypi.org/pypi/Cython/3.3.1/json",
+      "scope": "locked release dependency, selected by platform and installer profile",
+      "texts": [
+        {
+          "path": "licenses/python/cython-3.3.1/COPYING.txt",
+          "sha256": "e1eb1c49a8508e8173dac30157e4a6439a44ad8846194746c424fbc3fc2b95d7",
+          "source": "https://raw.githubusercontent.com/cython/cython/3.3.1/COPYING.txt"
+        },
+        {
+          "path": "licenses/python/cython-3.3.1/LICENSE.txt",
+          "sha256": "9568a2b155e66ac3e0ba1fd80b52b827b9460e6cf6f233125e7cbca8e206ddc3",
+          "source": "https://raw.githubusercontent.com/cython/cython/3.3.1/LICENSE.txt"
+        }
+      ]
+    },
+    {
+      "ecosystem": "PyPI",
+      "name": "linkify-it-py",
+      "version": "2.2.0",
+      "license": "MIT",
+      "authors": "tsutsu3",
+      "source": "https://pypi.org/project/linkify-it-py/2.2.0/",
+      "scope": "locked release dependency, selected by platform and installer profile",
+      "texts": [
+        {
+          "path": "licenses/python/linkify-it-py-2.2.0/licenses/LICENSE",
+          "sha256": "db5d71f61f0f781f5078df4b6a00d5d3c799fb0bb82bcf448a688e9762618a2e"
+        }
+      ]
+    },
+    {
+      "ecosystem": "PyPI",
+      "name": "lz4",
+      "version": "4.4.5",
+      "license": null,
+      "authors": "Jonathan Underwood",
+      "source": "https://pypi.org/project/lz4/4.4.5/",
+      "scope": "locked release dependency, selected by platform and installer profile",
+      "texts": [
+        {
+          "path": "licenses/python/lz4-4.4.5/licenses/LICENSE",
+          "sha256": "e2ac43d6eb80eb4e52141817c812437e0b981b1d7b2dc7cc86c7ef5524044c6f"
+        }
+      ]
+    },
+    {
+      "ecosystem": "PyPI",
+      "name": "markdown-it-py",
+      "version": "4.2.0",
+      "license": null,
+      "authors": "Chris Sewell <chrisj_sewell@hotmail.com>",
+      "source": "https://pypi.org/project/markdown-it-py/4.2.0/",
+      "scope": "locked release dependency, selected by platform and installer profile",
+      "texts": [
+        {
+          "path": "licenses/python/markdown-it-py-4.2.0/licenses/LICENSE",
+          "sha256": "4a2260d6e2cd0f5a151a1e86dbfe7d3ed552b1e2beabf9941c1ba5c49cbce484"
+        },
+        {
+          "path": "licenses/python/markdown-it-py-4.2.0/licenses/LICENSE.markdown-it",
+          "sha256": "792c48c5a849a15fdf9e37e8bcf9e6d1dd13b32b46c642a748a0a46a9919d473"
+        }
+      ]
+    },
+    {
+      "ecosystem": "PyPI",
+      "name": "mdit-py-plugins",
+      "version": "0.6.1",
+      "license": null,
+      "authors": "Chris Sewell <chrisj_sewell@hotmail.com>",
+      "source": "https://pypi.org/project/mdit-py-plugins/0.6.1/",
+      "scope": "locked release dependency, selected by platform and installer profile",
+      "texts": [
+        {
+          "path": "licenses/python/mdit-py-plugins-0.6.1/licenses/LICENSE",
+          "sha256": "4a2260d6e2cd0f5a151a1e86dbfe7d3ed552b1e2beabf9941c1ba5c49cbce484"
+        }
+      ]
+    },
+    {
+      "ecosystem": "PyPI",
+      "name": "mdurl",
+      "version": "0.1.2",
+      "license": null,
+      "authors": "Taneli Hukkinen <hukkin@users.noreply.github.com>",
+      "source": "https://pypi.org/project/mdurl/0.1.2/",
+      "scope": "locked release dependency, selected by platform and installer profile",
+      "texts": [
+        {
+          "path": "licenses/python/mdurl-0.1.2/LICENSE",
+          "sha256": "7c605df6e28667a9603118e98274f64a49ce3eed0d26fccce9534a345e0ef955"
+        }
+      ]
+    },
+    {
+      "ecosystem": "PyPI",
+      "name": "numpy",
+      "version": "1.26.4",
+      "license": "Copyright (c) 2005-2023, NumPy Developers. All rights reserved.  Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:  * Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.  * Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution.  * Neither the name of the NumPy Developers nor the names of any contributors may be used to endorse or promote products derived from this software without specific prior written permission.  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS \"AS IS\" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.  ----  The NumPy repository and source distributions bundle several libraries that are compatibly licensed.  We list these here.  Name: lapack-lite Files: numpy/linalg/lapack_lite/* License: BSD-3-Clause For details, see numpy/linalg/lapack_lite/LICENSE.txt  Name: tempita Files: tools/npy_tempita/* License: MIT For details, see tools/npy_tempita/license.txt  Name: dragon4 Files: numpy/core/src/multiarray/dragon4.c License: MIT For license text, see numpy/core/src/multiarray/dragon4.c  Name: libdivide Files: numpy/core/include/numpy/libdivide/* License: Zlib For license text, see numpy/core/include/numpy/libdivide/LICENSE.txt   Note that the following files are vendored in the repository and sdist but not installed in built numpy packages:  Name: Meson Files: vendored-meson/meson/* License: Apache 2.0 For license text, see vendored-meson/meson/COPYING  Name: spin Files: .spin/cmds.py License: BSD-3 For license text, see .spin/LICENSE  ----  This binary distribution of NumPy also bundles the following software:  Name: OpenBLAS Files: numpy/.dylibs/libopenblas*.so Description: bundled as a dynamically linked library Availability: https://github.com/OpenMathLib/OpenBLAS/ License: BSD-3-Clause Copyright (c) 2011-2014, The OpenBLAS Project All rights reserved.  Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:  1. Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.  2. Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution. 3. Neither the name of the OpenBLAS project nor the names of its contributors may be used to endorse or promote products derived from this software without specific prior written permission.  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS \"AS IS\" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.   Name: LAPACK Files: numpy/.dylibs/libopenblas*.so Description: bundled in OpenBLAS Availability: https://github.com/OpenMathLib/OpenBLAS/ License: BSD-3-Clause-Attribution Copyright (c) 1992-2013 The University of Tennessee and The University of Tennessee Research Foundation.  All rights reserved. Copyright (c) 2000-2013 The University of California Berkeley. All rights reserved. Copyright (c) 2006-2013 The University of Colorado Denver.  All rights reserved.  $COPYRIGHT$  Additional copyrights may follow  $HEADER$  Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:  - Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.  - Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer listed in this license in the documentation and/or other materials provided with the distribution.  - Neither the name of the copyright holders nor the names of its contributors may be used to endorse or promote products derived from this software without specific prior written permission.  The copyright holders provide no reassurances that the source code provided does not infringe any patent, copyright, or any other intellectual property rights of third parties.  The copyright holders disclaim any liability to any recipient for claims brought against recipient by any third party for infringement of that parties intellectual property rights.  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS \"AS IS\" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.   Name: GCC runtime library Files: numpy/.dylibs/libgfortran*, numpy/.dylibs/libgcc* Description: dynamically linked to files compiled with gcc Availability: https://gcc.gnu.org/git/?p=gcc.git;a=tree;f=libgfortran License: GPL-3.0-with-GCC-exception Copyright (C) 2002-2017 Free Software Foundation, Inc.  Libgfortran is free software; you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation; either version 3, or (at your option) any later version.  Libgfortran is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more details.  Under Section 7 of GPL version 3, you are granted additional permissions described in the GCC Runtime Library Exception, version 3.1, as published by the Free Software Foundation.  You should have received a copy of the GNU General Public License and a copy of the GCC Runtime Library Exception along with this program; see the files COPYING3 and COPYING.RUNTIME respectively.  If not, see <http://www.gnu.org/licenses/>.  ----  Full text of license texts referred to above follows (that they are listed below does not necessarily imply the conditions apply to the present binary release):  ----  GCC RUNTIME LIBRARY EXCEPTION  Version 3.1, 31 March 2009  Copyright (C) 2009 Free Software Foundation, Inc. <http://fsf.org/>  Everyone is permitted to copy and distribute verbatim copies of this license document, but changing it is not allowed.  This GCC Runtime Library Exception (\"Exception\") is an additional permission under section 7 of the GNU General Public License, version 3 (\"GPLv3\"). It applies to a given file (the \"Runtime Library\") that bears a notice placed by the copyright holder of the file stating that the file is governed by GPLv3 along with this Exception.  When you use GCC to compile a program, GCC may combine portions of certain GCC header files and runtime libraries with the compiled program. The purpose of this Exception is to allow compilation of non-GPL (including proprietary) programs to use, in this way, the header files and runtime libraries covered by this Exception.  0. Definitions.  A file is an \"Independent Module\" if it either requires the Runtime Library for execution after a Compilation Process, or makes use of an interface provided by the Runtime Library, but is not otherwise based on the Runtime Library.  \"GCC\" means a version of the GNU Compiler Collection, with or without modifications, governed by version 3 (or a specified later version) of the GNU General Public License (GPL) with the option of using any subsequent versions published by the FSF.  \"GPL-compatible Software\" is software whose conditions of propagation, modification and use would permit combination with GCC in accord with the license of GCC.  \"Target Code\" refers to output from any compiler for a real or virtual target processor architecture, in executable form or suitable for input to an assembler, loader, linker and/or execution phase. Notwithstanding that, Target Code does not include data in any format that is used as a compiler intermediate representation, or used for producing a compiler intermediate representation.  The \"Compilation Process\" transforms code entirely represented in non-intermediate languages designed for human-written code, and/or in Java Virtual Machine byte code, into Target Code. Thus, for example, use of source code generators and preprocessors need not be considered part of the Compilation Process, since the Compilation Process can be understood as starting with the output of the generators or preprocessors.  A Compilation Process is \"Eligible\" if it is done using GCC, alone or with other GPL-compatible software, or if it is done without using any work based on GCC. For example, using non-GPL-compatible Software to optimize any GCC intermediate representations would not qualify as an Eligible Compilation Process.  1. Grant of Additional Permission.  You have permission to propagate a work of Target Code formed by combining the Runtime Library with Independent Modules, even if such propagation would otherwise violate the terms of GPLv3, provided that all Target Code was generated by Eligible Compilation Processes. You may then convey such a combination under terms of your choice, consistent with the licensing of the Independent Modules.  2. No Weakening of GCC Copyleft.  The availability of this Exception does not imply any general presumption that third-party software is unaffected by the copyleft requirements of the license of GCC.  ----  GNU GENERAL PUBLIC LICENSE Version 3, 29 June 2007  Copyright (C) 2007 Free Software Foundation, Inc. <http://fsf.org/> Everyone is permitted to copy and distribute verbatim copies of this license document, but changing it is not allowed.  Preamble  The GNU General Public License is a free, copyleft license for software and other kinds of works.  The licenses for most software and other practical works are designed to take away your freedom to share and change the works.  By contrast, the GNU General Public License is intended to guarantee your freedom to share and change all versions of a program--to make sure it remains free software for all its users.  We, the Free Software Foundation, use the GNU General Public License for most of our software; it applies also to any other work released this way by its authors.  You can apply it to your programs, too.  When we speak of free software, we are referring to freedom, not price.  Our General Public Licenses are designed to make sure that you have the freedom to distribute copies of free software (and charge for them if you wish), that you receive source code or can get it if you want it, that you can change the software or use pieces of it in new free programs, and that you know you can do these things.  To protect your rights, we need to prevent others from denying you these rights or asking you to surrender the rights.  Therefore, you have certain responsibilities if you distribute copies of the software, or if you modify it: responsibilities to respect the freedom of others.  For example, if you distribute copies of such a program, whether gratis or for a fee, you must pass on to the recipients the same freedoms that you received.  You must make sure that they, too, receive or can get the source code.  And you must show them these terms so they know their rights.  Developers that use the GNU GPL protect your rights with two steps: (1) assert copyright on the software, and (2) offer you this License giving you legal permission to copy, distribute and/or modify it.  For the developers' and authors' protection, the GPL clearly explains that there is no warranty for this free software.  For both users' and authors' sake, the GPL requires that modified versions be marked as changed, so that their problems will not be attributed erroneously to authors of previous versions.  Some devices are designed to deny users access to install or run modified versions of the software inside them, although the manufacturer can do so.  This is fundamentally incompatible with the aim of protecting users' freedom to change the software.  The systematic pattern of such abuse occurs in the area of products for individuals to use, which is precisely where it is most unacceptable.  Therefore, we have designed this version of the GPL to prohibit the practice for those products.  If such problems arise substantially in other domains, we stand ready to extend this provision to those domains in future versions of the GPL, as needed to protect the freedom of users.  Finally, every program is threatened constantly by software patents. States should not allow patents to restrict development and use of software on general-purpose computers, but in those that do, we wish to avoid the special danger that patents applied to a free program could make it effectively proprietary.  To prevent this, the GPL assures that patents cannot be used to render the program non-free.  The precise terms and conditions for copying, distribution and modification follow.  TERMS AND CONDITIONS  0. Definitions.  \"This License\" refers to version 3 of the GNU General Public License.  \"Copyright\" also means copyright-like laws that apply to other kinds of works, such as semiconductor masks.  \"The Program\" refers to any copyrightable work licensed under this License.  Each licensee is addressed as \"you\".  \"Licensees\" and \"recipients\" may be individuals or organizations.  To \"modify\" a work means to copy from or adapt all or part of the work in a fashion requiring copyright permission, other than the making of an exact copy.  The resulting work is called a \"modified version\" of the earlier work or a work \"based on\" the earlier work.  A \"covered work\" means either the unmodified Program or a work based on the Program.  To \"propagate\" a work means to do anything with it that, without permission, would make you directly or secondarily liable for infringement under applicable copyright law, except executing it on a computer or modifying a private copy.  Propagation includes copying, distribution (with or without modification), making available to the public, and in some countries other activities as well.  To \"convey\" a work means any kind of propagation that enables other parties to make or receive copies.  Mere interaction with a user through a computer network, with no transfer of a copy, is not conveying.  An interactive user interface displays \"Appropriate Legal Notices\" to the extent that it includes a convenient and prominently visible feature that (1) displays an appropriate copyright notice, and (2) tells the user that there is no warranty for the work (except to the extent that warranties are provided), that licensees may convey the work under this License, and how to view a copy of this License.  If the interface presents a list of user commands or options, such as a menu, a prominent item in the list meets this criterion.  1. Source Code.  The \"source code\" for a work means the preferred form of the work for making modifications to it.  \"Object code\" means any non-source form of a work.  A \"Standard Interface\" means an interface that either is an official standard defined by a recognized standards body, or, in the case of interfaces specified for a particular programming language, one that is widely used among developers working in that language.  The \"System Libraries\" of an executable work include anything, other than the work as a whole, that (a) is included in the normal form of packaging a Major Component, but which is not part of that Major Component, and (b) serves only to enable use of the work with that Major Component, or to implement a Standard Interface for which an implementation is available to the public in source code form.  A \"Major Component\", in this context, means a major essential component (kernel, window system, and so on) of the specific operating system (if any) on which the executable work runs, or a compiler used to produce the work, or an object code interpreter used to run it.  The \"Corresponding Source\" for a work in object code form means all the source code needed to generate, install, and (for an executable work) run the object code and to modify the work, including scripts to control those activities.  However, it does not include the work's System Libraries, or general-purpose tools or generally available free programs which are used unmodified in performing those activities but which are not part of the work.  For example, Corresponding Source includes interface definition files associated with source files for the work, and the source code for shared libraries and dynamically linked subprograms that the work is specifically designed to require, such as by intimate data communication or control flow between those subprograms and other parts of the work.  The Corresponding Source need not include anything that users can regenerate automatically from other parts of the Corresponding Source.  The Corresponding Source for a work in source code form is that same work.  2. Basic Permissions.  All rights granted under this License are granted for the term of copyright on the Program, and are irrevocable provided the stated conditions are met.  This License explicitly affirms your unlimited permission to run the unmodified Program.  The output from running a covered work is covered by this License only if the output, given its content, constitutes a covered work.  This License acknowledges your rights of fair use or other equivalent, as provided by copyright law.  You may make, run and propagate covered works that you do not convey, without conditions so long as your license otherwise remains in force.  You may convey covered works to others for the sole purpose of having them make modifications exclusively for you, or provide you with facilities for running those works, provided that you comply with the terms of this License in conveying all material for which you do not control copyright.  Those thus making or running the covered works for you must do so exclusively on your behalf, under your direction and control, on terms that prohibit them from making any copies of your copyrighted material outside their relationship with you.  Conveying under any other circumstances is permitted solely under the conditions stated below.  Sublicensing is not allowed; section 10 makes it unnecessary.  3. Protecting Users' Legal Rights From Anti-Circumvention Law.  No covered work shall be deemed part of an effective technological measure under any applicable law fulfilling obligations under article 11 of the WIPO copyright treaty adopted on 20 December 1996, or similar laws prohibiting or restricting circumvention of such measures.  When you convey a covered work, you waive any legal power to forbid circumvention of technological measures to the extent such circumvention is effected by exercising rights under this License with respect to the covered work, and you disclaim any intention to limit operation or modification of the work as a means of enforcing, against the work's users, your or third parties' legal rights to forbid circumvention of technological measures.  4. Conveying Verbatim Copies.  You may convey verbatim copies of the Program's source code as you receive it, in any medium, provided that you conspicuously and appropriately publish on each copy an appropriate copyright notice; keep intact all notices stating that this License and any non-permissive terms added in accord with section 7 apply to the code; keep intact all notices of the absence of any warranty; and give all recipients a copy of this License along with the Program.  You may charge any price or no price for each copy that you convey, and you may offer support or warranty protection for a fee.  5. Conveying Modified Source Versions.  You may convey a work based on the Program, or the modifications to produce it from the Program, in the form of source code under the terms of section 4, provided that you also meet all of these conditions:  a) The work must carry prominent notices stating that you modified it, and giving a relevant date.  b) The work must carry prominent notices stating that it is released under this License and any conditions added under section 7.  This requirement modifies the requirement in section 4 to \"keep intact all notices\".  c) You must license the entire work, as a whole, under this License to anyone who comes into possession of a copy.  This License will therefore apply, along with any applicable section 7 additional terms, to the whole of the work, and all its parts, regardless of how they are packaged.  This License gives no permission to license the work in any other way, but it does not invalidate such permission if you have separately received it.  d) If the work has interactive user interfaces, each must display Appropriate Legal Notices; however, if the Program has interactive interfaces that do not display Appropriate Legal Notices, your work need not make them do so.  A compilation of a covered work with other separate and independent works, which are not by their nature extensions of the covered work, and which are not combined with it such as to form a larger program, in or on a volume of a storage or distribution medium, is called an \"aggregate\" if the compilation and its resulting copyright are not used to limit the access or legal rights of the compilation's users beyond what the individual works permit.  Inclusion of a covered work in an aggregate does not cause this License to apply to the other parts of the aggregate.  6. Conveying Non-Source Forms.  You may convey a covered work in object code form under the terms of sections 4 and 5, provided that you also convey the machine-readable Corresponding Source under the terms of this License, in one of these ways:  a) Convey the object code in, or embodied in, a physical product (including a physical distribution medium), accompanied by the Corresponding Source fixed on a durable physical medium customarily used for software interchange.  b) Convey the object code in, or embodied in, a physical product (including a physical distribution medium), accompanied by a written offer, valid for at least three years and valid for as long as you offer spare parts or customer support for that product model, to give anyone who possesses the object code either (1) a copy of the Corresponding Source for all the software in the product that is covered by this License, on a durable physical medium customarily used for software interchange, for a price no more than your reasonable cost of physically performing this conveying of source, or (2) access to copy the Corresponding Source from a network server at no charge.  c) Convey individual copies of the object code with a copy of the written offer to provide the Corresponding Source.  This alternative is allowed only occasionally and noncommercially, and only if you received the object code with such an offer, in accord with subsection 6b.  d) Convey the object code by offering access from a designated place (gratis or for a charge), and offer equivalent access to the Corresponding Source in the same way through the same place at no further charge.  You need not require recipients to copy the Corresponding Source along with the object code.  If the place to copy the object code is a network server, the Corresponding Source may be on a different server (operated by you or a third party) that supports equivalent copying facilities, provided you maintain clear directions next to the object code saying where to find the Corresponding Source.  Regardless of what server hosts the Corresponding Source, you remain obligated to ensure that it is available for as long as needed to satisfy these requirements.  e) Convey the object code using peer-to-peer transmission, provided you inform other peers where the object code and Corresponding Source of the work are being offered to the general public at no charge under subsection 6d.  A separable portion of the object code, whose source code is excluded from the Corresponding Source as a System Library, need not be included in conveying the object code work.  A \"User Product\" is either (1) a \"consumer product\", which means any tangible personal property which is normally used for personal, family, or household purposes, or (2) anything designed or sold for incorporation into a dwelling.  In determining whether a product is a consumer product, doubtful cases shall be resolved in favor of coverage.  For a particular product received by a particular user, \"normally used\" refers to a typical or common use of that class of product, regardless of the status of the particular user or of the way in which the particular user actually uses, or expects or is expected to use, the product.  A product is a consumer product regardless of whether the product has substantial commercial, industrial or non-consumer uses, unless such uses represent the only significant mode of use of the product.  \"Installation Information\" for a User Product means any methods, procedures, authorization keys, or other information required to install and execute modified versions of a covered work in that User Product from a modified version of its Corresponding Source.  The information must suffice to ensure that the continued functioning of the modified object code is in no case prevented or interfered with solely because modification has been made.  If you convey an object code work under this section in, or with, or specifically for use in, a User Product, and the conveying occurs as part of a transaction in which the right of possession and use of the User Product is transferred to the recipient in perpetuity or for a fixed term (regardless of how the transaction is characterized), the Corresponding Source conveyed under this section must be accompanied by the Installation Information.  But this requirement does not apply if neither you nor any third party retains the ability to install modified object code on the User Product (for example, the work has been installed in ROM).  The requirement to provide Installation Information does not include a requirement to continue to provide support service, warranty, or updates for a work that has been modified or installed by the recipient, or for the User Product in which it has been modified or installed.  Access to a network may be denied when the modification itself materially and adversely affects the operation of the network or violates the rules and protocols for communication across the network.  Corresponding Source conveyed, and Installation Information provided, in accord with this section must be in a format that is publicly documented (and with an implementation available to the public in source code form), and must require no special password or key for unpacking, reading or copying.  7. Additional Terms.  \"Additional permissions\" are terms that supplement the terms of this License by making exceptions from one or more of its conditions. Additional permissions that are applicable to the entire Program shall be treated as though they were included in this License, to the extent that they are valid under applicable law.  If additional permissions apply only to part of the Program, that part may be used separately under those permissions, but the entire Program remains governed by this License without regard to the additional permissions.  When you convey a copy of a covered work, you may at your option remove any additional permissions from that copy, or from any part of it.  (Additional permissions may be written to require their own removal in certain cases when you modify the work.)  You may place additional permissions on material, added by you to a covered work, for which you have or can give appropriate copyright permission.  Notwithstanding any other provision of this License, for material you add to a covered work, you may (if authorized by the copyright holders of that material) supplement the terms of this License with terms:  a) Disclaiming warranty or limiting liability differently from the terms of sections 15 and 16 of this License; or  b) Requiring preservation of specified reasonable legal notices or author attributions in that material or in the Appropriate Legal Notices displayed by works containing it; or  c) Prohibiting misrepresentation of the origin of that material, or requiring that modified versions of such material be marked in reasonable ways as different from the original version; or  d) Limiting the use for publicity purposes of names of licensors or authors of the material; or  e) Declining to grant rights under trademark law for use of some trade names, trademarks, or service marks; or  f) Requiring indemnification of licensors and authors of that material by anyone who conveys the material (or modified versions of it) with contractual assumptions of liability to the recipient, for any liability that these contractual assumptions directly impose on those licensors and authors.  All other non-permissive additional terms are considered \"further restrictions\" within the meaning of section 10.  If the Program as you received it, or any part of it, contains a notice stating that it is governed by this License along with a term that is a further restriction, you may remove that term.  If a license document contains a further restriction but permits relicensing or conveying under this License, you may add to a covered work material governed by the terms of that license document, provided that the further restriction does not survive such relicensing or conveying.  If you add terms to a covered work in accord with this section, you must place, in the relevant source files, a statement of the additional terms that apply to those files, or a notice indicating where to find the applicable terms.  Additional terms, permissive or non-permissive, may be stated in the form of a separately written license, or stated as exceptions; the above requirements apply either way.  8. Termination.  You may not propagate or modify a covered work except as expressly provided under this License.  Any attempt otherwise to propagate or modify it is void, and will automatically terminate your rights under this License (including any patent licenses granted under the third paragraph of section 11).  However, if you cease all violation of this License, then your license from a particular copyright holder is reinstated (a) provisionally, unless and until the copyright holder explicitly and finally terminates your license, and (b) permanently, if the copyright holder fails to notify you of the violation by some reasonable means prior to 60 days after the cessation.  Moreover, your license from a particular copyright holder is reinstated permanently if the copyright holder notifies you of the violation by some reasonable means, this is the first time you have received notice of violation of this License (for any work) from that copyright holder, and you cure the violation prior to 30 days after your receipt of the notice.  Termination of your rights under this section does not terminate the licenses of parties who have received copies or rights from you under this License.  If your rights have been terminated and not permanently reinstated, you do not qualify to receive new licenses for the same material under section 10.  9. Acceptance Not Required for Having Copies.  You are not required to accept this License in order to receive or run a copy of the Program.  Ancillary propagation of a covered work occurring solely as a consequence of using peer-to-peer transmission to receive a copy likewise does not require acceptance.  However, nothing other than this License grants you permission to propagate or modify any covered work.  These actions infringe copyright if you do not accept this License.  Therefore, by modifying or propagating a covered work, you indicate your acceptance of this License to do so.  10. Automatic Licensing of Downstream Recipients.  Each time you convey a covered work, the recipient automatically receives a license from the original licensors, to run, modify and propagate that work, subject to this License.  You are not responsible for enforcing compliance by third parties with this License.  An \"entity transaction\" is a transaction transferring control of an organization, or substantially all assets of one, or subdividing an organization, or merging organizations.  If propagation of a covered work results from an entity transaction, each party to that transaction who receives a copy of the work also receives whatever licenses to the work the party's predecessor in interest had or could give under the previous paragraph, plus a right to possession of the Corresponding Source of the work from the predecessor in interest, if the predecessor has it or can get it with reasonable efforts.  You may not impose any further restrictions on the exercise of the rights granted or affirmed under this License.  For example, you may not impose a license fee, royalty, or other charge for exercise of rights granted under this License, and you may not initiate litigation (including a cross-claim or counterclaim in a lawsuit) alleging that any patent claim is infringed by making, using, selling, offering for sale, or importing the Program or any portion of it.  11. Patents.  A \"contributor\" is a copyright holder who authorizes use under this License of the Program or a work on which the Program is based.  The work thus licensed is called the contributor's \"contributor version\".  A contributor's \"essential patent claims\" are all patent claims owned or controlled by the contributor, whether already acquired or hereafter acquired, that would be infringed by some manner, permitted by this License, of making, using, or selling its contributor version, but do not include claims that would be infringed only as a consequence of further modification of the contributor version.  For purposes of this definition, \"control\" includes the right to grant patent sublicenses in a manner consistent with the requirements of this License.  Each contributor grants you a non-exclusive, worldwide, royalty-free patent license under the contributor's essential patent claims, to make, use, sell, offer for sale, import and otherwise run, modify and propagate the contents of its contributor version.  In the following three paragraphs, a \"patent license\" is any express agreement or commitment, however denominated, not to enforce a patent (such as an express permission to practice a patent or covenant not to sue for patent infringement).  To \"grant\" such a patent license to a party means to make such an agreement or commitment not to enforce a patent against the party.  If you convey a covered work, knowingly relying on a patent license, and the Corresponding Source of the work is not available for anyone to copy, free of charge and under the terms of this License, through a publicly available network server or other readily accessible means, then you must either (1) cause the Corresponding Source to be so available, or (2) arrange to deprive yourself of the benefit of the patent license for this particular work, or (3) arrange, in a manner consistent with the requirements of this License, to extend the patent license to downstream recipients.  \"Knowingly relying\" means you have actual knowledge that, but for the patent license, your conveying the covered work in a country, or your recipient's use of the covered work in a country, would infringe one or more identifiable patents in that country that you have reason to believe are valid.  If, pursuant to or in connection with a single transaction or arrangement, you convey, or propagate by procuring conveyance of, a covered work, and grant a patent license to some of the parties receiving the covered work authorizing them to use, propagate, modify or convey a specific copy of the covered work, then the patent license you grant is automatically extended to all recipients of the covered work and works based on it.  A patent license is \"discriminatory\" if it does not include within the scope of its coverage, prohibits the exercise of, or is conditioned on the non-exercise of one or more of the rights that are specifically granted under this License.  You may not convey a covered work if you are a party to an arrangement with a third party that is in the business of distributing software, under which you make payment to the third party based on the extent of your activity of conveying the work, and under which the third party grants, to any of the parties who would receive the covered work from you, a discriminatory patent license (a) in connection with copies of the covered work conveyed by you (or copies made from those copies), or (b) primarily for and in connection with specific products or compilations that contain the covered work, unless you entered into that arrangement, or that patent license was granted, prior to 28 March 2007.  Nothing in this License shall be construed as excluding or limiting any implied license or other defenses to infringement that may otherwise be available to you under applicable patent law.  12. No Surrender of Others' Freedom.  If conditions are imposed on you (whether by court order, agreement or otherwise) that contradict the conditions of this License, they do not excuse you from the conditions of this License.  If you cannot convey a covered work so as to satisfy simultaneously your obligations under this License and any other pertinent obligations, then as a consequence you may not convey it at all.  For example, if you agree to terms that obligate you to collect a royalty for further conveying from those to whom you convey the Program, the only way you could satisfy both those terms and this License would be to refrain entirely from conveying the Program.  13. Use with the GNU Affero General Public License.  Notwithstanding any other provision of this License, you have permission to link or combine any covered work with a work licensed under version 3 of the GNU Affero General Public License into a single combined work, and to convey the resulting work.  The terms of this License will continue to apply to the part which is the covered work, but the special requirements of the GNU Affero General Public License, section 13, concerning interaction through a network will apply to the combination as such.  14. Revised Versions of this License.  The Free Software Foundation may publish revised and/or new versions of the GNU General Public License from time to time.  Such new versions will be similar in spirit to the present version, but may differ in detail to address new problems or concerns.  Each version is given a distinguishing version number.  If the Program specifies that a certain numbered version of the GNU General Public License \"or any later version\" applies to it, you have the option of following the terms and conditions either of that numbered version or of any later version published by the Free Software Foundation.  If the Program does not specify a version number of the GNU General Public License, you may choose any version ever published by the Free Software Foundation.  If the Program specifies that a proxy can decide which future versions of the GNU General Public License can be used, that proxy's public statement of acceptance of a version permanently authorizes you to choose that version for the Program.  Later license versions may give you additional or different permissions.  However, no additional obligations are imposed on any author or copyright holder as a result of your choosing to follow a later version.  15. Disclaimer of Warranty.  THERE IS NO WARRANTY FOR THE PROGRAM, TO THE EXTENT PERMITTED BY APPLICABLE LAW.  EXCEPT WHEN OTHERWISE STATED IN WRITING THE COPYRIGHT HOLDERS AND/OR OTHER PARTIES PROVIDE THE PROGRAM \"AS IS\" WITHOUT WARRANTY OF ANY KIND, EITHER EXPRESSED OR IMPLIED, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE.  THE ENTIRE RISK AS TO THE QUALITY AND PERFORMANCE OF THE PROGRAM IS WITH YOU.  SHOULD THE PROGRAM PROVE DEFECTIVE, YOU ASSUME THE COST OF ALL NECESSARY SERVICING, REPAIR OR CORRECTION.  16. Limitation of Liability.  IN NO EVENT UNLESS REQUIRED BY APPLICABLE LAW OR AGREED TO IN WRITING WILL ANY COPYRIGHT HOLDER, OR ANY OTHER PARTY WHO MODIFIES AND/OR CONVEYS THE PROGRAM AS PERMITTED ABOVE, BE LIABLE TO YOU FOR DAMAGES, INCLUDING ANY GENERAL, SPECIAL, INCIDENTAL OR CONSEQUENTIAL DAMAGES ARISING OUT OF THE USE OR INABILITY TO USE THE PROGRAM (INCLUDING BUT NOT LIMITED TO LOSS OF DATA OR DATA BEING RENDERED INACCURATE OR LOSSES SUSTAINED BY YOU OR THIRD PARTIES OR A FAILURE OF THE PROGRAM TO OPERATE WITH ANY OTHER PROGRAMS), EVEN IF SUCH HOLDER OR OTHER PARTY HAS BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGES.  17. Interpretation of Sections 15 and 16.  If the disclaimer of warranty and limitation of liability provided above cannot be given local legal effect according to their terms, reviewing courts shall apply local law that most closely approximates an absolute waiver of all civil liability in connection with the Program, unless a warranty or assumption of liability accompanies a copy of the Program in return for a fee.  END OF TERMS AND CONDITIONS  How to Apply These Terms to Your New Programs  If you develop a new program, and you want it to be of the greatest possible use to the public, the best way to achieve this is to make it free software which everyone can redistribute and change under these terms.  To do so, attach the following notices to the program.  It is safest to attach them to the start of each source file to most effectively state the exclusion of warranty; and each file should have at least the \"copyright\" line and a pointer to where the full notice is found.  <one line to give the program's name and a brief idea of what it does.> Copyright (C) <year>  <name of author>  This program is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.  This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more details.  You should have received a copy of the GNU General Public License along with this program.  If not, see <http://www.gnu.org/licenses/>.  Also add information on how to contact you by electronic and paper mail.  If the program does terminal interaction, make it output a short notice like this when it starts in an interactive mode:  <program>  Copyright (C) <year>  <name of author> This program comes with ABSOLUTELY NO WARRANTY; for details type `show w'. This is free software, and you are welcome to redistribute it under certain conditions; type `show c' for details.  The hypothetical commands `show w' and `show c' should show the appropriate parts of the General Public License.  Of course, your program's commands might be different; for a GUI interface, you would use an \"about box\".  You should also get your employer (if you work as a programmer) or school, if any, to sign a \"copyright disclaimer\" for the program, if necessary. For more information on this, and how to apply and follow the GNU GPL, see <http://www.gnu.org/licenses/>.  The GNU General Public License does not permit incorporating your program into proprietary programs.  If your program is a subroutine library, you may consider it more useful to permit linking proprietary applications with the library.  If this is what you want to do, use the GNU Lesser General Public License instead of this License.  But first, please read <http://www.gnu.org/philosophy/why-not-lgpl.html>.  Name: libquadmath Files: numpy/.dylibs/libquadmath*.so Description: dynamically linked to files compiled with gcc Availability: https://gcc.gnu.org/git/?p=gcc.git;a=tree;f=libquadmath License: LGPL-2.1-or-later  GCC Quad-Precision Math Library Copyright (C) 2010-2019 Free Software Foundation, Inc. Written by Francois-Xavier Coudert  <fxcoudert@gcc.gnu.org>  This file is part of the libquadmath library. Libquadmath is free software; you can redistribute it and/or modify it under the terms of the GNU Library General Public License as published by the Free Software Foundation; either version 2.1 of the License, or (at your option) any later version.  Libquadmath is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License for more details. https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html",
+      "authors": "Travis E. Oliphant et al.",
+      "source": "https://pypi.org/pypi/numpy/1.26.4/json",
+      "scope": "locked release dependency, selected by platform and installer profile",
+      "texts": [
+        {
+          "path": "licenses/python/numpy-1.26.4/wheel/numpy-1.26.4.dist-info/LICENSE.txt",
+          "sha256": "e261222a74adff28f88160dac1c5cb302d93b67e9ca989eb83bf311e11a9970a",
+          "source": "https://files.pythonhosted.org/packages/16/2e/86f24451c2d530c88daf997cb8d6ac622c1d40d19f5a031ed68a4b73a374/numpy-1.26.4-cp312-cp312-win_amd64.whl",
+          "source_sha256": "08beddf13648eb95f8d867350f6a018a4be2e5ad54c8d8caed89ebca558b2818"
+        }
+      ]
+    },
+    {
+      "ecosystem": "PyPI",
+      "name": "numpy",
+      "version": "2.5.4",
+      "license": "BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0",
+      "authors": "Travis E. Oliphant et al.",
+      "source": "https://pypi.org/project/numpy/2.5.4/",
+      "scope": "locked release dependency, selected by platform and installer profile",
+      "texts": [
+        {
+          "path": "licenses/python/numpy-2.5.4/licenses/LICENSE.txt",
+          "sha256": "4860083caa0de2ac3292ca98bd074bd8f45d8b32624e37b1e70a240bff61e488"
+        },
+        {
+          "path": "licenses/python/numpy-2.5.4/licenses/numpy/_core/include/numpy/libdivide/LICENSE.txt",
+          "sha256": "fbc539f47d0cf83bc61378080fb873d5c14630126cacbfe754035c3926daa5ec"
+        },
+        {
+          "path": "licenses/python/numpy-2.5.4/licenses/numpy/_core/src/common/pythoncapi-compat/COPYING",
+          "sha256": "3f2c1ffa76383a55ae0aac01c9737cd70050dff63e1f026694fbe9d662573c98"
+        },
+        {
+          "path": "licenses/python/numpy-2.5.4/licenses/numpy/_core/src/highway/LICENSE",
+          "sha256": "e340270d4f64384569a91d546acb5b094d69ce47f0c015db77abb74dc6f815af"
+        },
+        {
+          "path": "licenses/python/numpy-2.5.4/licenses/numpy/_core/src/multiarray/dragon4_LICENSE.txt",
+          "sha256": "f7b14309e5f54e5022b26448eefd419988ada2aec01d3c1162d84a0ea8f21f2c"
+        },
+        {
+          "path": "licenses/python/numpy-2.5.4/licenses/numpy/_core/src/npysort/x86-simd-sort/LICENSE.md",
+          "sha256": "211e7d737d6179a08f791ebb0a99897ce7cd2457410c542876d125576edfe910"
+        },
+        {
+          "path": "licenses/python/numpy-2.5.4/licenses/numpy/_core/src/umath/svml/LICENSE",
+          "sha256": "c17011467b4fe6e20fbfbeda4df09e58c2bca5480a063e55735a4000a379aad9"
+        },
+        {
+          "path": "licenses/python/numpy-2.5.4/licenses/numpy/fft/pocketfft/LICENSE.md",
+          "sha256": "a85ca13fdf90160b64a0698215868c13b74d835ad0a4e2ba44713b8c5058a056"
+        },
+        {
+          "path": "licenses/python/numpy-2.5.4/licenses/numpy/linalg/lapack_lite/LICENSE.txt",
+          "sha256": "a14cc25e10d40a3aa705b7de2fb764a6535d8ee9b2db4e1724900585457dfd55"
+        },
+        {
+          "path": "licenses/python/numpy-2.5.4/licenses/numpy/ma/LICENSE",
+          "sha256": "05f3b88351988ecfad10abe92c0c50e5875c6452d5009a0084cc291551ffcca6"
+        },
+        {
+          "path": "licenses/python/numpy-2.5.4/licenses/numpy/random/LICENSE.md",
+          "sha256": "103166b62b80443afb9eb3488e052ea06be0cff566b908f199e561fde49af19f"
+        },
+        {
+          "path": "licenses/python/numpy-2.5.4/licenses/numpy/random/src/distributions/LICENSE.md",
+          "sha256": "469778be8f33d54e1bcaab28c281cc472916d2d273f835e55bc487d30503face"
+        },
+        {
+          "path": "licenses/python/numpy-2.5.4/licenses/numpy/random/src/mt19937/LICENSE.md",
+          "sha256": "0e111337b25494a773106695f0e799f642b8567aaacca4f116a74a8177179156"
+        },
+        {
+          "path": "licenses/python/numpy-2.5.4/licenses/numpy/random/src/pcg64/LICENSE.md",
+          "sha256": "e7d4f4fb20358f314210a892ae17351e04993813646f697ec387385ca2a36918"
+        },
+        {
+          "path": "licenses/python/numpy-2.5.4/licenses/numpy/random/src/philox/LICENSE.md",
+          "sha256": "6f5828a57223d4cc7f8ea505a2623e7b978b242752c1515e355f46ba2cec1800"
+        },
+        {
+          "path": "licenses/python/numpy-2.5.4/licenses/numpy/random/src/sfc64/LICENSE.md",
+          "sha256": "9d4098846018319cd68e228ee6220361787f73bccbf00237a85e4fc9621b998f"
+        },
+        {
+          "path": "licenses/python/numpy-2.5.4/licenses/numpy/random/src/splitmix64/LICENSE.md",
+          "sha256": "268b0ca06759d31ea3ca68dd35f20e877916e927b1c2a835e4592a3c4354b1f9"
+        }
+      ]
+    },
+    {
+      "ecosystem": "PyPI",
+      "name": "packaging",
+      "version": "26.3",
+      "license": "Apache-2.0 OR BSD-2-Clause",
+      "authors": "Donald Stufft <donald@stufft.io>",
+      "source": "https://pypi.org/pypi/packaging/26.3/json",
+      "scope": "locked release dependency, selected by platform and installer profile",
+      "texts": [
+        {
+          "path": "licenses/python/packaging-26.3/wheel/packaging-26.3.dist-info/licenses/LICENSE",
+          "sha256": "cad1ef5bd340d73e074ba614d26f7deaca5c7940c3d8c34852e65c4909686c48",
+          "source": "https://files.pythonhosted.org/packages/63/34/ba1c580383c9eada3711951fef0795c80b829a078d72188184bcab9dd527/packaging-26.3-py3-none-any.whl",
+          "source_sha256": "d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c"
+        },
+        {
+          "path": "licenses/python/packaging-26.3/wheel/packaging-26.3.dist-info/licenses/LICENSE.APACHE",
+          "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594",
+          "source": "https://files.pythonhosted.org/packages/63/34/ba1c580383c9eada3711951fef0795c80b829a078d72188184bcab9dd527/packaging-26.3-py3-none-any.whl",
+          "source_sha256": "d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c"
+        },
+        {
+          "path": "licenses/python/packaging-26.3/wheel/packaging-26.3.dist-info/licenses/LICENSE.BSD",
+          "sha256": "b70e7e9b742f1cc6f948b34c16aa39ffece94196364bc88ff0d2180f0028fac5",
+          "source": "https://files.pythonhosted.org/packages/63/34/ba1c580383c9eada3711951fef0795c80b829a078d72188184bcab9dd527/packaging-26.3-py3-none-any.whl",
+          "source_sha256": "d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c"
+        }
+      ]
+    },
+    {
+      "ecosystem": "PyPI",
+      "name": "pip",
+      "version": "26.3",
+      "license": "MIT",
+      "authors": "The pip developers <distutils-sig@python.org>",
+      "source": "https://pypi.org/pypi/pip/26.3/json",
+      "scope": "locked release dependency, selected by platform and installer profile",
+      "texts": [
+        {
+          "path": "licenses/python/pip-26.3/wheel/pip-26.3.dist-info/licenses/AUTHORS.txt",
+          "sha256": "f8998e1ed3151771c2fbc899ccf0e18b0817d425dff4983eb0fede4e48db47e4",
+          "source": "https://files.pythonhosted.org/packages/07/25/ee8c38ae72d66b844ce8eb9711ba905dba21ca1a8a0c960057c41cd23337/pip-26.3-py3-none-any.whl",
+          "source_sha256": "f3b60b20ffaadd4415ed7957212a38ac63fa4c5fa375bd0f4a797777940fad13"
+        },
+        {
+          "path": "licenses/python/pip-26.3/wheel/pip-26.3.dist-info/licenses/LICENSE.txt",
+          "sha256": "634300a669d49aeae65b12c6c48c924c51a4cdf3d1ff086dc3456dc8bcaa2104",
+          "source": "https://files.pythonhosted.org/packages/07/25/ee8c38ae72d66b844ce8eb9711ba905dba21ca1a8a0c960057c41cd23337/pip-26.3-py3-none-any.whl",
+          "source_sha256": "f3b60b20ffaadd4415ed7957212a38ac63fa4c5fa375bd0f4a797777940fad13"
+        },
+        {
+          "path": "licenses/python/pip-26.3/wheel/pip-26.3.dist-info/licenses/src/pip/_vendor/cachecontrol/LICENSE.txt",
+          "sha256": "86eeee87be2a43f3ff1f56496f451f69243926f025fedbb033666c304c4c161b",
+          "source": "https://files.pythonhosted.org/packages/07/25/ee8c38ae72d66b844ce8eb9711ba905dba21ca1a8a0c960057c41cd23337/pip-26.3-py3-none-any.whl",
+          "source_sha256": "f3b60b20ffaadd4415ed7957212a38ac63fa4c5fa375bd0f4a797777940fad13"
+        },
+        {
+          "path": "licenses/python/pip-26.3/wheel/pip-26.3.dist-info/licenses/src/pip/_vendor/certifi/LICENSE",
+          "sha256": "e93716da6b9c0d5a4a1df60fe695b370f0695603d21f6f83f053e42cfc10caf7",
+          "source": "https://files.pythonhosted.org/packages/07/25/ee8c38ae72d66b844ce8eb9711ba905dba21ca1a8a0c960057c41cd23337/pip-26.3-py3-none-any.whl",
+          "source_sha256": "f3b60b20ffaadd4415ed7957212a38ac63fa4c5fa375bd0f4a797777940fad13"
+        },
+        {
+          "path": "licenses/python/pip-26.3/wheel/pip-26.3.dist-info/licenses/src/pip/_vendor/distlib/LICENSE.txt",
+          "sha256": "808e10c8a6ab8deb149ff9b3fb19f447a808094606d712a9ca57fead3552599d",
+          "source": "https://files.pythonhosted.org/packages/07/25/ee8c38ae72d66b844ce8eb9711ba905dba21ca1a8a0c960057c41cd23337/pip-26.3-py3-none-any.whl",
+          "source_sha256": "f3b60b20ffaadd4415ed7957212a38ac63fa4c5fa375bd0f4a797777940fad13"
+        },
+        {
+          "path": "licenses/python/pip-26.3/wheel/pip-26.3.dist-info/licenses/src/pip/_vendor/distro/LICENSE",
+          "sha256": "cb5e8e7e5f4a3988e1063c142c60dc2df75605f4c46515e776e3aca6df976e14",
+          "source": "https://files.pythonhosted.org/packages/07/25/ee8c38ae72d66b844ce8eb9711ba905dba21ca1a8a0c960057c41cd23337/pip-26.3-py3-none-any.whl",
+          "source_sha256": "f3b60b20ffaadd4415ed7957212a38ac63fa4c5fa375bd0f4a797777940fad13"
+        },
+        {
+          "path": "licenses/python/pip-26.3/wheel/pip-26.3.dist-info/licenses/src/pip/_vendor/idna/LICENSE.md",
+          "sha256": "1a9a4f0e3d479a27240ddd59a9137a66ab4a0f9dfdc8ca6188cc0bfd85187f04",
+          "source": "https://files.pythonhosted.org/packages/07/25/ee8c38ae72d66b844ce8eb9711ba905dba21ca1a8a0c960057c41cd23337/pip-26.3-py3-none-any.whl",
+          "source_sha256": "f3b60b20ffaadd4415ed7957212a38ac63fa4c5fa375bd0f4a797777940fad13"
+        },
+        {
+          "path": "licenses/python/pip-26.3/wheel/pip-26.3.dist-info/licenses/src/pip/_vendor/msgpack/COPYING",
+          "sha256": "492dedba85da5872f78e6091bcd1fea474d660d35acb4dee964b8aab3f007427",
+          "source": "https://files.pythonhosted.org/packages/07/25/ee8c38ae72d66b844ce8eb9711ba905dba21ca1a8a0c960057c41cd23337/pip-26.3-py3-none-any.whl",
+          "source_sha256": "f3b60b20ffaadd4415ed7957212a38ac63fa4c5fa375bd0f4a797777940fad13"
+        },
+        {
+          "path": "licenses/python/pip-26.3/wheel/pip-26.3.dist-info/licenses/src/pip/_vendor/packaging/LICENSE",
+          "sha256": "cad1ef5bd340d73e074ba614d26f7deaca5c7940c3d8c34852e65c4909686c48",
+          "source": "https://files.pythonhosted.org/packages/07/25/ee8c38ae72d66b844ce8eb9711ba905dba21ca1a8a0c960057c41cd23337/pip-26.3-py3-none-any.whl",
+          "source_sha256": "f3b60b20ffaadd4415ed7957212a38ac63fa4c5fa375bd0f4a797777940fad13"
+        },
+        {
+          "path": "licenses/python/pip-26.3/wheel/pip-26.3.dist-info/licenses/src/pip/_vendor/packaging/LICENSE.APACHE",
+          "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594",
+          "source": "https://files.pythonhosted.org/packages/07/25/ee8c38ae72d66b844ce8eb9711ba905dba21ca1a8a0c960057c41cd23337/pip-26.3-py3-none-any.whl",
+          "source_sha256": "f3b60b20ffaadd4415ed7957212a38ac63fa4c5fa375bd0f4a797777940fad13"
+        },
+        {
+          "path": "licenses/python/pip-26.3/wheel/pip-26.3.dist-info/licenses/src/pip/_vendor/packaging/LICENSE.BSD",
+          "sha256": "b70e7e9b742f1cc6f948b34c16aa39ffece94196364bc88ff0d2180f0028fac5",
+          "source": "https://files.pythonhosted.org/packages/07/25/ee8c38ae72d66b844ce8eb9711ba905dba21ca1a8a0c960057c41cd23337/pip-26.3-py3-none-any.whl",
+          "source_sha256": "f3b60b20ffaadd4415ed7957212a38ac63fa4c5fa375bd0f4a797777940fad13"
+        },
+        {
+          "path": "licenses/python/pip-26.3/wheel/pip-26.3.dist-info/licenses/src/pip/_vendor/pkg_resources/LICENSE",
+          "sha256": "86da0f01aeae46348a3c3d465195dc1ceccde79f79e87769a64b8da04b2a4741",
+          "source": "https://files.pythonhosted.org/packages/07/25/ee8c38ae72d66b844ce8eb9711ba905dba21ca1a8a0c960057c41cd23337/pip-26.3-py3-none-any.whl",
+          "source_sha256": "f3b60b20ffaadd4415ed7957212a38ac63fa4c5fa375bd0f4a797777940fad13"
+        },
+        {
+          "path": "licenses/python/pip-26.3/wheel/pip-26.3.dist-info/licenses/src/pip/_vendor/platformdirs/LICENSE",
+          "sha256": "29e0fd62e929850e86eb28c3fdccf0cefdf4fa94879011cffb3d0d4bed6d4db6",
+          "source": "https://files.pythonhosted.org/packages/07/25/ee8c38ae72d66b844ce8eb9711ba905dba21ca1a8a0c960057c41cd23337/pip-26.3-py3-none-any.whl",
+          "source_sha256": "f3b60b20ffaadd4415ed7957212a38ac63fa4c5fa375bd0f4a797777940fad13"
+        },
+        {
+          "path": "licenses/python/pip-26.3/wheel/pip-26.3.dist-info/licenses/src/pip/_vendor/pygments/LICENSE",
+          "sha256": "a9d66f1d526df02e29dce73436d34e56e8632f46c275bbdffc70569e882f9f17",
+          "source": "https://files.pythonhosted.org/packages/07/25/ee8c38ae72d66b844ce8eb9711ba905dba21ca1a8a0c960057c41cd23337/pip-26.3-py3-none-any.whl",
+          "source_sha256": "f3b60b20ffaadd4415ed7957212a38ac63fa4c5fa375bd0f4a797777940fad13"
+        },
+        {
+          "path": "licenses/python/pip-26.3/wheel/pip-26.3.dist-info/licenses/src/pip/_vendor/pyproject_hooks/LICENSE",
+          "sha256": "1b22b049b5267d6dfc23a67bf4a84d8ec04b9fdfb1a51d360e42b4342c8b4154",
+          "source": "https://files.pythonhosted.org/packages/07/25/ee8c38ae72d66b844ce8eb9711ba905dba21ca1a8a0c960057c41cd23337/pip-26.3-py3-none-any.whl",
+          "source_sha256": "f3b60b20ffaadd4415ed7957212a38ac63fa4c5fa375bd0f4a797777940fad13"
+        },
+        {
+          "path": "licenses/python/pip-26.3/wheel/pip-26.3.dist-info/licenses/src/pip/_vendor/requests/LICENSE",
+          "sha256": "09e8a9bcec8067104652c168685ab0931e7868f9c8284b66f5ae6edae5f1130b",
+          "source": "https://files.pythonhosted.org/packages/07/25/ee8c38ae72d66b844ce8eb9711ba905dba21ca1a8a0c960057c41cd23337/pip-26.3-py3-none-any.whl",
+          "source_sha256": "f3b60b20ffaadd4415ed7957212a38ac63fa4c5fa375bd0f4a797777940fad13"
+        },
+        {
+          "path": "licenses/python/pip-26.3/wheel/pip-26.3.dist-info/licenses/src/pip/_vendor/resolvelib/LICENSE",
+          "sha256": "f388fd38cad13112c1dc0f669bbe80e7f84541edbafb72f3030d2ca7642c3c9d",
+          "source": "https://files.pythonhosted.org/packages/07/25/ee8c38ae72d66b844ce8eb9711ba905dba21ca1a8a0c960057c41cd23337/pip-26.3-py3-none-any.whl",
+          "source_sha256": "f3b60b20ffaadd4415ed7957212a38ac63fa4c5fa375bd0f4a797777940fad13"
+        },
+        {
+          "path": "licenses/python/pip-26.3/wheel/pip-26.3.dist-info/licenses/src/pip/_vendor/rich/LICENSE",
+          "sha256": "deed7c17a4318158190a3ea239cc879a5a50271cebb98ae7025f48fbe58dca15",
+          "source": "https://files.pythonhosted.org/packages/07/25/ee8c38ae72d66b844ce8eb9711ba905dba21ca1a8a0c960057c41cd23337/pip-26.3-py3-none-any.whl",
+          "source_sha256": "f3b60b20ffaadd4415ed7957212a38ac63fa4c5fa375bd0f4a797777940fad13"
+        },
+        {
+          "path": "licenses/python/pip-26.3/wheel/pip-26.3.dist-info/licenses/src/pip/_vendor/tomli/LICENSE",
+          "sha256": "b80816b0d530b8accb4c2211783790984a6e3b61922c2b5ee92f3372ab2742fe",
+          "source": "https://files.pythonhosted.org/packages/07/25/ee8c38ae72d66b844ce8eb9711ba905dba21ca1a8a0c960057c41cd23337/pip-26.3-py3-none-any.whl",
+          "source_sha256": "f3b60b20ffaadd4415ed7957212a38ac63fa4c5fa375bd0f4a797777940fad13"
+        },
+        {
+          "path": "licenses/python/pip-26.3/wheel/pip-26.3.dist-info/licenses/src/pip/_vendor/tomli_w/LICENSE",
+          "sha256": "b80816b0d530b8accb4c2211783790984a6e3b61922c2b5ee92f3372ab2742fe",
+          "source": "https://files.pythonhosted.org/packages/07/25/ee8c38ae72d66b844ce8eb9711ba905dba21ca1a8a0c960057c41cd23337/pip-26.3-py3-none-any.whl",
+          "source_sha256": "f3b60b20ffaadd4415ed7957212a38ac63fa4c5fa375bd0f4a797777940fad13"
+        },
+        {
+          "path": "licenses/python/pip-26.3/wheel/pip-26.3.dist-info/licenses/src/pip/_vendor/truststore/LICENSE",
+          "sha256": "33be7b7e8fa4fd19b1760e1a8ed8a668bdab852c91b692dd41424bcb725a9fca",
+          "source": "https://files.pythonhosted.org/packages/07/25/ee8c38ae72d66b844ce8eb9711ba905dba21ca1a8a0c960057c41cd23337/pip-26.3-py3-none-any.whl",
+          "source_sha256": "f3b60b20ffaadd4415ed7957212a38ac63fa4c5fa375bd0f4a797777940fad13"
+        },
+        {
+          "path": "licenses/python/pip-26.3/wheel/pip-26.3.dist-info/licenses/src/pip/_vendor/urllib3/LICENSE.txt",
+          "sha256": "130e3a64d5fdd5d096a752694634a7d9df284469de86e5732100268041e3d686",
+          "source": "https://files.pythonhosted.org/packages/07/25/ee8c38ae72d66b844ce8eb9711ba905dba21ca1a8a0c960057c41cd23337/pip-26.3-py3-none-any.whl",
+          "source_sha256": "f3b60b20ffaadd4415ed7957212a38ac63fa4c5fa375bd0f4a797777940fad13"
+        }
+      ]
+    },
+    {
+      "ecosystem": "PyPI",
+      "name": "platformdirs",
+      "version": "4.14.5",
+      "license": "MIT",
+      "authors": null,
+      "source": "https://pypi.org/project/platformdirs/4.14.5/",
+      "scope": "locked release dependency, selected by platform and installer profile",
+      "texts": [
+        {
+          "path": "licenses/python/platformdirs-4.14.5/licenses/LICENSE",
+          "sha256": "29e0fd62e929850e86eb28c3fdccf0cefdf4fa94879011cffb3d0d4bed6d4db6"
+        }
+      ]
+    },
+    {
+      "ecosystem": "PyPI",
+      "name": "pybullet",
+      "version": "3.2.7",
+      "license": "zlib",
+      "authors": "Erwin Coumans, Yunfei Bai, Jasmine Hsu",
+      "source": "https://pypi.org/project/pybullet/3.2.7/",
+      "scope": "locked release dependency, selected by platform and installer profile",
+      "texts": [
+        {
+          "path": "licenses/python/pybullet-3.2.7/licenses/AUTHORS.txt",
+          "sha256": "bc08fcb79ed822e775cb81380684f24fd1eb70ab80fa1a5e95726e48a726d878"
+        },
+        {
+          "path": "licenses/python/pybullet-3.2.7/licenses/LICENSE.txt",
+          "sha256": "885cd516a8420acb7c3e0b1a7119913b686495001ae564e3229740460e8cff59"
+        }
+      ]
+    },
+    {
+      "ecosystem": "PyPI",
+      "name": "pycparser",
+      "version": "3.12",
+      "license": "BSD-3-Clause",
+      "authors": "Eli Bendersky <eliben@gmail.com>",
+      "source": "https://pypi.org/project/pycparser/3.12/",
+      "scope": "locked release dependency, selected by platform and installer profile",
+      "texts": [
+        {
+          "path": "licenses/python/pycparser-3.12/licenses/LICENSE",
+          "sha256": "0a9e78156ae8b96caf1b4f11ac2df424b83de29736f9e757630548a6272fdf90"
+        }
+      ]
+    },
+    {
+      "ecosystem": "PyPI",
+      "name": "Pygments",
+      "version": "2.21.0",
+      "license": "BSD-2-Clause",
+      "authors": "Georg Brandl <georg@python.org>",
+      "source": "https://pypi.org/project/Pygments/2.21.0/",
+      "scope": "locked release dependency, selected by platform and installer profile",
+      "texts": [
+        {
+          "path": "licenses/python/pygments-2.21.0/licenses/AUTHORS",
+          "sha256": "71a83872ad82f57be692cf827e048e2cd51d45169cfa1ea3f28706d97a872c0f"
+        },
+        {
+          "path": "licenses/python/pygments-2.21.0/licenses/LICENSE",
+          "sha256": "a9d66f1d526df02e29dce73436d34e56e8632f46c275bbdffc70569e882f9f17"
+        }
+      ]
+    },
+    {
+      "ecosystem": "PyPI",
+      "name": "PySide6_Essentials",
+      "version": "6.12.0",
+      "license": "LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only",
+      "authors": "Qt for Python Team <pyside@qt-project.org>",
+      "source": "https://pypi.org/project/PySide6_Essentials/6.12.0/",
+      "scope": "locked release dependency, selected by platform and installer profile",
+      "texts": [
+        {
+          "path": "licenses/python/pyside6-essentials-6.12.0/LGPL-3.0-only.txt",
+          "sha256": "da7eabb7bafdf7d3ae5e9f223aa5bdc1eece45ac569dc21b3b037520b4464768",
+          "source": "https://raw.githubusercontent.com/pyside/pyside-setup/v6.12.0/LICENSES/LGPL-3.0-only.txt"
+        },
+        {
+          "path": "licenses/python/pyside6-essentials-6.12.0/GPL-2.0-only.txt",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "source": "https://raw.githubusercontent.com/pyside/pyside-setup/v6.12.0/LICENSES/GPL-2.0-only.txt"
+        },
+        {
+          "path": "licenses/python/pyside6-essentials-6.12.0/GPL-3.0-only.txt",
+          "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
+          "source": "https://raw.githubusercontent.com/pyside/pyside-setup/v6.12.0/LICENSES/GPL-3.0-only.txt"
+        },
+        {
+          "path": "licenses/python/pyside6-essentials-6.12.0/Qt-GPL-exception-1.0.txt",
+          "sha256": "40678d338ce53cd93f8b22b281a2ecbcaa3ee65ce60b25ffb0c462b0530846b2",
+          "source": "https://raw.githubusercontent.com/pyside/pyside-setup/v6.12.0/LICENSES/Qt-GPL-exception-1.0.txt"
+        }
+      ]
+    },
+    {
+      "ecosystem": "PyPI",
+      "name": "PyYAML",
+      "version": "6.0.3",
+      "license": "MIT",
+      "authors": "Kirill Simonov",
+      "source": "https://pypi.org/project/PyYAML/6.0.3/",
+      "scope": "locked release dependency, selected by platform and installer profile",
+      "texts": [
+        {
+          "path": "licenses/python/pyyaml-6.0.3/licenses/LICENSE",
+          "sha256": "8d3928f9dc4490fd635707cb88eb26bd764102a7282954307d3e5167a577e8a4"
+        }
+      ]
+    },
+    {
+      "ecosystem": "PyPI",
+      "name": "rich",
+      "version": "15.0.0",
+      "license": "MIT",
+      "authors": "Will McGugan",
+      "source": "https://pypi.org/project/rich/15.0.0/",
+      "scope": "locked release dependency, selected by platform and installer profile",
+      "texts": [
+        {
+          "path": "licenses/python/rich-15.0.0/licenses/LICENSE",
+          "sha256": "deed7c17a4318158190a3ea239cc879a5a50271cebb98ae7025f48fbe58dca15"
+        }
+      ]
+    },
+    {
+      "ecosystem": "PyPI",
+      "name": "setuptools",
+      "version": "84.2.1",
+      "license": "MIT",
+      "authors": "Python Packaging Authority <distutils-sig@python.org>",
+      "source": "https://pypi.org/pypi/setuptools/84.2.1/json",
+      "scope": "locked release dependency, selected by platform and installer profile",
+      "texts": [
+        {
+          "path": "licenses/python/setuptools-84.2.1/wheel/setuptools/_vendor/importlib_metadata-8.7.1.dist-info/licenses/LICENSE",
+          "sha256": "458502e12d97bbf64438606a20044aa85eb05fb0a8a807bb35dbec253fd1fc04",
+          "source": "https://files.pythonhosted.org/packages/ef/55/6dc6d6bb953bdfc52519a0059592c52b6e3b8ad51cf8256dffceb55b0610/setuptools-84.2.1-py3-none-any.whl",
+          "source_sha256": "ca140b45d5325a9478f880e351484f62fef15f336462e449ca0c03c873d589c2"
+        },
+        {
+          "path": "licenses/python/setuptools-84.2.1/wheel/setuptools/_vendor/jaraco_context-6.1.0.dist-info/licenses/LICENSE",
+          "sha256": "9755a18519666e5f0f4cae3daad3d7012bcae48a600b31237d75e9fe134e6683",
+          "source": "https://files.pythonhosted.org/packages/ef/55/6dc6d6bb953bdfc52519a0059592c52b6e3b8ad51cf8256dffceb55b0610/setuptools-84.2.1-py3-none-any.whl",
+          "source_sha256": "ca140b45d5325a9478f880e351484f62fef15f336462e449ca0c03c873d589c2"
+        },
+        {
+          "path": "licenses/python/setuptools-84.2.1/wheel/setuptools/_vendor/jaraco_functools-4.4.0.dist-info/licenses/LICENSE",
+          "sha256": "5a57cb4db85e2a2dd88c290628908add57e3451449e0a9a71fdfb38776fd759d",
+          "source": "https://files.pythonhosted.org/packages/ef/55/6dc6d6bb953bdfc52519a0059592c52b6e3b8ad51cf8256dffceb55b0610/setuptools-84.2.1-py3-none-any.whl",
+          "source_sha256": "ca140b45d5325a9478f880e351484f62fef15f336462e449ca0c03c873d589c2"
+        },
+        {
+          "path": "licenses/python/setuptools-84.2.1/wheel/setuptools/_vendor/more_itertools-10.8.0.dist-info/licenses/LICENSE",
+          "sha256": "09f1c8c9e941af3e584d59641ea9b87d83c0cb0fd007eb5ef391a7e2643c1a46",
+          "source": "https://files.pythonhosted.org/packages/ef/55/6dc6d6bb953bdfc52519a0059592c52b6e3b8ad51cf8256dffceb55b0610/setuptools-84.2.1-py3-none-any.whl",
+          "source_sha256": "ca140b45d5325a9478f880e351484f62fef15f336462e449ca0c03c873d589c2"
+        },
+        {
+          "path": "licenses/python/setuptools-84.2.1/wheel/setuptools/_vendor/packaging-26.3.dist-info/licenses/LICENSE",
+          "sha256": "cad1ef5bd340d73e074ba614d26f7deaca5c7940c3d8c34852e65c4909686c48",
+          "source": "https://files.pythonhosted.org/packages/ef/55/6dc6d6bb953bdfc52519a0059592c52b6e3b8ad51cf8256dffceb55b0610/setuptools-84.2.1-py3-none-any.whl",
+          "source_sha256": "ca140b45d5325a9478f880e351484f62fef15f336462e449ca0c03c873d589c2"
+        },
+        {
+          "path": "licenses/python/setuptools-84.2.1/wheel/setuptools/_vendor/packaging-26.3.dist-info/licenses/LICENSE.APACHE",
+          "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594",
+          "source": "https://files.pythonhosted.org/packages/ef/55/6dc6d6bb953bdfc52519a0059592c52b6e3b8ad51cf8256dffceb55b0610/setuptools-84.2.1-py3-none-any.whl",
+          "source_sha256": "ca140b45d5325a9478f880e351484f62fef15f336462e449ca0c03c873d589c2"
+        },
+        {
+          "path": "licenses/python/setuptools-84.2.1/wheel/setuptools/_vendor/packaging-26.3.dist-info/licenses/LICENSE.BSD",
+          "sha256": "b70e7e9b742f1cc6f948b34c16aa39ffece94196364bc88ff0d2180f0028fac5",
+          "source": "https://files.pythonhosted.org/packages/ef/55/6dc6d6bb953bdfc52519a0059592c52b6e3b8ad51cf8256dffceb55b0610/setuptools-84.2.1-py3-none-any.whl",
+          "source_sha256": "ca140b45d5325a9478f880e351484f62fef15f336462e449ca0c03c873d589c2"
+        },
+        {
+          "path": "licenses/python/setuptools-84.2.1/wheel/setuptools/_vendor/platformdirs-4.4.0.dist-info/licenses/LICENSE",
+          "sha256": "29e0fd62e929850e86eb28c3fdccf0cefdf4fa94879011cffb3d0d4bed6d4db6",
+          "source": "https://files.pythonhosted.org/packages/ef/55/6dc6d6bb953bdfc52519a0059592c52b6e3b8ad51cf8256dffceb55b0610/setuptools-84.2.1-py3-none-any.whl",
+          "source_sha256": "ca140b45d5325a9478f880e351484f62fef15f336462e449ca0c03c873d589c2"
+        },
+        {
+          "path": "licenses/python/setuptools-84.2.1/wheel/setuptools/_vendor/tomli-2.4.0.dist-info/licenses/LICENSE",
+          "sha256": "b80816b0d530b8accb4c2211783790984a6e3b61922c2b5ee92f3372ab2742fe",
+          "source": "https://files.pythonhosted.org/packages/ef/55/6dc6d6bb953bdfc52519a0059592c52b6e3b8ad51cf8256dffceb55b0610/setuptools-84.2.1-py3-none-any.whl",
+          "source_sha256": "ca140b45d5325a9478f880e351484f62fef15f336462e449ca0c03c873d589c2"
+        },
+        {
+          "path": "licenses/python/setuptools-84.2.1/wheel/setuptools/_vendor/wheel-0.46.3.dist-info/licenses/LICENSE.txt",
+          "sha256": "30c23618679108f3e8ea1d2a658c7ca417bdfc891c98ef1a89fa4ff0c9828654",
+          "source": "https://files.pythonhosted.org/packages/ef/55/6dc6d6bb953bdfc52519a0059592c52b6e3b8ad51cf8256dffceb55b0610/setuptools-84.2.1-py3-none-any.whl",
+          "source_sha256": "ca140b45d5325a9478f880e351484f62fef15f336462e449ca0c03c873d589c2"
+        },
+        {
+          "path": "licenses/python/setuptools-84.2.1/wheel/setuptools/_vendor/zipp-3.23.0.dist-info/licenses/LICENSE",
+          "sha256": "5a57cb4db85e2a2dd88c290628908add57e3451449e0a9a71fdfb38776fd759d",
+          "source": "https://files.pythonhosted.org/packages/ef/55/6dc6d6bb953bdfc52519a0059592c52b6e3b8ad51cf8256dffceb55b0610/setuptools-84.2.1-py3-none-any.whl",
+          "source_sha256": "ca140b45d5325a9478f880e351484f62fef15f336462e449ca0c03c873d589c2"
+        },
+        {
+          "path": "licenses/python/setuptools-84.2.1/wheel/setuptools-84.2.1.dist-info/licenses/LICENSE",
+          "sha256": "86da0f01aeae46348a3c3d465195dc1ceccde79f79e87769a64b8da04b2a4741",
+          "source": "https://files.pythonhosted.org/packages/ef/55/6dc6d6bb953bdfc52519a0059592c52b6e3b8ad51cf8256dffceb55b0610/setuptools-84.2.1-py3-none-any.whl",
+          "source_sha256": "ca140b45d5325a9478f880e351484f62fef15f336462e449ca0c03c873d589c2"
+        },
+        {
+          "path": "licenses/python/setuptools-84.2.1/wheel/setuptools/_vendor/autocommand-2.2.2.dist-info/LICENSE",
+          "sha256": "ade78d04982d69972d444a8e14a94f87a2334dd3855cc80348ea8e240aa0df2d",
+          "source": "https://files.pythonhosted.org/packages/ef/55/6dc6d6bb953bdfc52519a0059592c52b6e3b8ad51cf8256dffceb55b0610/setuptools-84.2.1-py3-none-any.whl",
+          "source_sha256": "ca140b45d5325a9478f880e351484f62fef15f336462e449ca0c03c873d589c2"
+        },
+        {
+          "path": "licenses/python/setuptools-84.2.1/wheel/setuptools/_vendor/backports.tarfile-1.2.0.dist-info/LICENSE",
+          "sha256": "86da0f01aeae46348a3c3d465195dc1ceccde79f79e87769a64b8da04b2a4741",
+          "source": "https://files.pythonhosted.org/packages/ef/55/6dc6d6bb953bdfc52519a0059592c52b6e3b8ad51cf8256dffceb55b0610/setuptools-84.2.1-py3-none-any.whl",
+          "source_sha256": "ca140b45d5325a9478f880e351484f62fef15f336462e449ca0c03c873d589c2"
+        },
+        {
+          "path": "licenses/python/setuptools-84.2.1/wheel/setuptools/_vendor/jaraco.text-4.0.0.dist-info/LICENSE",
+          "sha256": "86da0f01aeae46348a3c3d465195dc1ceccde79f79e87769a64b8da04b2a4741",
+          "source": "https://files.pythonhosted.org/packages/ef/55/6dc6d6bb953bdfc52519a0059592c52b6e3b8ad51cf8256dffceb55b0610/setuptools-84.2.1-py3-none-any.whl",
+          "source_sha256": "ca140b45d5325a9478f880e351484f62fef15f336462e449ca0c03c873d589c2"
+        }
+      ]
+    },
+    {
+      "ecosystem": "PyPI",
+      "name": "shiboken6",
+      "version": "6.12.0",
+      "license": "LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only",
+      "authors": "Qt for Python Team <pyside@qt-project.org>",
+      "source": "https://pypi.org/project/shiboken6/6.12.0/",
+      "scope": "locked release dependency, selected by platform and installer profile",
+      "texts": [
+        {
+          "path": "licenses/python/shiboken6-6.12.0/LGPL-3.0-only.txt",
+          "sha256": "da7eabb7bafdf7d3ae5e9f223aa5bdc1eece45ac569dc21b3b037520b4464768",
+          "source": "https://raw.githubusercontent.com/pyside/pyside-setup/v6.12.0/LICENSES/LGPL-3.0-only.txt"
+        },
+        {
+          "path": "licenses/python/shiboken6-6.12.0/GPL-2.0-only.txt",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+          "source": "https://raw.githubusercontent.com/pyside/pyside-setup/v6.12.0/LICENSES/GPL-2.0-only.txt"
+        },
+        {
+          "path": "licenses/python/shiboken6-6.12.0/GPL-3.0-only.txt",
+          "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
+          "source": "https://raw.githubusercontent.com/pyside/pyside-setup/v6.12.0/LICENSES/GPL-3.0-only.txt"
+        },
+        {
+          "path": "licenses/python/shiboken6-6.12.0/Qt-GPL-exception-1.0.txt",
+          "sha256": "40678d338ce53cd93f8b22b281a2ecbcaa3ee65ce60b25ffb0c462b0530846b2",
+          "source": "https://raw.githubusercontent.com/pyside/pyside-setup/v6.12.0/LICENSES/Qt-GPL-exception-1.0.txt"
+        }
+      ]
+    },
+    {
+      "ecosystem": "PyPI",
+      "name": "textual",
+      "version": "8.2.8",
+      "license": "MIT",
+      "authors": "Will McGugan",
+      "source": "https://pypi.org/project/textual/8.2.8/",
+      "scope": "locked release dependency, selected by platform and installer profile",
+      "texts": [
+        {
+          "path": "licenses/python/textual-8.2.8/licenses/LICENSE",
+          "sha256": "94f290a762376dfdb7768e42070618b0abfd2a2799eab1b1c097816c3a39eb57"
+        }
+      ]
+    },
+    {
+      "ecosystem": "PyPI",
+      "name": "typing_extensions",
+      "version": "4.16.0",
+      "license": "PSF-2.0",
+      "authors": "\"Guido van Rossum, Jukka Lehtosalo, Łukasz Langa, Michael Lee\" <levkivskyi@gmail.com>",
+      "source": "https://pypi.org/project/typing_extensions/4.16.0/",
+      "scope": "locked release dependency, selected by platform and installer profile",
+      "texts": [
+        {
+          "path": "licenses/python/typing-extensions-4.16.0/licenses/LICENSE",
+          "sha256": "3b2f81fe21d181c499c59a256c8e1968455d6689d269aa85373bfb6af41da3bf"
+        }
+      ]
+    },
+    {
+      "ecosystem": "PyPI",
+      "name": "wheel",
+      "version": "0.48.0",
+      "license": "MIT",
+      "authors": "Daniel Holth <dholth@fastmail.fm>",
+      "source": "https://pypi.org/pypi/wheel/0.48.0/json",
+      "scope": "locked release dependency, selected by platform and installer profile",
+      "texts": [
+        {
+          "path": "licenses/python/wheel-0.48.0/wheel/wheel-0.48.0.dist-info/licenses/LICENSE.txt",
+          "sha256": "30c23618679108f3e8ea1d2a658c7ca417bdfc891c98ef1a89fa4ff0c9828654",
+          "source": "https://files.pythonhosted.org/packages/2e/29/69cfbb602cd91690c55d38ba9fe53e6a7e76a6fa647bf38f19c138d25449/wheel-0.48.0-py3-none-any.whl",
+          "source_sha256": "3217dcc807155e45db462d7ef2431f5ddda0d7273b700d05a67b271ceb1287ab"
+        }
+      ]
+    },
+    {
+      "name": "CPython Windows x64 runtime",
+      "version": "3.12.16+20261026",
+      "ecosystem": "python-build-standalone",
+      "source_url": "https://github.com/astral-sh/python-build-standalone/releases/tag/20261026",
+      "source_sha256": "37b4eb2818fee605fefa75ed156c4f2e1aaeaebaf662f9b30177c842ee16c48f",
+      "texts": [
+        {
+          "path": "licenses/python-runtime/LICENSE.bdb.txt",
+          "sha256": "8f2d533ab34899499d5b07f209854b101b17dba2c69f3251860aecf3e4005faa"
+        },
+        {
+          "path": "licenses/python-runtime/LICENSE.bzip2.txt",
+          "sha256": "bd5628cc76fb0ebf9c657d1dd4d1a240a1a7b216c31663e7bbf1131c0b70a910"
+        },
+        {
+          "path": "licenses/python-runtime/LICENSE.cpython.txt",
+          "sha256": "8fe98bf9822926d854f56ffd8d97877d8b942617aa44eb7ea77fd99e22f2537e"
+        },
+        {
+          "path": "licenses/python-runtime/LICENSE.expat.txt",
+          "sha256": "8a9cfe4b5924f4b25881aa0c9f5e4561c5f31065d0c4a13cdcdbcf917edf39aa"
+        },
+        {
+          "path": "licenses/python-runtime/LICENSE.libX11.txt",
+          "sha256": "f353accfe2976df31ea297a77d1d454bd51ef6be8c3df39bd6aca95901579357"
+        },
+        {
+          "path": "licenses/python-runtime/LICENSE.libXau.txt",
+          "sha256": "cec808cd2163fccdc8de4a91d526490777afbaeea060e1168c40a804694b7444"
+        },
+        {
+          "path": "licenses/python-runtime/LICENSE.libedit.txt",
+          "sha256": "d9932ccdd42eccf6cdded7bcb35b088e64cfc7c24d355af2cc0d02edb6b637d3"
+        },
+        {
+          "path": "licenses/python-runtime/LICENSE.libffi.txt",
+          "sha256": "9afb8970cd29fc1031fa647278e4bef613399e2e3468a1e3a397f4d158c6101c"
+        },
+        {
+          "path": "licenses/python-runtime/LICENSE.liblzma.txt",
+          "sha256": "d87d218dd908b3243ec4cbc72af400e5b7437513ea9d9229291d0812b8464fec"
+        },
+        {
+          "path": "licenses/python-runtime/LICENSE.libuuid.txt",
+          "sha256": "cbccaa3efe07a9a602751375085be572d4410a250b996716fbe8c5255c7ec6f2"
+        },
+        {
+          "path": "licenses/python-runtime/LICENSE.libxcb.txt",
+          "sha256": "29a9539190e6de1af5fd06a9139c7103137cd1f9290b08c7b11bce89c01c14d2"
+        },
+        {
+          "path": "licenses/python-runtime/LICENSE.mpdecimal.txt",
+          "sha256": "f094277cd46e1f6e4d87916cc4b51e22f613d45eb81f48231c3cb7caf8fc8a6a"
+        },
+        {
+          "path": "licenses/python-runtime/LICENSE.ncurses.txt",
+          "sha256": "4f571cad3ea6c888bf0a7092e5b215dddb3142e9e3f1857fd5fac6cf13d345d7"
+        },
+        {
+          "path": "licenses/python-runtime/LICENSE.openssl-3.txt",
+          "sha256": "ed72ce2b51ee58f117e5a021e2e04af158857f40269fbc03491f0b2a99dbcc96"
+        },
+        {
+          "path": "licenses/python-runtime/LICENSE.sqlite.txt",
+          "sha256": "d8eb9aba7ef6b5ed06cb3ec19a7242316af2e5933c638eb67fb781c13884e01d"
+        },
+        {
+          "path": "licenses/python-runtime/LICENSE.tcl.txt",
+          "sha256": "41613eabfc08921a7da9c4bfd7f3ce5d5406f55214b253d89f392ed86eebeb8f"
+        },
+        {
+          "path": "licenses/python-runtime/LICENSE.tix.txt",
+          "sha256": "8cdff3addb9e9eb108c78e2cf5e05f26b216c098304945733bbec382b2eaef66"
+        },
+        {
+          "path": "licenses/python-runtime/LICENSE.zlib-ng.txt",
+          "sha256": "608fa5505ed17a5353e71ce74abec88569c3dc69515ff9a6f286f53bce4393cd"
+        },
+        {
+          "path": "licenses/python-runtime/LICENSE.zlib.txt",
+          "sha256": "365e36720db366054863235aea5d6f440142ab968834bfaf81fa9d187c99b9b8"
+        },
+        {
+          "path": "licenses/python-runtime/LICENSE.zstd.txt",
+          "sha256": "d3baadc2e1dd7a7e0b483633e6b39743c16a16f28d696baff507fcd451f3d4ad"
+        }
+      ]
+    }
+  ]
+}

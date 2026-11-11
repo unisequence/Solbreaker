@@ -1,0 +1,19 @@
+[package]
+name = "tfs_rapier_dynamic"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+rapier3d-f64 = { version = "0.26.1", features = ["enhanced-determinism"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "unwind"
