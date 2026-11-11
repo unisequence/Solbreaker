@@ -10,7 +10,7 @@ import tomllib
 from unittest.mock import patch
 import zipfile
 
-from tools.package_source import FILES, FOLDERS, GAME_CATALOG, WHEEL, package
+from tools.package_source import FILES, FOLDERS, GAME_CATALOG, SOURCE_CRATES, WHEEL, package
 from solbreaker.resource_copy import copy_resource_tree, resource_tree_facts
 
 
@@ -157,14 +157,19 @@ class PackagingTests(unittest.TestCase):
             for name in ('data', 'private_evidence', 'runtime', '.venv'):
                 (root/name).mkdir()
                 (root/name/'secret').write_text('private')
-            (root/'solbreaker/native/rapier_dynamic/target').mkdir(parents=True)
-            (root/'solbreaker/native/rapier_dynamic/target/secret').write_text('build')
+            for crate in SOURCE_CRATES:
+                target = root/'solbreaker/native'/crate/'target'
+                target.mkdir(parents=True)
+                (target/'secret').write_text('build')
             (root/'solbreaker/native/rapier_dynamic/tfs_rapier_dynamic.dll').write_bytes(b'old')
+            (root/'solbreaker/native/physics_core/libsolbreaker_physics_core.so').write_bytes(b'build')
+            (root/'solbreaker/native/physics_core/solbreaker_physics_core.dll').write_bytes(b'build')
             self.write_file_list(root)
             with patch('tools.package_source.ROOT', root):
                 result = package(root/'source.zip')
             with zipfile.ZipFile(result['archive']) as archive:
-                self.assertFalse(any('secret' in name or name.endswith('.dll') for name in archive.namelist()))
+                self.assertFalse(any('secret' in name or name.endswith(('.dll', '.so'))
+                                     for name in archive.namelist()))
                 self.assertTrue(archive.getinfo('Solbreaker/launch-gui.sh').external_attr >> 16 & 0o100)
                 self.assertIn('Solbreaker/LICENSE', archive.namelist())
                 self.assertIn('Solbreaker/THIRD_PARTY_NOTICES.md', archive.namelist())
@@ -173,9 +178,11 @@ class PackagingTests(unittest.TestCase):
 
     def test_dependency_notices_match_locked_rust_sources(self):
         root = Path(__file__).resolve().parents[1]
-        lock = tomllib.loads((root/'solbreaker/native/rapier_dynamic/Cargo.lock').read_text(encoding='utf-8'))
-        expected = {(item['name'], item['version'], item['checksum'])
-                    for item in lock['package'] if 'source' in item}
+        expected = set()
+        for crate in SOURCE_CRATES:
+            lock = tomllib.loads((root/'solbreaker/native'/crate/'Cargo.lock').read_text(encoding='utf-8'))
+            expected.update((item['name'], item['version'], item['checksum'])
+                            for item in lock['package'] if 'source' in item)
         manifest = json.loads((root/'licenses/manifest.json').read_text(encoding='utf-8'))
         actual = {(item['name'], item['version'], item['source_sha256'])
                   for item in manifest['components'] if item['ecosystem'] == 'crates.io'}

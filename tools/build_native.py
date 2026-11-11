@@ -1,4 +1,4 @@
-"""Build the four native kernels serially from their locked Rust sources."""
+"""Build the native kernels serially from their locked Rust sources."""
 import argparse
 import os
 import platform
@@ -12,6 +12,7 @@ import tempfile
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--jobs', type=int, default=2)
+    parser.add_argument('--physics-core', action='store_true', help='Also build the experimental native physics owner')
     args = parser.parse_args()
     if (sys.platform not in ('linux', 'win32') or platform.machine().lower() not in ('amd64', 'x86_64')
             or not 1 <= args.jobs <= 8):
@@ -19,6 +20,8 @@ def main():
     root = Path(__file__).resolve().parents[1]/'solbreaker/native'
     names = dict(sim_core='tfs_sim_core', impact_core='tfs_impact_core',
                  armor_query='tfs_armor_query', rapier_dynamic='tfs_rapier_dynamic')
+    if args.physics_core:
+        names['physics_core'] = 'solbreaker_physics_core'
     for directory, name in names.items():
         crate = root/directory
         subprocess.run(['cargo', 'build', '--locked', '--release', '--jobs', str(args.jobs),
@@ -26,7 +29,7 @@ def main():
         target = Path(os.environ.get('CARGO_TARGET_DIR', crate/'target')).resolve()
         filename = f'{name}.dll' if sys.platform == 'win32' else f'lib{name}.so'
         built = target/'release'/filename
-        destination = crate/(filename if directory == 'rapier_dynamic' or sys.platform == 'win32'
+        destination = crate/(filename if directory in ('rapier_dynamic', 'physics_core') or sys.platform == 'win32'
                              else f'{name}.so')
         descriptor, temporary = tempfile.mkstemp(prefix='.native-', dir=crate)
         os.close(descriptor)

@@ -1,0 +1,21 @@
+[package]
+name = "solbreaker_physics_core"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+libloading = "0.8"
+serde_json = "1"
+nalgebra = { version = "0.33", default-features = false, features = ["std"] }
+tfs_sim_core = { path = "../sim_core" }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "unwind"

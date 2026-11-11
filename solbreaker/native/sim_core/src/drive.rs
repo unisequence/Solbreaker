@@ -39,7 +39,7 @@ pub(crate) struct Prefix {
 }
 
 #[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct Spring {
+pub struct Spring {
     pub pose: Pose,
     pub velocity: [f64; 3],
     pub lean: [f64; 4],
@@ -133,7 +133,7 @@ fn spring_step(value: f64, goal: f64, velocity: f64, feed: f64, frequency: f64, 
     )
 }
 
-fn spring_pose(
+pub fn spring_pose(
     previous: Pose,
     target: Pose,
     old_road: Pose,
@@ -192,7 +192,7 @@ fn spring_pose(
 }
 
 /// Scalar MapTerrain.height, including clamping and interpolation order.
-pub(crate) fn terrain_height(terrain: Terrain, heights: &[u16], x: f64, z: f64) -> f64 {
+pub fn terrain_height(terrain: Terrain, heights: &[u16], x: f64, z: f64) -> f64 {
     let size = terrain.size as usize;
     let last = (size - 1) as f64;
     let fx = ((x - terrain.min_x) * size as f64 / terrain.width).clamp(0.0, last);

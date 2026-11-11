@@ -22,6 +22,7 @@ FILES = ('README.md', 'pyproject.toml', '.gitignore', 'setup.sh', 'setup.ps1',
 FOLDERS = ('solbreaker', 'tools', 'tests', 'examples', 'licenses', 'docs', 'requirements')
 OPTIONAL = ('LICENSE', 'LICENSE.md', 'LICENSE.txt')
 CRATES = ('sim_core', 'impact_core', 'armor_query', 'rapier_dynamic')
+SOURCE_CRATES = CRATES + ('physics_core',)
 WHEEL = 'pybullet-3.2.7-cp312-cp312-win_amd64.whl'
 GAME_CATALOG = 'solbreaker/assets/build-11.21.0.1235_7376187-files.json.gz'
 FORBIDDEN_SUFFIXES = frozenset(('.pem', '.key', '.p12', '.pfx', '.sqlite', '.sqlite3',
@@ -45,7 +46,9 @@ def source_name(name):
 
 def build_artifact(name):
     path = PurePosixPath(name)
-    if len(path.parts) == 4 and path.parts[:2] == ('solbreaker', 'native') and path.parts[2] in CRATES:
+    if len(path.parts) == 4 and path.parts[:2] == ('solbreaker', 'native') and path.parts[2] in SOURCE_CRATES:
+        if path.parts[2] == 'physics_core':
+            return path.name in ('libsolbreaker_physics_core.so', 'solbreaker_physics_core.dll')
         return (path.name.endswith('.build.json') or path.name in
                 {prefix+'tfs_'+path.parts[2]+suffix for prefix in ('', 'lib')
                  for suffix in ('.so', '.dll', '.dylib')})
@@ -92,7 +95,7 @@ def source_inputs():
                 relative = path.relative_to(ROOT).as_posix()
                 if path.is_symlink():
                     raise ValueError('Source archive refuses symbolic links: '+relative)
-                if child == '__pycache__' or relative in {'solbreaker/native/'+crate+'/target' for crate in CRATES}:
+                if child == '__pycache__' or relative in {'solbreaker/native/'+crate+'/target' for crate in SOURCE_CRATES}:
                     children.remove(child)
             for filename in files:
                 path = directory/filename

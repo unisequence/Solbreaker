@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "recorded_on": "2026-11-10",
-  "scope": "Rust lockfile closure and all Python versions pinned in requirements/lock.json. Python packages are installed separately using verified hashes.",
+  "scope": "Rust lockfile closure and all Python versions pinned in requirements/lock.json. Python packages are installed separately using verified hashes. Includes additional dependencies of the experimental physics_core lockfile.",
   "components": [
     {
       "ecosystem": "crates.io",
@@ -2284,6 +2284,110 @@
         {
           "path": "licenses/python-runtime/LICENSE.zstd.txt",
           "sha256": "d3baadc2e1dd7a7e0b483633e6b39743c16a16f28d696baff507fcd451f3d4ad"
+        }
+      ]
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "cfg-if",
+      "version": "1.0.5",
+      "license": "MIT OR Apache-2.0",
+      "authors": [
+        "Alex Crichton <alex@alexcrichton.com>"
+      ],
+      "source": "https://crates.io/api/v1/crates/cfg-if/1.0.5/download",
+      "source_sha256": "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600",
+      "repository": "https://github.com/rust-lang/cfg-if",
+      "texts": [
+        {
+          "path": "licenses/rust/cfg-if-1.0.5/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "path": "licenses/rust/cfg-if-1.0.5/LICENSE-MIT",
+          "sha256": "378f5840b258e2779c39418f3f2d7b2ba96f1c7917dd6be0713f88305dbda397"
+        }
+      ]
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "itoa",
+      "version": "1.0.19",
+      "license": "MIT OR Apache-2.0",
+      "authors": [
+        "David Tolnay <dtolnay@gmail.com>"
+      ],
+      "source": "https://crates.io/api/v1/crates/itoa/1.0.19/download",
+      "source_sha256": "3bd1574e617a9a6c1f8f8181bd7e841e1f20e4277607ef28945765188d6284d4",
+      "repository": "https://github.com/dtolnay/itoa",
+      "texts": [
+        {
+          "path": "licenses/rust/itoa-1.0.19/LICENSE-APACHE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a"
+        },
+        {
+          "path": "licenses/rust/itoa-1.0.19/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+        }
+      ]
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "libloading",
+      "version": "0.8.9",
+      "license": "ISC",
+      "authors": [
+        "Simonas Kazlauskas <libloading@kazlauskas.me>"
+      ],
+      "source": "https://crates.io/api/v1/crates/libloading/0.8.9/download",
+      "source_sha256": "d7c4b02199fee7c5d21a5ae7d8cfa79a6ef5bb2fc834d6e9058e89c825efdc55",
+      "repository": "https://github.com/nagisa/rust_libloading/",
+      "texts": [
+        {
+          "path": "licenses/rust/libloading-0.8.9/LICENSE",
+          "sha256": "b29f8b01452350c20dd1af16ef83b598fea3053578ccc1c7a0ef40e57be2620f"
+        }
+      ]
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "syn",
+      "version": "3.0.10",
+      "license": "MIT OR Apache-2.0",
+      "authors": [
+        "David Tolnay <dtolnay@gmail.com>"
+      ],
+      "source": "https://crates.io/api/v1/crates/syn/3.0.10/download",
+      "source_sha256": "4ae9ccbea3a7b0b09443036490c8f34a8b1b760fd345e5c0dae0aac718faea79",
+      "repository": "https://github.com/dtolnay/syn",
+      "texts": [
+        {
+          "path": "licenses/rust/syn-3.0.10/LICENSE-APACHE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a"
+        },
+        {
+          "path": "licenses/rust/syn-3.0.10/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+        }
+      ]
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "windows-link",
+      "version": "0.2.1",
+      "license": "MIT OR Apache-2.0",
+      "authors": [],
+      "source": "https://crates.io/api/v1/crates/windows-link/0.2.1/download",
+      "source_sha256": "f0805222e57f7521d6a62e36fa9163bc891acd422f971defe97d64e70d0a4fe5",
+      "repository": "https://github.com/microsoft/windows-rs",
+      "texts": [
+        {
+          "path": "licenses/rust/windows-link-0.2.1/license-apache-2.0",
+          "sha256": "c16f8dcf1a368b83be78d826ea23de4079fe1b4469a0ab9ee20563f37ff3d44b"
+        },
+        {
+          "path": "licenses/rust/windows-link-0.2.1/license-mit",
+          "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
         }
       ]
     }
