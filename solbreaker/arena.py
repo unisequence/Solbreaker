@@ -3049,6 +3049,8 @@ class Arena:
         return moved
 
     def _ensure_drive_workers(self):
+        if getattr(self.world, '_native_physics', None) is not None:
+            return
         if (self._drive_workers_attempted or not isinstance(self.world,CollisionWorld)
                 or not self.world.build_ready
                 or sum(self._player_attached(v) for v in self.vehicles.values()) < 6):
@@ -3084,6 +3086,9 @@ class Arena:
 
     def _drive_vehicles(self, vehicles, dt, now):
         world = self.world
+        if getattr(world, '_native_physics', None) is not None:
+            self._last_drive_parallel = False
+            return {v.entity_id:self._drive(v,dt,now) for v in vehicles}
         adaptive = (os.environ.get('SOLBREAKER_SIM_WORKERS','auto') == 'auto'
             or os.environ.get('SOLBREAKER_ADAPTIVE_DRIVE') == '1')
         pool = self.drive_workers

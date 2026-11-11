@@ -330,6 +330,7 @@ def backend_status():
 
 def runtime_status(world,pool=None):
     native = getattr(world,'_rust_drive',None)
+    physics = getattr(world,'_native_physics',None)
     state = ('disabled' if pool is None else 'closed' if pool.closed else
              'failed' if pool.failed else 'closing' if pool.closing else
              'ready' if pool.ready else 'starting')
@@ -340,6 +341,8 @@ def runtime_status(world,pool=None):
         except ValueError:  # Process handle already closed during retirement.
             pass
     return dict(backend='rust' if native is not None and native.library is not None else 'python',
+                ground_physics='native' if physics is not None else 'hybrid',
+                native_physics_steps=physics.steps if physics is not None else 0,
                 vehicle_collision='proxy' if getattr(getattr(world,'assets',None),'contact_proxies',None) else 'mesh',
                 native_moves=dict(native.stats) if native is not None else {},
                 worker_processes=pool.count if pool is not None and pool.ready else 0,

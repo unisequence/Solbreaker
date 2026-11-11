@@ -3,6 +3,7 @@
 LICENSE
 README.md
 THIRD_PARTY_NOTICES.md
+docs/NATIVE_PHYSICS.md
 docs/SOURCES.md
 examples/network-public.toml
 launch-gui.cmd
@@ -140,6 +141,8 @@ licenses/rust/bytemuck-1.25.2/LICENSE-MIT
 licenses/rust/bytemuck-1.25.2/LICENSE-ZLIB
 licenses/rust/byteorder-1.5.0/COPYING
 licenses/rust/byteorder-1.5.0/LICENSE-MIT
+licenses/rust/cfg-if-1.0.5/LICENSE-APACHE
+licenses/rust/cfg-if-1.0.5/LICENSE-MIT
 licenses/rust/crossbeam-0.8.5/LICENSE-APACHE
 licenses/rust/crossbeam-0.8.5/LICENSE-MIT
 licenses/rust/crossbeam-channel-0.5.17/LICENSE-APACHE
@@ -177,6 +180,9 @@ licenses/rust/indexmap-2.14.2/LICENSE-APACHE
 licenses/rust/indexmap-2.14.2/LICENSE-MIT
 licenses/rust/itoa-1.0.18/LICENSE-APACHE
 licenses/rust/itoa-1.0.18/LICENSE-MIT
+licenses/rust/itoa-1.0.19/LICENSE-APACHE
+licenses/rust/itoa-1.0.19/LICENSE-MIT
+licenses/rust/libloading-0.8.9/LICENSE
 licenses/rust/libm-0.2.16/LICENSE.txt
 licenses/rust/log-0.4.35/LICENSE-APACHE
 licenses/rust/log-0.4.35/LICENSE-MIT
@@ -240,6 +246,8 @@ licenses/rust/stable_deref_trait-1.2.1/LICENSE-APACHE
 licenses/rust/stable_deref_trait-1.2.1/LICENSE-MIT
 licenses/rust/syn-2.0.119/LICENSE-APACHE
 licenses/rust/syn-2.0.119/LICENSE-MIT
+licenses/rust/syn-3.0.10/LICENSE-APACHE
+licenses/rust/syn-3.0.10/LICENSE-MIT
 licenses/rust/syn-3.0.9/LICENSE-APACHE
 licenses/rust/syn-3.0.9/LICENSE-MIT
 licenses/rust/thiserror-2.0.21/LICENSE-APACHE
@@ -253,6 +261,8 @@ licenses/rust/unicode-ident-1.0.27/LICENSE-APACHE
 licenses/rust/unicode-ident-1.0.27/LICENSE-MIT
 licenses/rust/unicode-ident-1.0.27/LICENSE-UNICODE
 licenses/rust/wide-0.7.33/LICENSE-ZLIB.md
+licenses/rust/windows-link-0.2.1/license-apache-2.0
+licenses/rust/windows-link-0.2.1/license-mit
 licenses/rust/zmij-1.0.23/LICENSE-MIT
 pyproject.toml
 release-files.txt
@@ -367,6 +377,12 @@ solbreaker/native/contact_queries.c
 solbreaker/native/impact_core/Cargo.lock
 solbreaker/native/impact_core/Cargo.toml
 solbreaker/native/impact_core/src/lib.rs
+solbreaker/native/physics_core/Cargo.lock
+solbreaker/native/physics_core/Cargo.toml
+solbreaker/native/physics_core/src/bullet_api.rs
+solbreaker/native/physics_core/src/ground.rs
+solbreaker/native/physics_core/src/lib.rs
+solbreaker/native/physics_core/src/support.rs
 solbreaker/native/rapier_dynamic/Cargo.lock
 solbreaker/native/rapier_dynamic/Cargo.toml
 solbreaker/native/rapier_dynamic/src/lib.rs
@@ -384,6 +400,7 @@ solbreaker/native/sim_core/src/measured_support.rs
 solbreaker/native/sim_core/src/support_slice.rs
 solbreaker/native/support_checks/_support_checks.pyx
 solbreaker/native/windows_profile.S
+solbreaker/native_physics.py
 solbreaker/native_rooms.py
 solbreaker/network.py
 solbreaker/orientation.py
@@ -444,6 +461,7 @@ tests/test_diagnostic_fast_paths.py
 tests/test_launcher_stdin.py
 tests/test_login_preferences.py
 tests/test_management.py
+tests/test_native_physics.py
 tests/test_native_windows.py
 tests/test_packaging.py
 tests/test_profile_redirects.py

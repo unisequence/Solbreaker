@@ -12,7 +12,7 @@ The Windows native package includes Solbreaker's four Rust libraries and a local
 | Rapier's Rust dependencies | Geometry, numerics, containers, serialization and solver support | Exact versions, package checksums, authors, license declarations and text checksums are recorded in [the inventory](licenses/manifest.json). Original texts are under `licenses/rust/`. |
 | Bullet / PyBullet 3.2.7, Erwin Coumans, Yunfei Bai, Jasmine Hsu and contributors | Geometry queries and the Bullet physics backend | The Windows wheel retains its LICENSE.txt and AUTHORS.txt. Copies from the reference installation are under [PyBullet notices](licenses/python/pybullet-3.2.7/licenses/). The upstream license identifies exceptions for Extras and examples/ThirdPartyLibs. |
 
-The Rust inventory follows all 69 external packages in the checked-in Rapier Cargo.lock. It records the lockfile closure, including build and optional dependencies. Some packages declare alternative licenses. Their original texts and declarations are retained.
+The Rust inventory follows all 69 external packages in the checked-in Rapier Cargo.lock. It also includes additional dependencies from the experimental physics_core Cargo.lock. It records the lockfile closure, including build and optional dependencies. Some packages declare alternative licenses. Their original texts and declarations are retained.
 
 ## Python interface and server dependencies
 

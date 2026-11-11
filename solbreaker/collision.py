@@ -599,6 +599,7 @@ class CollisionWorld:
         self._carrying_supported = {}
         self._contact_support_cache = {}
         self._rust_drive = None
+        self._native_physics = None
         self._builder = self._build(assets,terrain,player_position,target_position,vehicles,
                                     visibility=visibility)
         if not incremental:
@@ -711,6 +712,12 @@ class CollisionWorld:
             # Copy the compact immutable height grid during incremental
             # loading, rather than adding an allocation to the first input.
             self._rust_drive._prepare_terrain()
+            yield
+        if os.environ.get('SOLBREAKER_NATIVE_PHYSICS') == '1':
+            if not self.sprung_tracks or self.wall_trampoline:
+                raise ValueError('Native physics requires sprung tracked physics')
+            from .native_physics import NativePhysics
+            self._native_physics = NativePhysics(self)
             yield
         if visibility and self._rapier_query_backend == 'bullet':
             from .static_visibility import VisibilityWorld
@@ -1950,6 +1957,10 @@ class CollisionWorld:
             raise
 
     def _close_steps(self):
+        if self._native_physics is not None:
+            self._native_physics.close()
+            self._native_physics = None
+            yield
         if self._visibility is not None:
             self._visibility.close()
             self._visibility = None
@@ -2716,6 +2727,8 @@ class CollisionWorld:
             self._visibility.destroy(key)
         if self._rapier is not None:
             self._rapier.destroy(key)
+        if self._native_physics is not None:
+            self._native_physics.query(operation='destroy', key=key)
         self.destruction_events.append((obj,yaw,angle))
         return True
 
@@ -2842,11 +2855,15 @@ class CollisionWorld:
             else:
                 moved,rest = False,dt
                 if state.grounded:
-                    if self._rust_drive is None:
-                        from .sim_native import RustDrive
-                        self._rust_drive = RustDrive(self)
-                    native = self._rust_drive.try_drive(entity,distance,yaw_delta,dt,state,
-                                                        planar_displacement)
+                    if self._native_physics is not None:
+                        native = self._native_physics.move(self,entity,distance,yaw_delta,dt,state,
+                                                          planar_displacement)
+                    else:
+                        if self._rust_drive is None:
+                            from .sim_native import RustDrive
+                            self._rust_drive = RustDrive(self)
+                        native = self._rust_drive.try_drive(entity,distance,yaw_delta,dt,state,
+                                                            planar_displacement)
                     if native is None:
                         pose,moved,rest = self._drive(entity,distance,yaw_delta,dt,state,
                                                        planar_displacement)
@@ -2860,6 +2877,8 @@ class CollisionWorld:
 
     def begin_ground_step(self):
         """Reset per-tick inputs for the opt-in planar contact solver."""
+        if self._native_physics is not None:
+            self._native_physics.sync(self)
         if self.experimental_ground_impacts:
             self.ground_commands.clear()
             self.ground_track_rates.clear()

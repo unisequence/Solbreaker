@@ -3,8 +3,8 @@
 //! Bullet remains behind the caller's sampling and validation callbacks. A
 //! rejected native attempt never publishes a partially integrated state.
 
-mod drive;
-mod math;
+pub mod drive;
+pub mod math;
 mod measured_support;
 mod support_slice;
 
