@@ -203,6 +203,95 @@ class CombatManeuverTests(unittest.TestCase):
         self.assertIsNone(ai.check_at)
         self.assertEqual(ai.route_watch_pause_at,1.4)
 
+    def test_reload_cover_backs_out_without_routing_the_nose_toward_cover(self):
+        director,bot,ai,enemy=self.scene(distance=20.)
+        ai.next_cover_check=0.
+        bot.reload_at=4.
+        director.arena.world._static_rays.side_effect=lambda starts,ends:[(1,None,.5)]*len(starts)
+        with patch.object(director.navigation,'request',side_effect=AssertionError('Cover requested A*')):
+            director._drive(bot,ai,0.)
+            self.assertEqual(bot.flags,ai.REVERSE)
+            self.assertLess(ai.cover_goal[2],bot.pose.position[2])
+            self.assertEqual(director.stats['cover_moves'],1)
+            # Feed the next observed pose; physical motion is exercised by
+            # the real-arena acceptance scenario, not synthesized here.
+            bot.pose=Pose((.5,0.,-1.5),0.)
+            bot.speed=-1.
+            director._drive(bot,ai,2.2)
+            self.assertEqual(bot.flags,ai.REVERSE)
+            bot.speed=0.
+            director._drive(bot,ai,4.1)
+            self.assertIsNone(ai.cover_goal)
+            self.assertEqual(bot.flags,0)
+            self.assertEqual(bot.reload_at,4.)
+
+    def test_lateral_cover_does_not_request_a_broadside_turn(self):
+        director,bot,ai,enemy=self.scene(distance=20.)
+        ai.next_cover_check=0.
+        # Only the old lateral 12-m endpoints are hidden by this obstacle.
+        director.arena.world._static_rays.side_effect=lambda starts,ends:[
+            (1,None,.5) if abs(p[0]-.5)>5. else (-1,None,1.) for p in starts]
+        with patch.object(director.navigation,'request',side_effect=AssertionError('Lateral cover route')):
+            director._drive(bot,ai,0.)
+        self.assertIsNone(ai.cover_goal)
+        self.assertEqual(bot.flags,0)
+
+    def test_loaded_close_combat_restores_front_with_hysteresis(self):
+        for yaw in (math.pi/2,-math.pi/2,math.pi):
+            with self.subTest(yaw=yaw):
+                director,bot,ai,enemy=self.scene(distance=20.)
+                ai.target_id=enemy.entity_id;ai.order_kind='combat'
+                ai.cover_goal=(12.,0.,.5);ai.cover_until=1.
+                bot.reload_at=1.
+                bot.pose=Pose(bot.pose.position,yaw)
+                director._drive(bot,ai,1.1)
+                self.assertIsNone(ai.cover_goal)
+                director._drive(bot,ai,1.2)
+                self.assertTrue(bot.flags&(ai.LEFT|ai.RIGHT))
+                self.assertFalse(bot.flags&(ai.FORWARD|ai.REVERSE))
+                # An in-progress correction continues below its entry angle.
+                bot.pose=Pose(bot.pose.position,math.radians(30.))
+                director._drive(bot,ai,1.3)
+                self.assertEqual(bot.flags,ai.LEFT)
+                bot.pose=Pose(bot.pose.position,math.radians(18.))
+                director._drive(bot,ai,1.4)
+                self.assertEqual(bot.flags,0)
+                bot.pose=Pose(bot.pose.position,math.radians(30.))
+                director._drive(bot,ai,1.5)
+                self.assertEqual(bot.flags,0)
+
+    def test_rear_cover_checks_dynamic_hulls_and_changed_navigation(self):
+        for obstacle in ('ally','terrain'):
+            with self.subTest(obstacle=obstacle):
+                director,bot,ai,enemy=self.scene(distance=20.)
+                ai.next_cover_check=0.
+                director.arena.world._static_rays.side_effect=lambda starts,ends:[(1,None,.5)]*len(starts)
+                director._drive(bot,ai,0.)
+                self.assertTrue(bot.flags&ai.REVERSE)
+                if obstacle=='ally':
+                    director.arena.vehicles[400]=vehicle(400,1,(.5,0.,-4.5))
+                else:
+                    director.navigation.walkable[:]=False
+                    director.navigation.generation+=1
+                director._drive(bot,ai,.1)
+                self.assertEqual(bot.flags,0)
+                self.assertIsNone(ai.cover_goal)
+
+    def test_cover_stop_keeps_a_settling_pause_before_resuming_a_distant_route(self):
+        for reason in ('expired','blocked'):
+            with self.subTest(reason=reason):
+                director,bot,ai,enemy=self.scene(distance=80.)
+                ai.next_cover_check=0.
+                director.arena.world._static_rays.side_effect=lambda starts,ends:[(1,None,.5)]*len(starts)
+                director._drive(bot,ai,0.)
+                if reason=='expired':ai.cover_until=.1
+                else:director.arena.vehicles[400]=vehicle(400,1,(.5,0.,-4.5))
+                with patch.object(director.navigation,'request',side_effect=AssertionError('No settling pause')):
+                    for now in (.1,.2,.4,.8,1.2):
+                        director._drive(bot,ai,now)
+                        self.assertEqual(bot.flags,0)
+                self.assertEqual(ai.maneuver_target,enemy.entity_id)
+
     def test_repairs_traffic_recovery_and_airborne_keep_priority(self):
         for gate in ('repair','traffic','recovery','airborne'):
             with self.subTest(gate=gate):
