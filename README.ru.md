@@ -2,6 +2,9 @@
 
 [English overview](README.md) · Подробное руководство на русском
 
+При подготовке отдельного клиента изменяются его EXE и UI-ресурсы.
+Состав и порядок проверок описаны в [Client patches](docs/CLIENT_PATCHES.md).
+
 Игровой сервер Solbreaker. Compatible with build 11.21.0.1235_7376187.
 Python отвечает за
 протокол и игровые правила, Rust — за тяжёлые расчёты, Rapier и Bullet —
