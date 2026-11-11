@@ -1,0 +1,42 @@
+name: Bug report / Ошибка
+description: Report a reproducible problem in the game, server or launcher.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        English or Russian is fine. Please report one problem per issue.
+        Do not attach passwords, tokens, databases, backups or game files.
+        Report security vulnerabilities privately through the Security tab.
+  - type: input
+    id: version
+    attributes:
+      label: Solbreaker version / Версия
+      placeholder: 0.1.0-alpha.1 or a commit hash
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment / Окружение
+      description: Client and server OS; local, LAN or remote server. Include CPU/RAM for performance issues.
+      placeholder: Windows 11 client, Debian 13 server; LAN; 7×7 bots
+    validations:
+      required: true
+  - type: input
+    id: scenario
+    attributes:
+      label: Map, vehicle and battle mode / Карта, танк и режим
+      description: If the problem happened in a battle.
+  - type: textarea
+    id: steps
+    attributes:
+      label: What happened and how to reproduce / Что произошло и как повторить
+      description: Include what you expected and whether it happens every time.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Logs, replay or screenshots / Логи, реплей или скриншоты
+      description: Attach the relevant excerpt or a small reproduction. Check for secrets before uploading.

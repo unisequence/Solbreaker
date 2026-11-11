@@ -15,11 +15,12 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from solbreaker.platform_io import read_regular_file
 
-FILES = ('README.md', 'pyproject.toml', '.gitignore', 'setup.sh', 'setup.ps1',
+FILES = ('README.md', 'README.ru.md', 'CHANGELOG.md', 'CONTRIBUTING.md', 'SECURITY.md',
+         'pyproject.toml', '.gitignore', 'setup.sh', 'setup.ps1',
          'start-server.sh', 'start-server.ps1', 'launch-gui.sh', 'launch-gui.ps1',
          'launch-gui.cmd', 'launch-gui.vbs', 'launch-tui.sh', 'THIRD_PARTY_NOTICES.md',
          'release-files.txt', 'launch-tui.cmd')
-FOLDERS = ('solbreaker', 'tools', 'tests', 'examples', 'licenses', 'docs', 'requirements')
+FOLDERS = ('solbreaker', 'tools', 'tests', 'examples', 'licenses', 'docs', 'requirements', '.github')
 OPTIONAL = ('LICENSE', 'LICENSE.md', 'LICENSE.txt')
 CRATES = ('sim_core', 'impact_core', 'armor_query', 'rapier_dynamic', 'physics_core')
 SOURCE_CRATES = CRATES
