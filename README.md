@@ -17,6 +17,8 @@ are selected inside the game.
 This is the first public alpha. Expect bugs, incomplete mechanics and changes
 between versions. Back up server data before updating. The project does not
 include the game client or its assets; you need your own compatible copy.
+Setup creates a separate client and applies build-pinned executable and UI
+adapters. Their scope and validation are described in [Client patches](docs/CLIENT_PATCHES.md).
 
 ## Start playing
 
