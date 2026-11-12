@@ -1,4 +1,5 @@
 """Steam download guidance and cancellable resource verification for the first-run wizard."""
+import sys
 import time
 
 from PySide6.QtCore import QThread, QTimer, QUrl, Signal
@@ -46,7 +47,10 @@ class DepotDialog(QDialog):
         layout.setContentsMargins(28, 24, 28, 24)
         layout.setSpacing(16)
         layout.addWidget(label(tr('Скачивание через Steam'), 'heading'))
-        layout.addWidget(label(tr('Steam загрузит совместимую Windows-сборку 11.21.0.1235_7376187. Объём около 21 ГиБ.'), 'muted'))
+        layout.addWidget(label(tr('Steam загрузит совместимую Windows-сборку 11.21.0.1235_7376187. '
+                                  'Около 21 ГиБ, примерно 30 минут при 100 Мбит/с без учёта проверки.'), 'muted'))
+        if sys.platform == 'win32':
+            layout.addWidget(label(tr('Для отдельного клиента оставь ещё около 22 ГиБ на диске назначения.'), 'muted'))
         layout.addWidget(label(tr('1. Войди в установленный Steam с аккаунтом, которому доступна игра.\n'
                                '2. Открой консоль Steam, вставь команду ниже и нажми Enter.\n'
                                '3. Дождись «Depot download complete», затем проверь файлы.')))

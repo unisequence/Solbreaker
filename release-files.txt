@@ -11,7 +11,10 @@ README.ru.md
 SECURITY.md
 THIRD_PARTY_NOTICES.md
 docs/CLIENT_PATCHES.md
+docs/DEVELOPMENT.ru.md
+docs/INSTALL.ru.md
 docs/NATIVE_PHYSICS.md
+docs/SERVER.ru.md
 docs/SOURCES.md
 examples/network-public.toml
 launch-gui.cmd
@@ -344,6 +347,7 @@ solbreaker/dava_scene.py
 solbreaker/desktop.py
 solbreaker/desktop_depot.py
 solbreaker/desktop_i18n.py
+solbreaker/discovery.py
 solbreaker/destructibles.py
 solbreaker/dev_map.py
 solbreaker/diagnostics.py
@@ -460,6 +464,7 @@ solbreaker/vector_math.py
 solbreaker/vehicle_data.py
 solbreaker/vehicles.py
 solbreaker/windows_profile_patch.py
+solbreaker/windows_shortcut.py
 start-server.ps1
 start-server.sh
 tests/__init__.py
@@ -470,6 +475,7 @@ tests/test_contact_queries.py
 tests/test_dependencies.py
 tests/test_desktop.py
 tests/test_diagnostic_fast_paths.py
+tests/test_discovery.py
 tests/test_launcher_stdin.py
 tests/test_login_preferences.py
 tests/test_management.py
@@ -492,6 +498,7 @@ tests/test_windows_python.py
 tools/build_contact_queries.py
 tools/build_native.py
 tools/build_support_checks.py
+tools/create-shortcut.vbs
 tools/install_dependencies.py
 tools/launch_gui.pyw
 tools/package_source.py

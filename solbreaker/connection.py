@@ -189,6 +189,35 @@ def configure_file(lab,path=None):
     return configure(lab,network)
 
 
+def configure_lan(lab, address, subnet):
+    from .network import ipv4
+    from .storage import account_access
+
+    lab = Path(lab)
+    host = ipv4(address)
+    network_scope = ipaddress.IPv4Network(subnet)
+    if ipaddress.IPv4Address(host) not in network_scope:
+        raise ValueError('The selected address is outside the sharing subnet')
+    with account_access(lab/'private'):
+        lab, manifest = ensure_lab(lab)
+        if manifest.get('client_only'):
+            raise ValueError('Select your server state folder')
+        profile_path = lab/'connection.json'
+        if profile_path.is_symlink() or (profile_path.exists() and not profile_path.is_file()):
+            raise ValueError('The connection profile must be a regular file')
+        current = load_network(lab, manifest)
+        if current.version == 2 or manifest.get('http_tls'):
+            raise ValueError('Use the network TOML to change a public HTTPS server')
+        listen = {name: f'{host}:{endpoint.port}' for name, endpoint in
+                  (('http', current.listen_http), ('login', current.listen_login), ('base', current.listen_base))}
+        advertise = dict(listen, http='http://'+listen['http'])
+        document = dict(version=1, listen=listen, advertise=advertise,
+                        services={'http': advertise['http']}, access={'client_networks': [str(network_scope)]})
+        result = configure(lab, parse_config(document))
+        atomic_write(profile_path, (json.dumps(connection_profile(lab), indent=2)+'\n').encode())
+        return result
+
+
 def connection_profile(lab):
     """Public management-HTTP/export v1 contract, never a manifest dump."""
     lab,manifest=ensure_lab(lab);network=load_network(lab,manifest)
@@ -220,6 +249,11 @@ def connect_client(lab,profile_path):
     path=Path(profile_path)
     if path.stat().st_size>CONNECTION_PROFILE_MAX_BYTES:raise ValueError('Connection profile is too large')
     profile=json.loads(path.read_text())
+    network,raw,ca,name=validate_connection_profile(profile,manifest)
+    return configure(lab,network,key=raw,client_only=True,tls_ca_certificate=ca,server_name=name)
+
+
+def validate_connection_profile(profile,manifest):
     keys={'version','game_version','exe_sha256','server_id','advertise','login_public_key'}
     if (not isinstance(profile,dict) or not keys <= set(profile)
             or set(profile) - keys - {'tls_ca_certificate', 'server_name'}
@@ -258,4 +292,4 @@ def connect_client(lab,profile_path):
             except ValueError:continue
             addresses.add(f'{address}/32')
         document['access']['client_networks'].extend(sorted(addresses))
-    return configure(lab,parse_config(document),key=raw,client_only=True,tls_ca_certificate=ca,server_name=name)
+    return parse_config(document),raw,ca,name

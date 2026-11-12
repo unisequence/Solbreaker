@@ -103,16 +103,19 @@ def required(value, label):
     return str(Path(value).expanduser().absolute())
 
 
-def command(action, settings, *, windows=None):
+def command(action, settings, *, windows=None, interface=None):
     """Build argv without a shell; both UIs use the exact same operations."""
     windows = sys.platform == 'win32' if windows is None else windows
     python = sys.executable
     if windows and Path(python).name.lower() == 'pythonw.exe':
         python = str(Path(python).with_name('python.exe'))
     state = (required(settings.state, 'папку данных сервера')
-             if action in ('prepare-server', 'server', 'network', 'server-name', 'export', 'backup') else '')
+             if action in ('prepare-server', 'server', 'network', 'lan', 'server-name', 'export', 'backup') else '')
     client = required(settings.client, 'папку клиента') if action in ('prepare-client', 'play', 'connect') else ''
     cli = [python, '-u', '-m', 'solbreaker']
+    if action == 'lan':
+        address, subnet = interface
+        return cli + ['configure-lan', '--state', state, '--address', address, '--subnet', subnet]
     if action == 'server-name':
         return cli + ['configure-server', '--state', state, '--name', settings.server_name]
     if action == 'prepare-server':
@@ -253,7 +256,7 @@ class Manager:
     def busy(self):
         return self.job is not None and self.job.running
 
-    def run(self, action, *, output=None):
+    def run(self, action, *, output=None, interface=None):
         if self.busy:
             raise ValueError('Дождись завершения текущей операции')
         job_settings = replace(self.settings, connection=output) if action == 'export' and output else self.settings
@@ -287,9 +290,9 @@ class Manager:
                     creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0)
             self.notice = 'Клиент запускается. Журнал в private/launcher-client.log'
         else:
-            if self.server is not None and self.server.running and action in ('prepare-server', 'network', 'server-name', 'backup'):
+            if self.server is not None and self.server.running and action in ('prepare-server', 'network', 'lan', 'server-name', 'backup'):
                 raise ValueError('Сначала останови локальный сервер')
-            self.job = Job(action, command(action, job_settings), self.output)
+            self.job = Job(action, command(action, job_settings, interface=interface), self.output)
         self.notice = {'server': 'Сервер запускается', 'prepare-server': 'Подготовка сервера',
                        'prepare-client': 'Подготовка клиента', 'play': self.notice}.get(action, 'Операция выполняется')
 

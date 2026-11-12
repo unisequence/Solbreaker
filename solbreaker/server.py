@@ -365,6 +365,14 @@ async def serve(lab: Path):
         transports.append(base)
         http = await asyncio.start_server(server.http, *server.network.listen_http.pair, limit=16384,
                                          ssl=getattr(server, 'http_tls_context', None))
+        from .discovery import advertise
+        try:
+            discovery = await advertise(server.network)
+        except OSError as error:
+            LOG.warning('LAN discovery is unavailable: %s', error)
+        else:
+            if discovery is not None:
+                transports.append(discovery)
         server.event("started", listen=server.network.document()['listen'],
                      advertise=server.network.document()['advertise'],server_id=server.server_id,
                      developer_mode=server.developer_mode, training_bot=getattr(server, 'training_bot', False),

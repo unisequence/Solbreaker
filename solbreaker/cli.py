@@ -24,6 +24,10 @@ def main(argv=None):
     configure = commands.add_parser('configure-network', help='Apply a network TOML to idle state')
     configure.add_argument('--state', type=Path, default=Path('data'))
     configure.add_argument('--config', type=Path, required=True)
+    lan = commands.add_parser('configure-lan', help='Share an idle server through a selected IPv4 network')
+    lan.add_argument('--state', type=Path, default=Path('data'))
+    lan.add_argument('--address', required=True)
+    lan.add_argument('--subnet', required=True)
     identity = commands.add_parser('configure-server', help='Set the display name of an idle server')
     identity.add_argument('--state', type=Path, default=Path('data'))
     identity.add_argument('--name', required=True)
@@ -89,6 +93,9 @@ def main(argv=None):
             from .bootstrap import prepare
             result = prepare(args.game, args.state, http_port=args.http_port, login_port=args.login_port,
                              vehicle=args.vehicle, username=args.username)
+        elif args.command == 'configure-lan':
+            from .connection import configure_lan
+            result = configure_lan(args.state, args.address, args.subnet)
         elif args.command == 'configure-server':
             from .server_identity import configure_name
             result = configure_name(args.state, args.name)

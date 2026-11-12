@@ -1,6 +1,7 @@
 """Guided game setup and desktop management for Solbreaker."""
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, replace
+import ipaddress
 import json
 import os
 import re
@@ -10,12 +11,13 @@ from urllib.parse import urlsplit
 
 from PySide6.QtCore import QRectF, Qt, QTimer
 from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPainterPath, QPixmap
+from PySide6.QtNetwork import QNetworkInterface
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFormLayout,
-    QFrame, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit,
+    QFrame, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit,
     QProgressBar, QPushButton, QRadioButton, QScrollArea, QSpinBox, QStackedWidget,
     QVBoxLayout, QWidget)
 
-from . import __version__, updates
+from . import __version__, discovery, updates
 from .management import PROJECT, Manager, Settings, read_log
 from .build_info import COMPATIBILITY
 from .desktop_i18n import tr
@@ -144,6 +146,25 @@ def document(path):
         return {}
 
 
+def discovery_interfaces():
+    interfaces = {}
+    for adapter in QNetworkInterface.allInterfaces():
+        flags = adapter.flags()
+        active = QNetworkInterface.IsUp | QNetworkInterface.IsRunning
+        if flags & active != active or flags & QNetworkInterface.IsLoopBack:
+            continue
+        name = adapter.humanReadableName() or adapter.name()
+        for address in adapter.addressEntries():
+            ip = address.ip().toString()
+            prefix = address.prefixLength()
+            if discovery.discoverable_ip(ip) and 0 <= prefix <= 32:
+                interface = ipaddress.IPv4Interface(f'{ip}/{prefix}')
+                scope = discovery.interface_scope(interface, f'{name} {adapter.name()}')
+                if scope:
+                    interfaces[str(interface.ip)] = (name, interface, scope)
+    return list(interfaces.values())
+
+
 def prepared_client(settings):
     root = Path(settings.client)
     return bool(document(root/'manifest.json')) and (root/'client/wotblitz.exe').is_file()
@@ -156,11 +177,12 @@ def local_profile(settings):
 def connection_matches(settings, local):
     client = document(Path(settings.client)/'manifest.json')
     profile_path = Path(settings.state)/'connection.json' if local else Path(settings.connection)
-    if local or not settings.server_url.strip():
-        profile = document(profile_path)
-        return bool(profile.get('server_id')) and profile['server_id'] == client.get('server_id')
+    from .network import load_network, origin
     try:
-        from .network import load_network, origin
+        if local or not settings.server_url.strip():
+            profile = document(profile_path)
+            return (bool(profile.get('server_id')) and profile['server_id'] == client.get('server_id')
+                    and load_network(Path(settings.client)).document()['advertise'] == profile.get('advertise'))
         target = urlsplit(settings.server_url)
         requested = origin(f'{target.scheme}://{target.netloc}', public=True)
         return load_network(Path(settings.client)).advertise_http == requested
@@ -244,7 +266,23 @@ class SetupWizard(QDialog):
             second.addWidget(label(tr('Другую папку и сетевые параметры можно выбрать в разделе «Параметры».'), 'muted'))
         else:
             second.addWidget(label(tr('К какому серверу подключиться?'), 'heading'))
-            second.addWidget(label(tr('Адрес или файл подключения даст владелец сервера.'), 'muted'))
+            self.lan_scan = None
+            self.lan_started = False
+            self.lan_timer = QTimer(self)
+            self.lan_timer.timeout.connect(self.show_discovered)
+            row = QHBoxLayout()
+            self.lan_results = QComboBox()
+            self.lan_results.setAccessibleName(tr('Найденные серверы'))
+            self.lan_results.setPlaceholderText(tr('Найденные серверы'))
+            self.lan_results.setEnabled(False)
+            self.lan_results.activated.connect(self.choose_discovered)
+            row.addWidget(self.lan_results, 1)
+            self.search_button = button(tr('Найти серверы'), self.search_discovery)
+            row.addWidget(self.search_button)
+            second.addLayout(row)
+            self.lan_status = label('', 'muted')
+            second.addWidget(self.lan_status)
+            second.addWidget(label(tr('Можно также указать адрес или файл от владельца сервера.'), 'muted'))
             self.by_url = QRadioButton(tr('У меня есть адрес сервера'))
             self.by_file = QRadioButton(tr('У меня есть файл подключения'))
             self.by_url.setChecked(bool(settings.server_url.strip()) or local_profile(settings))
@@ -345,12 +383,62 @@ class SetupWizard(QDialog):
         self.url.setEnabled(self.by_url.isChecked())
         self.fields['connection'].setEnabled(self.by_file.isChecked())
 
+    def search_discovery(self):
+        if self.lan_timer.isActive():
+            return
+        self.lan_started = True
+        self.lan_results.clear()
+        self.lan_results.setEnabled(False)
+        self.search_button.setEnabled(False)
+        self.lan_status.setText(tr('Ищем серверы в LAN и Tailscale…'))
+        interfaces = [interface for _, interface, _ in discovery_interfaces()]
+        executor = ThreadPoolExecutor(max_workers=1)
+        self.lan_scan = executor.submit(discovery.discover, interfaces)
+        executor.shutdown(wait=False)
+        self.lan_timer.start(100)
+
+    def show_discovered(self):
+        if not self.lan_scan.done():
+            return
+        self.lan_timer.stop()
+        self.search_button.setEnabled(True)
+        try:
+            results = self.lan_scan.result()
+        except OSError:
+            self.lan_status.setText(tr('Не удалось проверить локальную сеть.'))
+            return
+        for server in results:
+            self.lan_results.addItem(f'{server.name} ({server.address})', server)
+        self.lan_results.setEnabled(bool(results))
+        self.lan_status.setText(tr('Выбери сервер из списка.' if results else
+                                   'Серверы не найдены. Проверь, что владелец открыл доступ и запустил сервер.'))
+
+    def choose_discovered(self, index):
+        server = self.lan_results.itemData(index)
+        if server is None:
+            return
+        from .connection import atomic_write
+
+        directory = self.window.config.resolve().parent/'discovered-servers'
+        path = directory/f'{server.server_id}-{server.address}-{server.port}.json'
+        try:
+            directory.mkdir(parents=True, exist_ok=True)
+            atomic_write(path, server.profile)
+        except (OSError, ValueError) as error:
+            self.show_error(error)
+            return
+        self.by_file.setChecked(True)
+        self.fields['connection'].setText(str(path))
+        self.error_label.setVisible(False)
+
     def show_step(self, index):
         self.pages.setCurrentIndex(index)
         self.step_label.setText((tr('Шаг 1 из 3 — файлы игры'), tr('Шаг 2 из 3 — сервер'), tr('Шаг 3 из 3 — подготовка'))[index])
         self.back.setVisible(index > 0)
         self.next.setText(tr('Подготовить') if index == 2 else tr('Далее'))
         self.error_label.setVisible(False)
+        if index == 1 and not self.local and not self.lan_started:
+            self.search_discovery()
 
     def previous(self):
         self.show_step(max(0, self.pages.currentIndex()-1))
@@ -761,6 +849,9 @@ class Window(QMainWindow):
         row.addWidget(self.stop_button)
         row.addStretch()
         column.addLayout(row)
+        self.share_lan_button = button(tr('Настроить доступ по LAN / VPN'), self.share_lan)
+        column.addWidget(self.share_lan_button)
+        column.addWidget(label(tr('Выбери сеть, затем запусти сервер. Друг увидит его в мастере подключения.'), 'muted'))
         column.addWidget(label(tr('Обслуживание'), 'subheading'))
         column.addWidget(label(tr('Резервная копия содержит аккаунты, прогресс и ключ сервера. Перед копированием останови сервер.'), 'muted'))
         tools = QHBoxLayout()
@@ -788,6 +879,8 @@ class Window(QMainWindow):
         column.addWidget(label(tr('Дополнительные параметры'), 'subheading'))
         column.addWidget(label(tr('Для первого запуска достаточно мастера на главном экране. Здесь можно изменить пути, порты и сетевую конфигурацию.'), 'muted'))
         column.addWidget(button(tr('Открыть мастер установки'), self.start_wizard))
+        if sys.platform == 'win32':
+            column.addWidget(button(tr('Создать ярлык на рабочем столе'), self.create_windows_shortcut))
         form = QFormLayout()
         form.setVerticalSpacing(12)
         for key, title in (('game', tr('Оригинальная игра')), ('client', tr('Клиент Solbreaker')), ('state', tr('Данные сервера'))):
@@ -845,6 +938,17 @@ class Window(QMainWindow):
         values['reuse_native'] = self.reuse.isChecked()
         return Settings(**values)
 
+    def create_windows_shortcut(self):
+        from .windows_shortcut import create_shortcut
+
+        try:
+            create_shortcut()
+        except OSError:
+            self.error('Не удалось создать ярлык Solbreaker.')
+        else:
+            self.manager.notice = 'Ярлык Solbreaker создан на рабочем столе.'
+        self.poll()
+
     def sync_fields(self):
         for key, field in self.fields.items():
             value = getattr(self.manager.settings, key)
@@ -898,6 +1002,23 @@ class Window(QMainWindow):
 
     def play(self):
         self.execute('play')
+
+    def share_lan(self):
+        if not self.save():
+            return
+        adapters = discovery_interfaces()
+        options = [f'{name} ({interface.ip})' for name, interface, _ in adapters]
+        options.append(tr('Только на этом компьютере'))
+        choice, accepted = QInputDialog.getItem(self, 'Solbreaker', tr('Через какую сеть открыть сервер?'),
+                                                 options, 0, False)
+        if accepted:
+            choices = [(str(interface.ip), scope) for _, interface, scope in adapters]
+            choices.append(('127.0.0.1', '127.0.0.0/8'))
+            try:
+                self.manager.run('lan', interface=choices[options.index(choice)])
+            except (OSError, ValueError) as error:
+                self.error(error)
+            self.poll()
 
     def stop_server(self):
         self.manager.stop_server()
@@ -1014,6 +1135,8 @@ class Window(QMainWindow):
         owned = self.manager.server is not None and self.manager.server.running
         self.start_button.setEnabled(not owned and not self.manager.busy and status in ('Сервер остановлен', 'Ошибка запуска сервера'))
         self.stop_button.setEnabled(owned)
+        self.share_lan_button.setEnabled(not self.manager.busy and
+                                        status in ('Сервер остановлен', 'Ошибка запуска сервера'))
 
     def error(self, error):
         self.manager.notice = str(error)

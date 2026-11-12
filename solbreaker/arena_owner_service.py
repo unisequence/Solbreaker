@@ -18,6 +18,9 @@ from .arena_owner_transport import ArenaOwnerTransport
 from .motion import SIMULATION_INTERVAL
 
 
+# A full bot battle builds colliders, visibility and navigation before READY.
+ARENA_STARTUP_TIMEOUT = 120.0
+
 _INPUT_OPS = {
     135: 'ready', 145: 'control', 149: 'aim', 16: 'aim_entity',
     17: 'aim_entity_local', 138: 'fire', 13: 'autoaim',
@@ -109,7 +112,8 @@ class ArenaOwnerService:
     async def _load(self, job):
         arena = job.arena
         try:
-            job.owner = await AsyncArenaOwner.create(job.factory, timeout=self.timeout)
+            job.owner = await AsyncArenaOwner.create(job.factory, timeout=self.timeout,
+                                                     startup_timeout=ARENA_STARTUP_TIMEOUT)
             job.route = self.registry.register(arena.result_id, job.owner)
             account_id = job.factory.accounts[0]['id']
             initial = await job.route.request(Command('motion', time.monotonic(), account_id))
