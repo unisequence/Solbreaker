@@ -1,8 +1,51 @@
-"""Large static-ray batches share bounded Bullet workers without changing hits."""
+"""Collision startup and bounded static-ray batches."""
+from threading import Event, get_ident
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from solbreaker.collision import CollisionWorld
+
+
+class NativeStartupTests(unittest.TestCase):
+    def setUp(self):
+        self.world = CollisionWorld.__new__(CollisionWorld)
+        self.world._rapier = None
+        self.world.build_timings = {}
+        self.world._prepare_rapier_fixture = Mock(return_value='sealed.json')
+        self.started = Event()
+        self.rapier = Mock()
+        owner_thread = get_ident()
+
+        def load(path):
+            self.assertNotEqual(get_ident(), owner_thread)
+            self.assertEqual(path, 'sealed.json')
+            self.started.set()
+            return self.rapier, 10., 6.
+
+        def ground():
+            self.assertEqual(get_ident(), owner_thread)
+            self.assertTrue(self.started.wait(2))
+            yield
+
+        self.world._load_rapier_world = load
+        self.world._build_ground_physics = ground
+
+    def test_installs_world_after_both_builders_finish(self):
+        builder = self.world._build_native_parallel()
+        next(builder)
+        self.assertIsNone(self.world._rapier)
+        with self.assertRaises(StopIteration):
+            next(builder)
+        self.assertIs(self.world._rapier, self.rapier)
+        self.assertEqual(self.world.build_timings['rapier_worker_cpu_ms'], 6.)
+        self.rapier.close.assert_not_called()
+
+    def test_cancelled_arena_closes_the_constructed_rapier_world(self):
+        builder = self.world._build_native_parallel()
+        next(builder)
+        builder.close()
+        self.rapier.close.assert_called_once_with()
+        self.assertIsNone(self.world._rapier)
 
 
 class StaticRayBatchTests(unittest.TestCase):

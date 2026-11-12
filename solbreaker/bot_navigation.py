@@ -8,12 +8,15 @@ connections to the ground below them.
 from collections import deque, OrderedDict
 from dataclasses import dataclass, field
 from array import array
+import hashlib
 import heapq
 import math
+import time
 
 import numpy as np
 
 from .mobility import engine_acceleration, rolling_acceleration
+from .navigation_cache import NavigationCache, sample_coordinates
 
 
 @dataclass
@@ -154,13 +157,84 @@ class Navigation:
         radius += .3
         slope = min(s.max_slope for s in assets)*.85
         bounds = world.assets.bounds
-        x0,z0,x1,z1 = bounds
         cell,nx,nz = cls.dimensions(bounds)
         radius=max(radius,cell*.72)
         if nx*nz > cls.MAX_CELLS or min(nx,nz) < 2:
             raise ValueError('Map exceeds navigation grid budget')
-        xs,zs = np.meshgrid(x0+(np.arange(nx)+.5)*cell,z0+(np.arange(nz)+.5)*cell)
-        heights = world._terrain_heights(xs.ravel(),zs.ravel()).reshape(nz,nx)
+
+        started = time.monotonic()
+        prepared = getattr(getattr(world.assets, 'mesh_files', None), 'prepared', None)
+        cache = None
+        if prepared is not None:
+            from .collision import CollisionWorld
+            from .terrain import MapTerrain
+            if (getattr(world._terrain_heights, '__func__', None) is CollisionWorld._terrain_heights
+                    and type(world.terrain) is MapTerrain
+                    and getattr(world.terrain.height, '__func__', None) is MapTerrain.height):
+                cache = NavigationCache(prepared)
+        if cache is None:
+            xs,zs = sample_coordinates(bounds, cell, nx, nz)
+            heights = world._terrain_heights(xs.ravel(),zs.ravel()).reshape(nz,nx)
+        else:
+            heights = yield from cache.heights(bounds, cell, nx, nz, world._terrain_heights)
+        grid_key = None
+        build = lambda: cls._raster(world, bounds, cell, nx, nz, radius, height, slope, heights)
+        if cache is None:
+            raster = yield from build()
+        else:
+            grid_key = cache.key('raster', cell, nx, nz, radius, height, slope)
+            raster = yield from cache.get(grid_key, build)
+        nav = cls(bounds, heights, raster['base'], cell=cell, radius=radius, slope=slope)
+        offsets, indices = raster['offsets'], raster['indices']
+        for index, key in enumerate(raster['keys']):
+            cells = indices[offsets[index]:offsets[index+1]]
+            nav.breakables[int(key)] = cells
+            nav.counts.ravel()[cells] += 1
+        nav.walkable=~nav.base&(nav.counts==0)
+        nav._update_edges()
+        nav.footprints=footprints
+        climb_costs={}
+        for entity,scene in zip(entities,assets):
+            angle=nav._configured_uphill_slope(getattr(scene,'definition',None))
+            if angle is None:continue
+            nav.actor_slopes[entity]=angle
+            if angle<nav.slope:
+                if angle not in climb_costs:
+                    if cache is None:
+                        climb_costs[angle]=nav._uphill_costs(angle)
+                        yield
+                    else:
+                        def build_costs():
+                            table = np.frombuffer(nav._uphill_costs(angle), dtype=np.uint8)
+                            yield
+                            return {'table': table}
+
+                        key = cache.key('uphill', cell, nx, nz, angle)
+                        arrays = yield from cache.get(key, build_costs)
+                        climb_costs[angle] = arrays['table'].tobytes()
+                nav.actor_climb_costs[entity]=climb_costs[angle]
+        landmark_started = time.monotonic()
+        poses=getattr(world,'poses',{})
+        yield from nav._prepare_landmarks(((entity,getattr(poses.get(entity),'position',None))
+                                         for entity in entities), cache=cache, grid_key=grid_key)
+        route_started = time.monotonic()
+        # Initial routes use the current entities, spawn positions and goals.
+        for entity,goal in (goals or {}).items():
+            nav.request(entity,world.poses[entity].position,goal)
+            while nav.queue:
+                nav.step()
+                yield
+        nav.build_timings = dict(nav_grid_ms=(landmark_started-started)*1000,
+            nav_landmarks_ms=(route_started-landmark_started)*1000,
+            nav_routes_ms=(time.monotonic()-route_started)*1000)
+        if cache is not None:
+            nav.build_timings.update(nav_cache_hits=cache.hits, nav_cache_misses=cache.misses)
+        return nav
+
+    @staticmethod
+    def _raster(world, bounds, cell, nx, nz, radius, height, slope, heights):
+        x0,z0,x1,z1 = bounds
+        xs,zs = sample_coordinates(bounds, cell, nx, nz)
         blocked = np.zeros((nz,nx),bool)
         # Sample the complete footprint, not just the centre, at slopes/edges.
         for dx,dz in ((radius,0),(-radius,0),(0,radius),(0,-radius),
@@ -170,18 +244,7 @@ class Navigation:
             blocked |= np.abs(other-heights) > math.tan(slope)*math.hypot(dx,dz)
             yield
         blocked |= (xs<x0+radius)|(xs>x1-radius)|(zs<z0+radius)|(zs>z1-radius)
-        nav = cls(bounds,heights,blocked,cell=cell,radius=radius,slope=slope)
-        nav.footprints=footprints
-        climb_costs={}
-        for entity,scene in zip(entities,assets):
-            angle=nav._configured_uphill_slope(getattr(scene,'definition',None))
-            if angle is None:continue
-            nav.actor_slopes[entity]=angle
-            if angle<nav.slope:
-                if angle not in climb_costs:
-                    climb_costs[angle]=nav._uphill_costs(angle)
-                    yield
-                nav.actor_climb_costs[entity]=climb_costs[angle]
+        keys, object_offsets, all_indices = [], [0], []
         objects = [(None,world.assets.vertices,world.assets.triangles)]
         objects += [(key,obj.vertices,obj.triangles) for key,obj in world.assets.destructibles.items()]
         for key,vertices,triangles in objects:
@@ -235,24 +298,15 @@ class Navigation:
                         marked[iz[hit],ix[hit]]=True
                     yield
             if key is None:
-                nav.base |= marked
+                blocked |= marked
             else:
-                indices=np.flatnonzero(marked)
-                nav.breakables[key]=indices
-                nav.counts.ravel()[indices]+=1
-        nav.walkable=~nav.base&(nav.counts==0)
-        nav._update_edges()
-        poses=getattr(world,'poses',{})
-        yield from nav._prepare_landmarks((entity,getattr(poses.get(entity),'position',None))
-                                         for entity in entities)
-        # Initial routes are loading work, so a full team does not stand
-        # idle for seconds waiting for its first path during the live battle.
-        for entity,goal in (goals or {}).items():
-            nav.request(entity,world.poses[entity].position,goal)
-            while nav.queue:
-                nav.step()
-                yield
-        return nav
+                indices = np.flatnonzero(marked)
+                keys.append(key)
+                object_offsets.append(object_offsets[-1]+len(indices))
+                all_indices.append(indices)
+        return dict(base=blocked, keys=np.asarray(keys, dtype=np.int64),
+                    offsets=np.asarray(object_offsets, dtype=np.intp),
+                    indices=np.concatenate(all_indices) if all_indices else np.empty(0, dtype=np.intp))
 
     def _landmark_field(self, edges, seed, policy, costs, *, reverse=False):
         """Cooperative directed Dijkstra over permanent geometry only."""
@@ -285,7 +339,7 @@ class Navigation:
         if work:yield
         return distance
 
-    def _prepare_landmarks(self, spawns):
+    def _prepare_landmarks(self, spawns, *, cache=None, grid_key=None):
         """Publish complete lower-bound fields before any initial search."""
         if self.searches:raise RuntimeError('Prepare navigation landmarks before searches')
         spawns=tuple(spawns)
@@ -303,32 +357,67 @@ class Navigation:
         if seed is None:return
         costs=tuple(tuple(int(length*self.LANDMARK_SCALE*value/self.COST_SCALE)
                           for value in range(256)) for _,_,length in self.NEIGHBOURS)
-        unweighted=yield from self._landmark_field(permanent._edges,seed,None,costs)
-        farthest=seed
-        for begin in range(0,len(unweighted),self.LANDMARK_BATCH):
-            for node in range(begin,min(begin+self.LANDMARK_BATCH,len(unweighted))):
-                value=unweighted[node]
-                if value!=self.LANDMARK_INFINITY and value>unweighted[farthest]:farthest=node
-            yield
-        seeds=(seed,farthest) if farthest!=seed else (seed,)
+        def build_seeds():
+            unweighted = yield from self._landmark_field(permanent._edges, seed, None, costs)
+            farthest = seed
+            for begin in range(0,len(unweighted),self.LANDMARK_BATCH):
+                for node in range(begin,min(begin+self.LANDMARK_BATCH,len(unweighted))):
+                    value=unweighted[node]
+                    if value!=self.LANDMARK_INFINITY and value>unweighted[farthest]:
+                        farthest=node
+                yield
+            seeds = (seed,farthest) if farthest!=seed else (seed,)
+            return dict(seeds=np.asarray(seeds, dtype=np.intp), forward=np.asarray(unweighted))
+
+        if cache is None:
+            anchors = yield from build_seeds()
+        else:
+            anchors = yield from cache.get(cache.key('anchors', grid_key, seed), build_seeds)
+        seeds = tuple(map(int, anchors['seeds']))
+        unweighted = self._field_from_array(anchors['forward'])
         policies=tuple(dict.fromkeys(self.actor_climb_costs.get(entity) for entity,_ in spawns))
         prepared={}
         for policy in policies[:self.MAX_LANDMARK_POLICIES]:
-            fields=[]
-            for landmark in seeds:
-                if policy is None:
-                    if landmark==seed:
-                        forward=unweighted
-                    else:
-                        forward=yield from self._landmark_field(permanent._edges,landmark,None,costs)
-                    reverse=forward
-                else:
-                    forward=yield from self._landmark_field(permanent._edges,landmark,policy,costs)
-                    reverse=yield from self._landmark_field(permanent._edges,landmark,policy,costs,reverse=True)
-                fields.append((forward,reverse))
+            if cache is None:
+                fields = yield from self._policy_landmarks(permanent._edges, seeds, policy, costs, unweighted)
+            else:
+                policy_key = None if policy is None else hashlib.sha256(policy).hexdigest()
+
+                def build_policy():
+                    fields = yield from self._policy_landmarks(permanent._edges, seeds, policy, costs, unweighted)
+                    # An undirected field uses the same distances in both directions.
+                    return {'fields': np.asarray([pair[:1] if policy is None else pair for pair in fields])}
+
+                key = cache.key('policy', grid_key, seed, policy_key)
+                arrays = yield from cache.get(key, build_policy)
+                fields = []
+                for pair in arrays['fields']:
+                    forward = self._field_from_array(pair[0])
+                    reverse = forward if policy is None else self._field_from_array(pair[1])
+                    fields.append((forward, reverse))
             prepared[policy]=tuple(fields)
         if self.searches:raise RuntimeError('Navigation search started during landmark preparation')
         self._landmark_fields=prepared
+
+    @staticmethod
+    def _field_from_array(values):
+        field = array('I')
+        field.frombytes(np.asarray(values, dtype=np.uint32).tobytes())
+        return field
+
+    def _policy_landmarks(self, edges, seeds, policy, costs, unweighted):
+        fields = []
+        for landmark in seeds:
+            if policy is None and landmark == seeds[0]:
+                forward = unweighted
+            else:
+                forward = yield from self._landmark_field(edges, landmark, policy, costs)
+            if policy is None:
+                reverse = forward
+            else:
+                reverse = yield from self._landmark_field(edges, landmark, policy, costs, reverse=True)
+            fields.append((forward, reverse))
+        return fields
 
     def refresh(self, destroyed):
         changed=sorted(set(destroyed)-self.removed)

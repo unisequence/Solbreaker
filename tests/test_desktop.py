@@ -124,12 +124,36 @@ class DesktopTests(unittest.TestCase):
             banner = home.findChild(LauncherBanner)
             dock = self.window.play_button.parentWidget()
             self.assertFalse(home.findChildren(QScrollArea))
-            self.assertEqual(home.findChildren(QPushButton), [self.window.play_button])
+            self.assertEqual([item for item in home.findChildren(QPushButton) if item.isVisible()],
+                             [self.window.play_button])
             self.assertEqual(banner.geometry().left(), dock.geometry().left())
             self.assertEqual(banner.geometry().right(), dock.geometry().right())
             self.assertTrue(home.rect().contains(dock.geometry()),
                             (width, height, home.rect(), dock.geometry()))
             self.assertLess(banner.geometry().bottom(), dock.geometry().top())
+
+    def test_preparation_action_is_secondary_and_local(self):
+        from unittest.mock import patch
+
+        state = self.root/'state'
+        state.mkdir()
+        (state/'manifest.json').write_text('{}')
+        with patch.dict(os.environ, {'SOLBREAKER_MAP_PREWARM': '1', 'SOLBREAKER_MAP_CACHE_MIB': '1024'}):
+            with patch.object(self.window.manager, 'server_status', return_value='Сервер остановлен'):
+                self.window.own.setChecked(True)
+                self.window.refresh_status()
+                self.assertTrue(self.window.prepare_maps_button.isVisible())
+                self.assertTrue(self.window.prepare_maps_button.isEnabled())
+                self.assertTrue(self.window.play_button.isEnabled())
+                self.window.resize(920, 640)
+                self.app.processEvents()
+                dock = self.window.play_button.parentWidget()
+                self.assertTrue(self.window.stack.widget(0).rect().contains(dock.geometry()))
+                with patch.object(self.window, 'execute') as execute:
+                    self.window.prepare_maps_button.click()
+                    execute.assert_called_once_with('prepare-maps')
+                self.window.remote.setChecked(True)
+                self.assertFalse(self.window.prepare_maps_button.isVisible())
 
     def test_small_window_icon_has_a_contrasting_background(self):
         from solbreaker.desktop import application_icon

@@ -7,12 +7,21 @@ Body identifiers in returned hits belong to this query world.
 import pybullet as bullet
 
 
+def mesh_inputs(assets):
+    if len(assets.triangles):
+        yield None, assets.mesh_files.mesh(assets.vertices, assets.triangles)
+    for key, obj in assets.destructibles.items():
+        if len(obj.triangles):
+            yield key, assets.mesh_files.mesh(obj.vertices, obj.triangles)
+
+
 class VisibilityWorld:
     def __init__(self):
         self.cid = bullet.connect(bullet.DIRECT)
         if self.cid < 0:
             raise RuntimeError('Could not create visibility query world')
         self.breakables = {}
+        self.shape_count = 0
 
     def _mesh(self, path):
         shape = bullet.createCollisionShape(bullet.GEOM_MESH, fileName=path,
@@ -23,13 +32,12 @@ class VisibilityWorld:
         return body
 
     def build(self, assets):
-        if len(assets.triangles):
-            self._mesh(assets.mesh_files.mesh(assets.vertices, assets.triangles))
+        for key, path in mesh_inputs(assets):
+            body = self._mesh(path)
+            self.shape_count += 1
+            if key is not None:
+                self.breakables[key] = body
             yield
-        for key, obj in assets.destructibles.items():
-            if len(obj.triangles):
-                self.breakables[key] = self._mesh(assets.mesh_files.mesh(obj.vertices, obj.triangles))
-                yield
 
     def rays(self, starts, ends, threads):
         return bullet.rayTestBatch(starts, ends, collisionFilterMask=1,

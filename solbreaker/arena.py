@@ -75,7 +75,7 @@ class Arena:
                  vehicle_scenes=None, map_spec=None, recon_enabled=False, recon_game=None,
                  bot_enabled=False, training=None, step_budget=None, result_id=None,
                  build_world=True, bot_roster=None, bot_game=None, bot_scene_settings=(),
-                 prebattle_seconds=0.):
+                 prebattle_seconds=0., parallel_native_build=False):
         if (isinstance(prebattle_seconds, bool) or not isinstance(prebattle_seconds, (int, float))
                 or not math.isfinite(prebattle_seconds) or not 0 <= prebattle_seconds <= 60):
             raise ValueError('Invalid prebattle duration')
@@ -344,7 +344,8 @@ class Arena:
             if collision_scene is not None and build_world:
                 self.world = CollisionWorld(collision_scene,terrain,
                         vehicles={e:v.pose for e,v in self.vehicles.items()},incremental=incremental,
-                        vehicle_assets=entity_assets, visibility=bool(self.training_bots))
+                        vehicle_assets=entity_assets, visibility=bool(self.training_bots),
+                        parallel_native_build=parallel_native_build)
                 self.building = True
                 if self.world.build_ready:
                     while not self.advance_build():
@@ -397,15 +398,21 @@ class Arena:
             if self.bot_director is None:self.bot_director=BotDirector(self)
             if self.bot_director.navigation is None:
                 if self._bot_navigation_builder is None:
+                    self._navigation_build_started = time.monotonic()
+                    self._navigation_cpu_ms = 0.
                     goals={eid:self.bot_director.patrol_goal(self.vehicles[eid],self.training_bots[eid])
                            for eid in self.training_bots}
                     self._bot_navigation_builder=Navigation.build(self.world,self.training_bots,goals)
+                cpu = time.thread_time()
                 try:
                     next(self._bot_navigation_builder)
                     return False
                 except StopIteration as complete:
                     self.bot_director.navigation=complete.value
                     self._bot_navigation_builder=None
+                    self.navigation_build_ms = (time.monotonic()-self._navigation_build_started)*1000
+                finally:
+                    self._navigation_cpu_ms += (time.thread_time()-cpu)*1000
         # Replica construction belongs to loading for both build modes. A
         # synchronous caller otherwise pays build_spec/spawn on its first
         # live physics step (55 ms in the Fort/14 startup trace).
@@ -1225,6 +1232,9 @@ class Arena:
         if self.closed:
             return True
         self.retiring = True
+        if self._bot_navigation_builder is not None:
+            self._bot_navigation_builder.close()
+            self._bot_navigation_builder = None
         if self.drive_workers is not None:
             if not self.drive_workers.advance_close():
                 return False

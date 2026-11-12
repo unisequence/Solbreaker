@@ -151,11 +151,37 @@ class Destructible:
 
 class CollisionScene:
     """Immutable local asset data shared between successive training battles."""
-    def __init__(self, game, definition=None, map_spec=None):
+    def __init__(self, game, definition=None, map_spec=None, *, map_cache=None, terrain=None):
         from .vehicle_data import load_vehicle
         game = Path(game)
-        self.definition = definition = definition or load_vehicle(game)
-        self.map_spec = map_spec or load_map_spec(game, 'rudniki')
+        definition = definition or load_vehicle(game)
+        self._init_map(map_spec or load_map_spec(game, 'rudniki'), MeshFiles())
+        try:
+            self.cache_metrics = (map_cache.load(self, terrain) if map_cache is not None else {})
+            if self.mesh_files.prepared is None:
+                started = time.monotonic()
+                self._load_map()
+                self.cache_metrics['geometry_ms'] = (self.cache_metrics.get('geometry_ms', 0.)
+                                                    + (time.monotonic()-started)*1000)
+            self._configure_vehicle(game, definition)
+        except BaseException:
+            self.close()
+            raise
+
+    def _init_map(self, spec, mesh_files):
+        self.map_spec = spec
+        self.mesh_files = mesh_files
+        self.terrain_meshes = {}
+        self._owns_mesh_files = True
+
+    @classmethod
+    def map_only(cls, spec, mesh_files):
+        result = cls.__new__(cls)
+        result._init_map(spec, mesh_files)
+        result._load_map()
+        return result
+
+    def _load_map(self):
         data = scene(self.map_spec.scene_path)
         meshes = geometry(self.map_spec.geometry_path)
         materials = {int.from_bytes(n['#id'], 'little'): n
@@ -239,10 +265,6 @@ class CollisionScene:
             ct = comps['CollisionTypeComponent']
             self.destructibles[key] = Destructible(key,node['name'],ct['CollisionType'],
                     max(1,int(ct.get('Health',1))),np.concatenate(verts),np.concatenate(faces))
-        self.mesh_files = MeshFiles()
-        self.terrain_meshes = {}
-        self._owns_mesh_files = True
-        self._configure_vehicle(game, definition)
 
     def for_vehicle(self, game, definition):
         """Share immutable map assets/cache; load only this vehicle's geometry."""
@@ -328,11 +350,15 @@ class CollisionScene:
         from .hit_effects import load_frames
         self.hit_effects = load_frames(game, definition)
 
-    def prepare(self, terrain):
-        """Prepare disposable meshes before accepting game connections."""
+    def prepare_map(self, terrain):
         self.mesh_files.partition(self.vertices,self.triangles)
         for obj in self.destructibles.values():
             self.mesh_files.partition(obj.vertices,obj.triangles)
+        return self.prepare_terrain(terrain)
+
+    def prepare(self, terrain):
+        """Prepare collision meshes and validate the vehicle armor backend."""
+        self.prepare_map(terrain)
         if self.contact_proxies is None:
             for _,vertices in self.tank_shapes:
                 self.mesh_files.mesh(vertices)
@@ -340,7 +366,6 @@ class CollisionScene:
             for part in self.contact_proxies:
                 if part.kind == 'prism':
                     self.mesh_files.mesh(part.vertices)
-        self.prepare_terrain(terrain)
         # ABI/numerical validation can lazily import NumPy kernels. Keep that
         # first-use cost in scene loading rather than the first live armor ray.
         from .armor_native import load_library as load_armor_library
@@ -507,7 +532,7 @@ class CollisionWorld:
     def __init__(self, assets, terrain, player_position=None, target_position=None, *, vehicles=None,
                  incremental=False, vehicle_assets=None, experimental_6dof=None,
                  experimental_ground_impacts=None, wall_trampoline=None,
-                 sprung_tracks=None, visibility=False):
+                 sprung_tracks=None, visibility=False, parallel_native_build=False):
         self.assets, self.terrain = assets, terrain
         self.vehicle_assets = dict(vehicle_assets or {})
         available_cpus = (len(os.sched_getaffinity(0)) if hasattr(os, 'sched_getaffinity')
@@ -529,6 +554,7 @@ class CollisionWorld:
         if native not in ('0', '1'):
             raise ValueError('SOLBREAKER_NATIVE_PHYSICS must be 0 or 1')
         self._native_physics_enabled = native == '1'
+        self._parallel_native_build = parallel_native_build
         self.cid = None
         self._visibility = None
         self.closed = False
@@ -604,6 +630,7 @@ class CollisionWorld:
         self._contact_support_cache = {}
         self._rust_drive = None
         self._native_physics = None
+        self.build_timings = {}
         self._builder = self._build(assets,terrain,player_position,target_position,vehicles,
                                     visibility=visibility)
         if not incremental:
@@ -627,6 +654,8 @@ class CollisionWorld:
             raise
 
     def _build(self,assets,terrain,player_position,target_position,vehicles,*,visibility=False):
+        started = time.monotonic()
+        started_cpu = time.thread_time()
         self.cid = bullet.connect(bullet.DIRECT)
         if self.experimental_6dof:
             bullet.setGravity(0, -self.GRAVITY, 0, physicsClientId=self.cid)
@@ -657,6 +686,11 @@ class CollisionWorld:
         for _ in range(10):
             bullet.performCollisionDetection(physicsClientId=self.cid)
             yield
+        physical_started = time.monotonic()
+        physical_cpu = time.thread_time()
+        self.build_timings['collision_ms'] = (physical_started-started)*1000
+        self.build_timings['collision_cpu_ms'] = (physical_cpu-started_cpu)*1000
+        self.build_timings['static_bodies'] = len(self._mesh_body_paths)
         self.bodies = {}
         self.poses = {}
         self.turret_links = {}
@@ -703,9 +737,32 @@ class CollisionWorld:
                 self.dynamic_shapes[entity] = cached[1]
                 self.dynamic_bounds[entity] = cached[2]
                 yield
-        if os.environ.get('SOLBREAKER_DYNAMIC_BACKEND', 'bullet') == 'rapier':
-            self._init_rapier()
-            yield
+        rapier = os.environ.get('SOLBREAKER_DYNAMIC_BACKEND', 'bullet') == 'rapier'
+        if rapier and self._parallel_native_build and self._native_physics_enabled:
+            yield from self._build_native_parallel()
+        else:
+            if rapier:
+                rapier_started, rapier_cpu = time.monotonic(), time.thread_time()
+                self._init_rapier()
+                self.build_timings['rapier_ms'] = (time.monotonic()-rapier_started)*1000
+                self.build_timings['rapier_cpu_ms'] = (time.thread_time()-rapier_cpu)*1000
+                yield
+            yield from self._build_ground_physics()
+        visibility_started = time.monotonic()
+        visibility_cpu = time.thread_time()
+        self.build_timings['physics_ms'] = (visibility_started-physical_started)*1000
+        self.build_timings['physics_cpu_ms'] = ((visibility_cpu-physical_cpu)*1000
+                                               + self.build_timings.get('rapier_worker_cpu_ms', 0.))
+        self.build_timings['vehicle_bodies'] = len(self.bodies)
+        if visibility and self._rapier_query_backend == 'bullet':
+            from .static_visibility import VisibilityWorld
+            self._visibility = VisibilityWorld()
+            yield from self._visibility.build(assets)
+            self.build_timings['visibility_ms'] = (time.monotonic()-visibility_started)*1000
+            self.build_timings['visibility_cpu_ms'] = (time.thread_time()-visibility_cpu)*1000
+            self.build_timings['visibility_shapes'] = self._visibility.shape_count
+
+    def _build_ground_physics(self):
         if self.experimental_ground_impacts:
             self.ground_mass_properties = {
                 entity:self._dynamic_mass_properties(entity,self.gun_angles[entity][0])
@@ -722,16 +779,52 @@ class CollisionWorld:
                 raise ValueError('Native physics requires sprung tracked physics; '
                                  'set SOLBREAKER_NATIVE_PHYSICS=0 for legacy diagnostics')
             from .native_physics import NativePhysics
+            native_started, native_cpu = time.monotonic(), time.thread_time()
             self._native_physics = NativePhysics(self)
+            self.build_timings['native_ground_ms'] = (time.monotonic()-native_started)*1000
+            self.build_timings['native_ground_cpu_ms'] = (time.thread_time()-native_cpu)*1000
             yield
-        if visibility and self._rapier_query_backend == 'bullet':
-            from .static_visibility import VisibilityWorld
-            self._visibility = VisibilityWorld()
-            yield from self._visibility.build(assets)
+
+    def _build_native_parallel(self):
+        from concurrent.futures import ThreadPoolExecutor
+
+        start, cpu = time.monotonic(), time.thread_time()
+        fixture = self._prepare_rapier_fixture()
+        fixture_ms, fixture_cpu = (time.monotonic()-start)*1000, (time.thread_time()-cpu)*1000
+        # The Rapier thread receives only the finished fixture path. Bullet and
+        # the native ground controller stay on the arena's owning thread.
+        with ThreadPoolExecutor(max_workers=1, thread_name_prefix='rapier-startup') as executor:
+            future = executor.submit(self._load_rapier_world, fixture)
+            try:
+                yield from self._build_ground_physics()
+                self._rapier, wall_ms, cpu_ms = future.result()
+            finally:
+                if self._rapier is None and not future.cancel():
+                    try:
+                        pending, _, _ = future.result()
+                    except Exception:
+                        pass  # Preserve the original initialization error.
+                    else:
+                        pending.close()
+        self.build_timings.update(rapier_ms=fixture_ms+wall_ms,
+                                  rapier_cpu_ms=fixture_cpu+cpu_ms, rapier_worker_cpu_ms=cpu_ms)
+
+    @staticmethod
+    def _load_rapier_world(fixture):
+        from .rapier_dynamic import RapierDynamic
+
+        start, cpu = time.monotonic(), time.thread_time()
+        world = RapierDynamic(fixture)
+        return world, (time.monotonic()-start)*1000, (time.thread_time()-cpu)*1000
 
     def _init_rapier(self, *, static_only=False):
-        from .physics_proxy import swept_turret
         from .rapier_dynamic import RapierDynamic
+
+        self._rapier = RapierDynamic(self._prepare_rapier_fixture(static_only=static_only))
+
+    def _prepare_rapier_fixture(self, *, static_only=False):
+        from .physics_proxy import swept_turret
+
         static = []
         static_bodies = self.map_bodies | self.terrain_bodies
         if not static_bodies.issubset(self._mesh_body_paths):
@@ -767,7 +860,7 @@ class CollisionWorld:
         with tempfile.NamedTemporaryFile(mode='w', suffix='.json', prefix='tfs-rapier-', delete=False) as stream:
             json.dump(dict(static=static, entities=entities), stream)
             self._rapier_fixture = stream.name
-        self._rapier = RapierDynamic(self._rapier_fixture)
+        return self._rapier_fixture
 
     def _static_rays(self, starts, ends, *, _single=False):
         """Map/terrain/breakable rays. Vehicle armor keeps its exact model."""
@@ -926,7 +1019,9 @@ class CollisionWorld:
                     flags=bullet.GEOM_FORCE_CONCAVE_TRIMESH,
                     physicsClientId=self.cid)
         body = bullet.createMultiBody(baseMass=0, baseCollisionShapeIndex=shape, physicsClientId=self.cid)
-        self._mesh_body_paths[body] = str(Path(path).resolve())
+        # Native consumers open this same file from the arena's asset lease.
+        # An absolute name suffices and avoids filesystem traversal per body.
+        self._mesh_body_paths[body] = os.path.abspath(path)
         bullet.setCollisionFilterGroupMask(body, -1, 1, -1, physicsClientId=self.cid)
         return body
 
@@ -2063,17 +2158,7 @@ class CollisionWorld:
             raise ValueError("Invalid terrain coordinate")
         if self._terrain_grid is None or self._terrain_grid[0] is not terrain.heights:
             self._terrain_grid = (terrain.heights, np.asarray(terrain.heights, dtype=float))
-        grid, size = self._terrain_grid[1], terrain.size
-        # Same operation order as MapTerrain.height, so both agree exactly.
-        fx = np.clip((xs - terrain.MIN) * size / terrain.WIDTH, 0.0, size - 1.0)
-        fz = np.clip((zs - terrain.MIN_Z) * size / terrain.DEPTH, 0.0, size - 1.0)
-        ix, iz = fx.astype(int), fz.astype(int)
-        dx, dz = fx - ix, fz - iz
-        def h(a, b):
-            return grid[np.minimum(b, size - 1) * size + np.minimum(a, size - 1)]
-        row0 = h(ix, iz) * (1 - dx) + h(ix + 1, iz) * dx
-        row1 = h(ix, iz + 1) * (1 - dx) + h(ix + 1, iz + 1) * dx
-        return terrain.HEIGHT_MIN + (row0 * (1 - dz) + row1 * dz) * terrain.HEIGHT / 65535
+        return terrain.sample_grid(xs, zs, self._terrain_grid[1])
 
     def _support_references(self, reference, xs, zs, entity=None):
         """Height from which support reach is measured at each point.

@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import pickle
 import struct
+import time
 
 from .arena import Arena
 from .arena_commands import apply_input, decode_input
@@ -13,6 +14,7 @@ from .arena_owner import (AddressedPayload, Command, CommandRejected, HandlerOut
 from .battle import event_messages, initial_messages, motion_messages, spawn_batches, reconnect_batches
 from .collision import CollisionScene
 from .map_catalog import load_map_spec
+from .map_cache import MapCache
 from .sim_native import runtime_status
 from .terrain import MapTerrain
 from .vehicle_data import load_vehicle
@@ -261,6 +263,7 @@ class GameArenaFactory:
     bot_roster: tuple | None = None
     bot_scene_settings: tuple = ()
     prebattle_seconds: float = 0.
+    map_cache: MapCache | None = None
 
     @staticmethod
     def _configure(scene, settings):
@@ -271,6 +274,7 @@ class GameArenaFactory:
     def __call__(self) -> GameArenaHandler:
         from .diagnostics import install
         install()
+        started = time.monotonic()
         compact=getattr(self,'compact_inputs',False)
         if type(compact) is not bool:
             raise ValueError('invalid compact input observation setting')
@@ -288,10 +292,13 @@ class GameArenaFactory:
         scenes = []
         arena = None
         try:
-            scene = CollisionScene(self.game, definitions.get(ids[0], definition), spec)
+            scene_started = time.monotonic()
+            scene = CollisionScene(self.game, definitions.get(ids[0], definition), spec,
+                                   map_cache=self.map_cache, terrain=terrain)
             scenes.append(scene)
             self._configure(scene, settings.get(ids[0], {}))
             scene.prepare(terrain)
+            scene_ms = (time.monotonic()-scene_started)*1000
             vehicle_scenes = {}
             if self.player_definitions:
                 for account_id in ids:
@@ -304,6 +311,7 @@ class GameArenaFactory:
                     self._configure(other, settings.get(account_id, {}))
                     other.prepare(terrain)
                     vehicle_scenes[account_id] = other
+            roster_started = time.monotonic()
             arena = Arena(list(self.accounts), definition.descriptor, terrain, scene,
                           vehicle_scenes=vehicle_scenes or None, map_spec=spec, now=self.now,
                           solo=self.solo, training=self.training, result_id=self.arena_id,
@@ -312,7 +320,8 @@ class GameArenaFactory:
                           recon_game=self.game if self.recon_enabled else None,
                           bot_roster=self.bot_roster, bot_game=self.game,
                           bot_scene_settings=self.bot_scene_settings,
-                          prebattle_seconds=self.prebattle_seconds)
+                          prebattle_seconds=self.prebattle_seconds, parallel_native_build=True)
+            roster_ms = (time.monotonic()-roster_started)*1000
             while arena.building:
                 arena.advance_build()
         except BaseException:
@@ -321,5 +330,12 @@ class GameArenaFactory:
             for resource in scenes:
                 resource.close()
             raise
-        return GameArenaHandler(arena, SceneGroup(scenes),
-                                compact_inputs=compact)
+        handler = GameArenaHandler(arena, SceneGroup(scenes), compact_inputs=compact)
+        navigation = getattr(arena.bot_director, 'navigation', None)
+        handler.startup_metrics = dict(scene_ms=scene_ms, roster_ms=roster_ms,
+            navigation_ms=getattr(arena, 'navigation_build_ms', 0.),
+            navigation_cpu_ms=getattr(arena, '_navigation_cpu_ms', 0.),
+            arena_ms=(time.monotonic()-started)*1000, **scene.cache_metrics,
+            **getattr(navigation, 'build_timings', {}),
+            **arena.world.build_timings)
+        return handler

@@ -12,15 +12,23 @@ import numpy as np
 
 
 class MeshFiles:
-    def __init__(self):
-        self.directory = tempfile.TemporaryDirectory(prefix='solbreaker-collision-')
+    def __init__(self, output=None):
+        self.directory = (tempfile.TemporaryDirectory(prefix='solbreaker-collision-')
+                          if output is None else None)
+        self.output = Path(self.directory.name) if self.directory else Path(output)
         self.partitions = {}
+        self.prepared = None
         self.closed = False
 
     def close(self):
         if not self.closed:
-            self.directory.cleanup()
             self.closed = True
+            try:
+                if self.directory is not None:
+                    self.directory.cleanup()
+            finally:
+                if self.prepared is not None:
+                    self.prepared.close()
 
     def mesh(self, vertices, triangles=None):
         path, _ = self.mesh_with_creation_status(vertices, triangles)
@@ -43,7 +51,10 @@ class MeshFiles:
                                          np.arange(2,len(vertices))))
         triangles = np.asarray(triangles, dtype=np.int32)
         key = hashlib.sha256(vertices.tobytes()+triangles.tobytes()).hexdigest()
-        path = Path(self.directory.name)/(key+'.obj')
+        name = key+'.obj'
+        if self.prepared is not None and name in self.prepared.files:
+            return str(self.prepared.path / name), False
+        path = self.output / name
         created = not path.exists()
         if created:
             with path.open('x') as stream:

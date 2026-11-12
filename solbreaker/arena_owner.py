@@ -170,7 +170,8 @@ def _worker(factory: Callable[[], ArenaHandler], incoming, outgoing) -> None:
         if isinstance(outgoing,FramedChannel):
             outgoing.close_receiver()
         handler = factory()
-        outgoing.put(_freeze(('ready',)), timeout=1)
+        metrics = getattr(handler, 'startup_metrics', None)
+        outgoing.put(_freeze(('ready', metrics) if metrics else ('ready',)), timeout=1)
         while True:
             raw = incoming.get()
             if raw is None:
@@ -282,7 +283,12 @@ class ArenaOwner:
                 q.close()
             raise
         try:
-            if self._receive(timeout=startup_timeout) != ('ready',):
+            reply = self._receive(timeout=startup_timeout)
+            if reply == ('ready',):
+                self.startup_metrics = {}
+            elif type(reply) is tuple and len(reply) == 2 and reply[0] == 'ready' and type(reply[1]) is dict:
+                self.startup_metrics = reply[1]
+            else:
                 raise OwnerError('owner failed to initialize')
         except BaseException:
             self.close()
@@ -374,6 +380,10 @@ class AsyncArenaOwner:
         self._closed = False
         self._pending = None
         self._cleanup = None
+
+    @property
+    def startup_metrics(self):
+        return self._owner.startup_metrics
 
     @classmethod
     async def create(cls, factory: Callable[[], ArenaHandler], *, queue_size: int = 4,

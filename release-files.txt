@@ -370,8 +370,11 @@ solbreaker/localization.py
 solbreaker/login_preferences.py
 solbreaker/management.py
 solbreaker/management_tasks.py
+solbreaker/map_cache.py
+solbreaker/map_cache_lock_win.py
 solbreaker/map_catalog.py
 solbreaker/map_materials.py
+solbreaker/map_prewarm.py
 solbreaker/marker_batch.py
 solbreaker/market.py
 solbreaker/mass_properties.py
@@ -416,6 +419,7 @@ solbreaker/native/support_checks/_support_checks.pyx
 solbreaker/native/windows_profile.S
 solbreaker/native_physics.py
 solbreaker/native_rooms.py
+solbreaker/navigation_cache.py
 solbreaker/network.py
 solbreaker/orientation.py
 solbreaker/owner_async.py
@@ -478,10 +482,12 @@ tests/test_diagnostic_fast_paths.py
 tests/test_discovery.py
 tests/test_launcher_stdin.py
 tests/test_login_preferences.py
+tests/test_map_cache.py
 tests/test_management.py
 tests/test_native_build.py
 tests/test_native_physics.py
 tests/test_native_windows.py
+tests/test_navigation_cache.py
 tests/test_packaging.py
 tests/test_profile_redirects.py
 tests/test_registration.py

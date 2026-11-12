@@ -457,9 +457,15 @@ class BaseEndpoint(asyncio.DatagramProtocol):
             from .fire import FirePolicy
             FirePolicy(policy['hp_fraction_per_second'], policy['module_damage_per_second'], policy['duration'])
             self.experimental_fire = policy
-        self.collision_scene = CollisionScene(game,self.definition,self.map_spec)
-        self.configure_internal_modules(self.collision_scene)
-        self.collision_scene.prepare(self.terrain)
+        from .map_prewarm import settings as map_cache_settings
+        self.map_cache, self.map_prewarm_enabled = map_cache_settings(server.lab)
+        if self.arena_owners_enabled:
+            self.collision_scene = self.owner_vehicle_scene(self.definition)
+        else:
+            self.collision_scene = CollisionScene(game, self.definition, self.map_spec,
+                                                  map_cache=self.map_cache, terrain=self.terrain)
+            self.configure_internal_modules(self.collision_scene)
+            self.collision_scene.prepare(self.terrain)
         self.map_contexts = {self.map_spec.map_id: dict(
             map_spec=self.map_spec, terrain=self.terrain,
             collision_scene=self.collision_scene, vehicle_scenes={})}
@@ -489,6 +495,16 @@ class BaseEndpoint(asyncio.DatagramProtocol):
         self.matchmaking_enabled = True
         self.next_tick = time.monotonic() + SIMULATION_INTERVAL
         self.timer = asyncio.get_running_loop().call_later(SIMULATION_INTERVAL, self.tick)
+        if self.map_cache is not None:
+            from .map_prewarm import MapPrewarm
+            specs = {**self.dev_map_specs, **self.map_specs}
+            self.map_prewarm = MapPrewarm(
+                self.map_cache, self.game, self.map_catalog, specs, self.map_spec.map_id,
+                enabled=self.map_prewarm_enabled,
+                busy=lambda: any(not arena.finished_at and not arena.closed
+                                 for arena in self.arenas.arenas.values()),
+                event=self.server.event)
+            self.map_prewarm.start()
 
     def connection_lost(self, exc):
         self.matchmaking_enabled = False
@@ -498,8 +514,13 @@ class BaseEndpoint(asyncio.DatagramProtocol):
                 client.queue_handle = None
         self.timer.cancel()
         self.loading.close()
-        if 'owner_service' in self.__dict__:
-            self.owner_close_task = asyncio.create_task(self.owner_service.close())
+        prewarm = getattr(self, 'map_prewarm', None)
+        owner = self.__dict__.get('owner_service')
+        if prewarm is not None or owner is not None:
+            async def close_workers():
+                await asyncio.gather(*(worker.close() for worker in (prewarm, owner)
+                                       if worker is not None))
+            self.owner_close_task = asyncio.create_task(close_workers())
             self.owner_close_task.add_done_callback(
                 lambda task: task.exception() if not task.cancelled() else None)
         try:
@@ -539,7 +560,8 @@ class BaseEndpoint(asyncio.DatagramProtocol):
             if self.arena_owners_enabled:
                 collision_scene = self.owner_vehicle_scene(self.definition)
             else:
-                collision_scene = CollisionScene(self.game, self.definition, spec)
+                collision_scene = CollisionScene(self.game, self.definition, spec,
+                    map_cache=getattr(self, 'map_cache', None), terrain=terrain)
                 self.configure_internal_modules(collision_scene)
                 collision_scene.prepare(terrain)
             context = dict(map_spec=spec, terrain=terrain,
@@ -1371,6 +1393,8 @@ class BaseEndpoint(asyncio.DatagramProtocol):
             if (training is not None and training.bots_enabled and training.battle_mode == 'supremacy'
                     and not getattr(spec, 'strategic_points', ())):
                 raise ValueError('This map has no Supremacy capture points')
+            if (prewarm := getattr(self, 'map_prewarm', None)) is not None:
+                prewarm.selected(spec.map_id)
             runtime = self.map_runtime(spec.map_id)
             options = dict(terrain=runtime['terrain'], map_spec=spec,
                            collision_scene=runtime['collision_scene'], prebattle_seconds=7.)
@@ -1465,6 +1489,8 @@ class BaseEndpoint(asyncio.DatagramProtocol):
             selected.append((addr,client))
         accounts = [dict(self.server.accounts.get(a).identity(), team=t) for a,t in zip(account_ids,teams)]
         spec = self.selected_map(map_id)
+        if (prewarm := getattr(self, 'map_prewarm', None)) is not None:
+            prewarm.selected(spec.map_id)
         runtime = self.map_runtime(spec.map_id)
         options = dict(terrain=runtime['terrain'], map_spec=spec,
                        collision_scene=runtime['collision_scene'], prebattle_seconds=7.)
@@ -1794,10 +1820,20 @@ class BaseEndpoint(asyncio.DatagramProtocol):
             client.load_grace_until = time.monotonic()+self.ENTITY_LOAD_GRACE
         for addr,client in job.context:
             self.send(addr,client,b'\x04\0')
+        world = getattr(job.arena, 'world', None)
+        detail = getattr(getattr(world, 'assets', None), 'cache_metrics', {})
         self.server.event('arena_world_ready',arena_id=job.arena.result_id,
+                          cache=detail.get('cache', 'disabled'),
                           duration_ms=(time.monotonic()-job.started)*1000,
                           slices=job.slices,max_slice_ms=job.max_slice*1000,
                           work_ms=job.work_seconds*1000)
+        if world is not None:
+            navigation = getattr(getattr(job.arena, 'bot_director', None), 'navigation', None)
+            self.server.event('arena_build_profile', arena_id=job.arena.result_id,
+                              navigation_ms=getattr(job.arena, 'navigation_build_ms', 0.),
+                              navigation_cpu_ms=getattr(job.arena, '_navigation_cpu_ms', 0.),
+                              **getattr(navigation, 'build_timings', {}),
+                              **detail, **getattr(world, 'build_timings', {}))
 
     def fail_load(self,job,reason):
         arena = job.arena
