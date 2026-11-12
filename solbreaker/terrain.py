@@ -73,6 +73,23 @@ class MapTerrain:
         row1 = h(ix, iz + 1) * (1 - dx) + h(ix + 1, iz + 1) * dx
         return self.HEIGHT_MIN + (row0 * (1 - dz) + row1 * dz) * self.HEIGHT / 65535
 
+    def sample_grid(self, xs, zs, grid):
+        """Vectorised bilinear samples in the same operation order as height()."""
+        import numpy as np
+
+        size = self.size
+        fx = np.clip((xs - self.MIN) * size / self.WIDTH, 0.0, size - 1.0)
+        fz = np.clip((zs - self.MIN_Z) * size / self.DEPTH, 0.0, size - 1.0)
+        ix, iz = fx.astype(int), fz.astype(int)
+        dx, dz = fx - ix, fz - iz
+
+        def h(a, b):
+            return grid[np.minimum(b, size - 1) * size + np.minimum(a, size - 1)]
+
+        row0 = h(ix, iz) * (1 - dx) + h(ix + 1, iz) * dx
+        row1 = h(ix, iz + 1) * (1 - dx) + h(ix + 1, iz + 1) * dx
+        return self.HEIGHT_MIN + (row0 * (1 - dz) + row1 * dz) * self.HEIGHT / 65535
+
     def surface_code(self, x, z):
         """Return the pinned MKM contact code at x/z, or None outside this map.
 

@@ -115,11 +115,20 @@ class LocalServer:
         if recorder is not None:
             allowed = {'arena_id', 'account_id', 'vehicle_id', 'map_id', 'map_key', 'phase',
                        'duration_ms', 'simulation_steps', 'dropped_seconds', 'owner', 'winner',
-                       'finish_reason', 'kind', 'target', 'actor', 'step', 'operation'}
+                       'finish_reason', 'kind', 'target', 'actor', 'step', 'operation',
+                       'cache', 'cache_wait_ms', 'cache_bytes', 'cache_objects', 'cache_ms', 'cache_cpu_ms',
+                       'geometry_ms', 'scene_ms', 'collision_ms', 'physics_ms', 'visibility_ms',
+                       'rapier_ms', 'navigation_ms', 'roster_ms', 'arena_ms', 'owner_overhead_ms',
+                       'static_bodies', 'vehicle_bodies', 'visibility_shapes', 'collision_cpu_ms',
+                       'physics_cpu_ms', 'visibility_cpu_ms', 'rapier_cpu_ms', 'rapier_worker_cpu_ms',
+                       'native_ground_ms', 'native_ground_cpu_ms', 'navigation_cpu_ms',
+                       'nav_grid_ms', 'nav_landmarks_ms', 'nav_routes_ms',
+                       'nav_cache_hits', 'nav_cache_misses'}
             recorder.record('server_event', name=name,
                             fields={key: value for key, value in fields.items() if key in allowed})
         level = logging.DEBUG if name in {"base_packet", "base_element", "account_request", "avatar_request",
-                                         "training_motion", "training_input"} else logging.INFO
+                                         "training_motion", "training_input",
+                                         "arena_build_profile"} else logging.INFO
         # Region/latency probes are routine LoginApp traffic. Keep counting and
         # replying to every ping; expose per-packet details in developer/debug logs.
         if ((name == 'ping_replied' or name == 'login_element' and fields.get('kind') == 2)

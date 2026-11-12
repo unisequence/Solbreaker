@@ -791,6 +791,14 @@ class Window(QMainWindow):
         self.remember_login.setChecked(self.manager.settings.remember_login)
         self.remember_login.toggled.connect(self.change_login_preference)
         column.addWidget(self.remember_login)
+        preparation = QHBoxLayout()
+        self.prepare_maps_button = button(tr('Подготовить карты'), lambda: self.execute('prepare-maps'))
+        self.prepare_maps_button.setToolTip(tr(
+            'Запустить свой сервер и подготовить карты заранее. Можно начать игру в любой момент.'))
+        self.map_preparation_status = label('', 'muted')
+        preparation.addWidget(self.prepare_maps_button)
+        preparation.addWidget(self.map_preparation_status, 1)
+        column.addLayout(preparation)
         column.addStretch()
         dock = QFrame()
         dock.setObjectName('panel')
@@ -1131,6 +1139,13 @@ class Window(QMainWindow):
                                  else (tr('Мастер подготовит сервер для боёв с ботами и отдельный клиент.') if local
                                        else tr('Мастер подготовит клиент и подключение к выбранному серверу.')))
         status = self.manager.server_status()
+        can_prepare = local and self.manager.can_prepare_maps
+        self.prepare_maps_button.setVisible(can_prepare)
+        self.prepare_maps_button.setEnabled(not self.manager.busy and
+            status in ('Сервер остановлен', 'Ошибка запуска сервера'))
+        map_status = self.manager.map_preparation_status(tr) if local else ''
+        self.map_preparation_status.setText(map_status)
+        self.map_preparation_status.setVisible(bool(map_status))
         self.server_label.setText(tr(status))
         owned = self.manager.server is not None and self.manager.server.running
         self.start_button.setEnabled(not owned and not self.manager.busy and status in ('Сервер остановлен', 'Ошибка запуска сервера'))

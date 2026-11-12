@@ -87,7 +87,8 @@ class ArenaOwnerService:
             space_id=arena.space_id, entity_base=arena.entity_base,
             recon_enabled=getattr(self.endpoint.server, 'recon_enabled', False),compact_inputs=True,
             bot_roster=arena.bot_roster, bot_scene_settings=arena.bot_scene_settings,
-            prebattle_seconds=arena.prebattle_seconds)
+            prebattle_seconds=arena.prebattle_seconds,
+            map_cache=getattr(self.endpoint, 'map_cache', None))
 
     def start(self, arena, selected, factory):
         if arena.result_id in self.jobs or self._closing is not None:
@@ -105,18 +106,30 @@ class ArenaOwnerService:
             client.owner_leave_pending = False
         job = OwnerBattle(arena, tuple(selected), factory, time.monotonic())
         self.jobs[arena.result_id] = job
-        job.task = asyncio.create_task(self._load(job))
+        prewarm = getattr(self.endpoint, 'map_prewarm', None)
+        # Promote an existing worker before yielding to the idle scheduler.
+        # Otherwise it can see this building arena and stop the very work it needs.
+        demand = prewarm.request(factory.map_spec) if prewarm is not None else None
+        job.task = asyncio.create_task(self._load(job, demand))
         job.task.add_done_callback(_consume)
+        if demand is not None:
+            job.task.add_done_callback(lambda _: prewarm.release(demand))
         return job.task
 
-    async def _load(self, job):
+    async def _load(self, job, demand=None):
         arena = job.arena
         try:
+            wait_started = time.monotonic()
+            if demand is not None:
+                await asyncio.wait_for(asyncio.shield(demand.ready), ARENA_STARTUP_TIMEOUT)
+            waited = time.monotonic() - wait_started
+            owner_started = time.monotonic()
             job.owner = await AsyncArenaOwner.create(job.factory, timeout=self.timeout,
-                                                     startup_timeout=ARENA_STARTUP_TIMEOUT)
+                startup_timeout=max(1., ARENA_STARTUP_TIMEOUT-waited))
             job.route = self.registry.register(arena.result_id, job.owner)
             account_id = job.factory.accounts[0]['id']
             initial = await job.route.request(Command('motion', time.monotonic(), account_id))
+            owner_ready_ms = (time.monotonic()-owner_started)*1000
             self._observe(job, initial)
             for addr, client in job.selected:
                 if (self.endpoint.clients.get(addr) is not client
@@ -144,9 +157,14 @@ class ArenaOwnerService:
                                        step_budget=self.endpoint.SIMULATION_BUDGET)
             for addr, client in job.selected:
                 self.endpoint.send(addr, client, b'\x04\0')
+            detail = getattr(job.owner, 'startup_metrics', {})
             self.endpoint.server.event(
                 'arena_world_ready', arena_id=arena.result_id, owner=True,
+                cache=detail.get('cache', 'disabled'), cache_wait_ms=waited*1000,
                 duration_ms=(time.monotonic()-job.started)*1000)
+            self.endpoint.server.event('arena_build_profile', arena_id=arena.result_id,
+                cache_wait_ms=waited*1000,
+                owner_overhead_ms=max(0., owner_ready_ms-detail.get('arena_ms', 0.)), **detail)
         except asyncio.CancelledError:
             await self._close_owner(job)
             raise

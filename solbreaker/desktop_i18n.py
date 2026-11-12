@@ -9,6 +9,18 @@ from PySide6.QtWidgets import QApplication
 
 ENGLISH = {
     'Игра': 'Game',
+    'Подготовить карты': 'Prepare maps',
+    'Запустить свой сервер и подготовить карты заранее. Можно начать игру в любой момент.':
+        'Start your local server and prepare maps ahead of time. You can play at any time.',
+    'Сервер запускается для подготовки карт…': 'Starting the server to prepare maps…',
+    'Подготавливаем карту {map}…': 'Preparing {map}…',
+    'Карта {map} подготовлена.': '{map} is ready.',
+    'Подготовка карт приостановлена.': 'Map preparation paused.',
+    'Не удалось подготовить карту {map}. См. журнал.': 'Could not prepare {map}. See the logs.',
+    'Достигнут лимит кэша карт.': 'The map cache has reached its limit.',
+    'Подготовка карт доступна для своего сервера с включённым кэшем.':
+        'Map preparation is available for your local server when its cache is enabled.',
+    'Подготовкой карт управляет запущенный сервер.': 'The running server manages map preparation.',
     'Мой сервер': 'My server',
     'Параметры': 'Settings',
     'Журнал': 'Logs',

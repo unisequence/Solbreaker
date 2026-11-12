@@ -94,7 +94,9 @@ class Terminal(App):
                 yield Label('Для Linux нужны установленный Steam и Proton.\nРегистрация и настройки боя доступны в игре.', classes='help')
                 with Horizontal(classes='buttons'):
                     yield Button('Играть', id='play', variant='primary')
+                    yield Button('Подготовить карты', id='prepare-maps')
                     yield Button('Подготовить клиент', id='prepare-client')
+                yield Static('', id='map-preparation', markup=False)
             with TabPane('Пути', id='paths-tab'):
                 with VerticalScroll():
                     for key, title in (('game', 'Папка совместимой сборки'), ('state', 'Данные сервера'),
@@ -149,7 +151,7 @@ class Terminal(App):
                     self.manager.notice = 'Настройки сохранены'
                 else:
                     self.manager.run(action)
-                    if action != 'play':
+                    if action not in ('play', 'prepare-maps'):
                         self.query_one(TabbedContent).active = 'log-tab'
         except (OSError, ValueError) as error:
             self.notify(str(error), severity='error', timeout=8)
@@ -170,11 +172,17 @@ class Terminal(App):
         owned = self.manager.server is not None and self.manager.server.running
         self.query_one('#server', Button).disabled = owned or self.manager.busy or status not in ('Сервер остановлен', 'Ошибка запуска сервера')
         self.query_one('#stop', Button).disabled = not owned
+        prepare_maps = self.query_one('#prepare-maps', Button)
+        prepare_maps.display = self.manager.can_prepare_maps
+        prepare_maps.disabled = self.manager.busy or status not in (
+            'Сервер остановлен', 'Ошибка запуска сервера')
 
     def poll(self):
         for line in self.manager.drain():
             self.query_one('#log', RichLog).write(Text(line))
         self.query_one('#notice', Static).update(self.manager.notice)
+        self.query_one('#map-preparation', Static).update(
+            self.manager.map_preparation_status() if self.manager.settings.local_connection else '')
 
     def action_refresh_log(self):
         try:

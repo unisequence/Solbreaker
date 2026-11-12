@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.0-alpha.4 — 2026-11-12
+
+- Keep prepared map geometry and navigation data between battles and server
+  restarts. The server prepares maps in the background and gives the
+  requested map priority when a battle starts.
+- Use **Prepare maps** in the desktop or terminal launcher to start your
+  local server and prepare maps before opening the game.
+- Build the Rapier and native ground worlds in parallel in the arena
+  process. Add startup timings and cache statistics to diagnostic logs.
+
 ## 0.1.0-alpha.3 — 2026-11-12
 
 - Allow up to 120 seconds to initialize an arena. The command timeout during

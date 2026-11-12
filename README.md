@@ -5,7 +5,7 @@
 A self-hosted multiplayer tank server with a desktop launcher and terminal interface.
 **Compatible with build 11.21.0.1235_7376187.**
 
-[Download the alpha](https://github.com/unisequence/Solbreaker/releases/tag/v0.1.0-alpha.3) ·
+[Download the alpha](https://github.com/unisequence/Solbreaker/releases/tag/v0.1.0-alpha.4) ·
 [Report a bug](https://github.com/unisequence/Solbreaker/issues/new/choose) ·
 [Руководство на русском](README.ru.md)
 
@@ -24,13 +24,15 @@ adapters. Their scope and validation are described in [Client patches](docs/CLIE
 
 ### Windows x64
 
-1. Download `Solbreaker-0.1.0-alpha.3-windows-x64.zip` from the release page.
+1. Download `Solbreaker-0.1.0-alpha.4-windows-x64.zip` from the release page.
 2. Extract it into a writable folder and open **`launch-gui.vbs`**.
 3. Click **Set up game**. Select your compatible game folder and a separate
    destination for the Solbreaker client.
 4. Choose **On this computer** to prepare a local server, or **On another
    server** to use a server owner's connection profile. Finish setup and click
-   **Play**.
+   **Play**. For a local game, you can click **Prepare maps** first. The
+   launcher starts your server and shows which map it is preparing. You can
+   click **Play** while that work continues.
 
 The Windows archive contains a private Python runtime, GUI/TUI dependencies,
 PyBullet and all five native libraries. No separate Python, Rust or WSL

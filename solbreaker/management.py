@@ -240,6 +240,8 @@ class Manager:
         self.notice = 'Выбери действие'
         self._server_exit_reported = False
         self._play_when_ready = False
+        self._map_preparation = None
+        self._last_prepared_map = None
 
     def update_settings(self, settings):
         if settings == self.settings:
@@ -256,15 +258,57 @@ class Manager:
     def busy(self):
         return self.job is not None and self.job.running
 
+    @property
+    def can_prepare_maps(self):
+        try:
+            capacity = int(os.environ.get('SOLBREAKER_MAP_CACHE_MIB', '1024'))
+        except ValueError:
+            return False
+        return (self.settings.local_connection and (Path(self.settings.state)/'manifest.json').is_file()
+                and os.environ.get('SOLBREAKER_MAP_PREWARM', '1') == '1'
+                and 0 < capacity <= 65536)
+
+    def map_preparation_status(self, translate=str):
+        if not (self.server is not None and self.server.running and self._map_preparation):
+            return ''
+        detail = self._map_preparation
+
+        def name(key):
+            return {'rudniki': 'Mines'}.get(key, key.replace('_', ' ').title())
+
+        if detail.get('cache_unavailable') == 'budget':
+            return translate('Достигнут лимит кэша карт.')
+        text = {'preparing': 'Подготавливаем карту {map}…',
+                'paused': 'Подготовка карт приостановлена.',
+                'ready': 'Карта {map} подготовлена.',
+                'failed': 'Не удалось подготовить карту {map}. См. журнал.'}.get(detail['phase'], '')
+        status = translate(text).format(map=name(detail['map_key']))
+        if detail['phase'] == 'preparing' and self._last_prepared_map is not None:
+            ready = translate('Карта {map} подготовлена.').format(map=name(self._last_prepared_map))
+            return f'{ready} {status}'
+        return status
+
     def run(self, action, *, output=None, interface=None):
         if self.busy:
             raise ValueError('Дождись завершения текущей операции')
         job_settings = replace(self.settings, connection=output) if action == 'export' and output else self.settings
+        if action == 'prepare-maps':
+            if not self.can_prepare_maps:
+                raise ValueError('Подготовка карт доступна для своего сервера с включённым кэшем.')
+            status = self.server_status()
+            if status in ('Сервер остановлен', 'Ошибка запуска сервера'):
+                self.run('server')
+                self.notice = 'Сервер запускается для подготовки карт…'
+            elif status not in ('Сервер запускается', 'Сервер работает'):
+                raise ValueError('Подготовкой карт управляет запущенный сервер.')
+            return
         if action == 'server':
             if self.server is not None and self.server.running:
                 raise ValueError('Сервер уже запущен из этого окна')
             self.server = Job(action, command(action, self.settings), self.output)
             self._server_exit_reported = False
+            self._map_preparation = None
+            self._last_prepared_map = None
         elif action == 'play':
             if self.client is not None and self.client.poll() is None:
                 raise ValueError('Этот клиент уже запущен')
@@ -310,8 +354,24 @@ class Manager:
             except queue.Empty:
                 break
         self.history.extend(lines)
+        for line in lines:
+            if not line.startswith('{'):
+                continue
+            try:
+                detail = json.loads(line)
+            except ValueError:
+                continue
+            phase = {'map_preparation_started': 'preparing', 'map_preparation_paused': 'paused'}
+            if detail.get('event') in phase:
+                detail['phase'] = phase[detail['event']]
+            if (detail.get('event') in (*phase, 'map_preparation')
+                    and isinstance(detail.get('map_key'), str) and detail.get('phase')):
+                self._map_preparation = detail
+                if detail['phase'] == 'ready':
+                    self._last_prepared_map = detail['map_key']
         if self.server is not None:
-            if self.server.running and self.server.started and self.notice == 'Сервер запускается':
+            if self.server.running and self.server.started and self.notice in (
+                    'Сервер запускается', 'Сервер запускается для подготовки карт…'):
                 self.notice = 'Сервер готов к подключениям'
             if not self.server.running and not self._server_exit_reported:
                 self.notice = ('Сервер остановлен' if self.server.process.returncode == 0

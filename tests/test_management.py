@@ -68,6 +68,44 @@ class ManagementTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             manager.update_settings(replace(manager.settings, state='/tmp/other'))
 
+    def test_map_preparation_starts_the_owned_server_and_reports_progress(self):
+        with TemporaryDirectory() as temporary:
+            state = Path(temporary)
+            (state/'manifest.json').write_text('{}')
+            manager = Manager(Settings(state=str(state), play_mode='local'))
+            job = Mock(running=True, started=True)
+            with patch.dict(os.environ, {'SOLBREAKER_MAP_PREWARM': '1', 'SOLBREAKER_MAP_CACHE_MIB': '1024'}):
+                with patch.object(manager, 'server_status', return_value='Сервер остановлен'):
+                    with patch('solbreaker.management.Job', return_value=job) as start:
+                        manager.run('prepare-maps')
+            self.assertEqual(start.call_args.args[0], 'server')
+            self.assertIs(manager.server, job)
+            self.assertFalse(manager.busy)
+            self.assertIsNone(manager.client)
+            for event, phase, expected in (
+                ('map_preparation_started', None, 'Подготавливаем карту Mines…'),
+                ('map_preparation', 'ready', 'Карта Mines подготовлена.'),
+                ('map_preparation_paused', None, 'Подготовка карт приостановлена.'),
+            ):
+                manager.output.put(json.dumps(dict(event=event, map_key='rudniki', phase=phase)))
+                manager.drain()
+                self.assertEqual(manager.map_preparation_status(), expected)
+            manager.output.put(json.dumps(dict(event='map_preparation_started', map_key='fort')))
+            manager.drain()
+            self.assertEqual(manager.map_preparation_status(),
+                             'Карта Mines подготовлена. Подготавливаем карту Fort…')
+
+    def test_map_preparation_is_unavailable_for_remote_connections_and_disabled_cache(self):
+        with TemporaryDirectory() as temporary:
+            (Path(temporary)/'manifest.json').write_text('{}')
+            manager = Manager(Settings(state=temporary, play_mode='remote'))
+            with self.assertRaises(ValueError):
+                manager.run('prepare-maps')
+            manager.settings = replace(manager.settings, play_mode='local')
+            with patch.dict(os.environ, {'SOLBREAKER_MAP_PREWARM': '0'}):
+                with self.assertRaises(ValueError):
+                    manager.run('prepare-maps')
+
     def test_backup_merges_sqlite_wal_and_keeps_credentials(self):
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
