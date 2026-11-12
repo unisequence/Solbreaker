@@ -9,6 +9,7 @@ import platform
 import subprocess
 import sys
 import tempfile
+import tomllib
 import venv
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -76,8 +77,10 @@ def project_fingerprint():
 
 def project_matches(stamp):
     try:
+        with (ROOT/'pyproject.toml').open('rb') as stream:
+            version = tomllib.load(stream)['project']['version']
         return (stamp.get('project') == project_fingerprint()
-                and metadata.version('solbreaker-server') == '0.1.0')
+                and metadata.version('solbreaker-server') == version)
     except metadata.PackageNotFoundError:
         return False
 
