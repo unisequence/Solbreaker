@@ -1,6 +1,8 @@
 """Guided game setup and desktop management for Solbreaker."""
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, replace
 import json
+import os
 import re
 from pathlib import Path
 import sys
@@ -13,7 +15,8 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog, QFil
     QProgressBar, QPushButton, QRadioButton, QScrollArea, QSpinBox, QStackedWidget,
     QVBoxLayout, QWidget)
 
-from .management import Manager, Settings, read_log
+from . import __version__, updates
+from .management import PROJECT, Manager, Settings, read_log
 from .build_info import COMPATIBILITY
 from .desktop_i18n import tr
 
@@ -498,6 +501,9 @@ class Window(QMainWindow):
         super().__init__()
         self.config = Path(config)
         self.manager = Manager(Settings.load(config))
+        self.update_kind = updates.package_kind(PROJECT)
+        self.update_task = None
+        self.update_result = os.environ.pop('SOLBREAKER_UPDATE_RESULT', '')
         QApplication.instance().setStyleSheet(theme_style(self.manager.settings.gui_theme))
         self.build_ui()
         self.timer = QTimer(self)
@@ -553,6 +559,11 @@ class Window(QMainWindow):
             navigation.addWidget(item)
             self.nav.append(item)
         navigation.addStretch()
+        if self.update_kind:
+            installed_version = label(f'Solbreaker {__version__}', 'muted')
+            installed_version.setAlignment(Qt.AlignCenter)
+            navigation.addWidget(installed_version)
+            navigation.addWidget(button(tr('Обновить'), self.start_update))
         sidebar.setFixedWidth(max(200, sidebar.minimumSizeHint().width()))
         horizontal.addWidget(sidebar)
         body = QWidget()
@@ -918,6 +929,43 @@ class Window(QMainWindow):
         return (self.own.isChecked() == local_profile(settings) and (game/'wotblitz.exe').is_file()
                 and prepared_client(settings) and connection_matches(settings, self.own.isChecked()))
 
+    def start_update(self):
+        if not self.update_kind or self.update_task is not None:
+            return
+        if self.manager.busy or self.wizard is not None:
+            self.error(tr('Дождись завершения текущей операции.'))
+            return
+        if not self.save():
+            return
+        client = self.manager.client
+        if ((client is not None and client.poll() is None)
+                or self.manager.server_status() in ('Сервер работает', 'Сервер запускается',
+                                                    'Сервер запущен отдельно',
+                                                    'Не удалось проверить состояние сервера')):
+            self.error(tr('Закрой игру и останови локальный сервер перед обновлением.'))
+            return
+        self.centralWidget().setEnabled(False)
+        self.manager.notice = 'Проверяем и скачиваем обновление…'
+        executor = ThreadPoolExecutor(max_workers=1)
+        self.update_task = executor.submit(updates.prepare, PROJECT, __version__, self.update_kind)
+        executor.shutdown(wait=False)
+        self.poll()
+
+    def finish_update(self):
+        task = self.update_task
+        self.update_task = None
+        self.centralWidget().setEnabled(True)
+        try:
+            release = task.result()
+        except Exception as error:
+            self.log.appendPlainText(str(error))
+            self.error('Не удалось подготовить обновление. Подробности в журнале.')
+            return
+        if release is None:
+            self.manager.notice = 'Установлена последняя доступная версия.'
+        elif self.close():
+            QApplication.instance().exit(updates.RESTART)
+
     def poll(self):
         lines = self.manager.drain()
         if lines:
@@ -925,7 +973,13 @@ class Window(QMainWindow):
         if self.wizard is not None and self.wizard.isVisible():
             self.wizard.update_job(lines)
         starting = self.manager.server is not None and self.manager.server.running and not self.manager.server.started
-        self.progress.setVisible(self.manager.busy or starting)
+        if self.update_task is not None and self.update_task.done():
+            self.finish_update()
+        if self.update_result:
+            self.manager.notice = ('Solbreaker обновлён.' if self.update_result == 'success'
+                                   else 'Установка обновления не удалась. См. runtime/launcher-update.log.')
+            self.update_result = ''
+        self.progress.setVisible(self.manager.busy or starting or self.update_task is not None)
         self.notice.setText(tr(self.manager.notice))
         self.notice.setVisible(self.manager.notice not in ('Выбери действие', 'Готово'))
 
@@ -966,6 +1020,9 @@ class Window(QMainWindow):
         QMessageBox.warning(self, 'Solbreaker', tr(str(error)))
 
     def closeEvent(self, event):
+        if self.update_task is not None:
+            event.ignore()
+            return
         try:
             self.manager.close()
         except ValueError as error:
@@ -983,4 +1040,4 @@ def run(config):
     app.setFont(QFont('Segoe UI' if sys.platform == 'win32' else 'DejaVu Sans', 10))
     window = Window(config)
     window.show()
-    app.exec()
+    return app.exec()

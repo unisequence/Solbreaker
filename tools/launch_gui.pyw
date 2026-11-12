@@ -15,7 +15,7 @@ if __name__ == '__main__':
             sys.stdout = sys.stderr = stream
             try:
                 from solbreaker.desktop import run
-                run(Path(sys.argv[1]))
+                sys.exit(run(Path(sys.argv[1])))
             except Exception:
                 traceback.print_exc()
                 raise

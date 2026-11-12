@@ -5,7 +5,7 @@
 A self-hosted multiplayer tank server with a desktop launcher and terminal interface.
 **Compatible with build 11.21.0.1235_7376187.**
 
-[Download the alpha](https://github.com/unisequence/Solbreaker/releases/tag/v0.1.0-alpha.1) ·
+[Download the alpha](https://github.com/unisequence/Solbreaker/releases/tag/v0.1.0-alpha.2) ·
 [Report a bug](https://github.com/unisequence/Solbreaker/issues/new/choose) ·
 [Руководство на русском](README.ru.md)
 
@@ -14,7 +14,7 @@ base capture, supremacy and battle results. Run a local server for yourself,
 host a LAN game, or connect to another server. Tanks, maps and bot settings
 are selected inside the game.
 
-This is the first public alpha. Expect bugs, incomplete mechanics and changes
+Solbreaker is in public alpha. Expect bugs, incomplete mechanics and changes
 between versions. Back up server data before updating. The project does not
 include the game client or its assets; you need your own compatible copy.
 Setup creates a separate client and applies build-pinned executable and UI
@@ -24,7 +24,7 @@ adapters. Their scope and validation are described in [Client patches](docs/CLIE
 
 ### Windows x64
 
-1. Download `Solbreaker-0.1.0-alpha.1-windows-x64.zip` from the release page.
+1. Download `Solbreaker-0.1.0-alpha.2-windows-x64.zip` from the release page.
 2. Extract it into a writable folder and open **`launch-gui.vbs`**.
 3. Click **Set up game**. Select your compatible game folder and a separate
    destination for the Solbreaker client.
@@ -60,6 +60,20 @@ and run:
 The launcher installs its Python dependencies and guides you through setup.
 For the Linux game client, select your Steam installation and Proton runtime.
 Keep the original game folder in place: the separate client links to its assets.
+
+### Updating
+
+In a release installation, click **Update** in the launcher sidebar. Close the
+game and stop your local server first. The launcher downloads the matching
+GitHub release, checks its SHA-256 and restarts after installing it. Your
+settings, client and server data are kept.
+
+To upgrade from alpha.1, close the old launcher and extract the new archive
+into a separate folder. Copy your old `runtime/manager.json` into the new
+`runtime` folder and keep the old folder if your client or server data lives
+there. Start the new launcher and check the paths in **Settings**. On Linux,
+run `./.venv/bin/python tools/build_native.py` from the new folder after the
+first launcher start if you host a local server.
 
 ### Server only
 

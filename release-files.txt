@@ -455,6 +455,7 @@ solbreaker/tls.py
 solbreaker/track_drive.py
 solbreaker/track_fall_damage.py
 solbreaker/training_config.py
+solbreaker/updates.py
 solbreaker/vector_math.py
 solbreaker/vehicle_data.py
 solbreaker/vehicles.py
@@ -485,6 +486,7 @@ tests/test_static_visibility.py
 tests/test_steam_depot.py
 tests/test_terminal.py
 tests/test_token_capacity.py
+tests/test_updates.py
 tests/test_windows_bundle.py
 tests/test_windows_python.py
 tools/build_contact_queries.py

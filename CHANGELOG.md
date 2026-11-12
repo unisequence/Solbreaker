@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.0-alpha.2 — 2026-11-12
+
+- The desktop launcher can download, verify and install new releases from
+  GitHub. It restarts after installation and keeps settings and server data.
+- On Linux, the launcher can also install a release alongside a Git checkout.
+- The dependency check now uses the version declared by the project.
+
 ## 0.1.0-alpha.1 — 2026-11-11
 
 First public alpha of Solbreaker, compatible with build 11.21.0.1235_7376187.

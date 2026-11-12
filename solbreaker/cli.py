@@ -69,8 +69,7 @@ def main(argv=None):
                     from .terminal import run
             except ImportError as error:
                 parser.exit(1, f'Install interface dependencies with python tools/install_dependencies.py --profile {args.command}. {error}\n')
-            run(args.config)
-            return
+            return run(args.config)
         elif args.command == 'launch-client':
             from .management_tasks import launch_client
             if args.connection:
