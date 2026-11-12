@@ -1,6 +1,6 @@
 # Locked release dependencies
 
-`lock.json` pins the Python package versions and SHA-256 values of accepted distributions. The Windows native wheel has its own accepted digest. `native-artifacts.json` pins the accepted Windows DLLs and that wheel for release assembly. The new ground controller needs a fifth DLL, `solbreaker_physics_core.dll`; its Windows build has not passed runtime acceptance and has no pinned digest yet. Native Windows packaging fails until that acceptance is complete.
+`lock.json` pins the Python package versions and SHA-256 values of accepted distributions. The Windows native wheel has its own accepted digest. `native-artifacts.json` pins the accepted Windows DLLs and that wheel for release assembly. The Windows package contains five accepted DLLs, including the ground controller `solbreaker_physics_core.dll`. The runtime checks and their scope are described in [Native ground physics](../docs/NATIVE_PHYSICS.md).
 
 The GUI, TUI and server setup scripts call `tools/install_dependencies.py`. The installer works inside the project's private virtual environment.
 

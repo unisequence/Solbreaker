@@ -1,9 +1,11 @@
 """Portable native library selection and spawned owner socket transport."""
-import unittest
+import asyncio
 import socket
+import time
+import unittest
 from unittest.mock import patch
 
-from solbreaker.arena_owner import ArenaOwner, Command
+from solbreaker.arena_owner import ArenaOwner, AsyncArenaOwner, Command, OwnerError
 from solbreaker.owner_channel import FramedChannel, configured_ipc
 from solbreaker.rapier_dynamic import library_path
 
@@ -14,6 +16,15 @@ class EchoHandler:
 
     def close(self):
         pass
+
+
+class SlowHandler(EchoHandler):
+    def __init__(self):
+        time.sleep(0.25)
+
+    def apply(self, command):
+        time.sleep(0.5)
+        return super().apply(command)
 
 
 class NativeWindowsTests(unittest.TestCase):
@@ -29,6 +40,15 @@ class NativeWindowsTests(unittest.TestCase):
         with ArenaOwner(EchoHandler, ipc='socket', timeout=10) as owner:
             result = owner.apply(Command('control', 1., 1, b'\x01\x00'))
             self.assertEqual(result.state, b'\x01\x00')
+
+    def test_startup_timeout_does_not_extend_command_timeout(self):
+        async def run_owner():
+            async with await AsyncArenaOwner.create(SlowHandler, timeout=0.15, startup_timeout=5) as owner:
+                with self.assertRaises(OwnerError):
+                    await owner.apply(Command('motion', 1., 1))
+
+        with patch.dict('os.environ', {'SOLBREAKER_OWNER_IPC': 'socket'}):
+            asyncio.run(run_owner())
 
     def test_tcp_fallback_disables_nagle_for_frame_delivery(self):
         fallback = socket._fallback_socketpair

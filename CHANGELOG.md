@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.0-alpha.3 — 2026-11-12
+
+- Allow up to 120 seconds to initialize an arena. The command timeout during
+  play remains 45 seconds. This fixes error 8 when a full bot battle takes
+  longer than 45 seconds to load.
+- Find nearby servers from the setup wizard over IPv4 LAN or Tailscale.
+  Hosts can select a network adapter in My server.
+- Add a branded Windows desktop shortcut from Settings.
+- Show the Steam download size and estimated time before download. Expand
+  troubleshooting, LAN setup and update recovery in the guides.
+
 ## 0.1.0-alpha.2 — 2026-11-12
 
 - The desktop launcher can download, verify and install new releases from

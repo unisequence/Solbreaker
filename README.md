@@ -5,7 +5,7 @@
 A self-hosted multiplayer tank server with a desktop launcher and terminal interface.
 **Compatible with build 11.21.0.1235_7376187.**
 
-[Download the alpha](https://github.com/unisequence/Solbreaker/releases/tag/v0.1.0-alpha.2) ·
+[Download the alpha](https://github.com/unisequence/Solbreaker/releases/tag/v0.1.0-alpha.3) ·
 [Report a bug](https://github.com/unisequence/Solbreaker/issues/new/choose) ·
 [Руководство на русском](README.ru.md)
 
@@ -24,7 +24,7 @@ adapters. Their scope and validation are described in [Client patches](docs/CLIE
 
 ### Windows x64
 
-1. Download `Solbreaker-0.1.0-alpha.2-windows-x64.zip` from the release page.
+1. Download `Solbreaker-0.1.0-alpha.3-windows-x64.zip` from the release page.
 2. Extract it into a writable folder and open **`launch-gui.vbs`**.
 3. Click **Set up game**. Select your compatible game folder and a separate
    destination for the Solbreaker client.
@@ -35,10 +35,22 @@ adapters. Their scope and validation are described in [Client patches](docs/CLIE
 The Windows archive contains a private Python runtime, GUI/TUI dependencies,
 PyBullet and all five native libraries. No separate Python, Rust or WSL
 installation is needed. `launch-tui.cmd` opens the terminal interface.
+To add a branded shortcut, open **Settings → Create desktop shortcut**.
+A verified copy of the game is enough to prepare and run the Windows client
+without Steam installed.
 
-If you do not have the pinned game build, the setup wizard can open Steam's
-console and provide the depot command. Sign in with your own Steam account,
-complete the download and return to the wizard to verify the files.
+If you need the pinned build, the wizard opens Steam Console and copies the
+depot command. Wait for `Depot download complete`, then verify the files in
+the wizard. The depot is about 21 GiB, roughly 30 minutes at 100 Mbps before
+verification. On Windows, budget around 45 GiB if the depot and the prepared
+client share a disk. If the depot is already present, allow about 22 GiB
+on the destination disk. The temporary copy becomes the finished client.
+
+If Steam reports an unavailable depot, check your account access and retry
+the exact command from the wizard. For recurring network download errors,
+see [Steam's download troubleshooting](https://help.steampowered.com/en/faqs/view/21F5-8D5D-0141-7A5E).
+A SHA-256 error calls for a fresh verification of the pinned source folder.
+Retry preparation in a new destination after verification succeeds.
 
 ### Linux x86-64
 
@@ -63,7 +75,7 @@ Keep the original game folder in place: the separate client links to its assets.
 
 ### Updating
 
-In a release installation, click **Update** in the launcher sidebar. Close the
+In releases from alpha.2 onward, click **Update** in the launcher sidebar. Close the
 game and stop your local server first. The launcher downloads the matching
 GitHub release, checks its SHA-256 and restarts after installing it. Your
 settings, client and server data are kept.
@@ -74,6 +86,25 @@ into a separate folder. Copy your old `runtime/manager.json` into the new
 there. Start the new launcher and check the paths in **Settings**. On Linux,
 run `./.venv/bin/python tools/build_native.py` from the new folder after the
 first launcher start if you host a local server.
+
+If installation is interrupted, check `runtime/launcher-update.log`. When the
+launcher reports an interrupted replacement, keep the old installation and
+extract a verified release into a separate folder. Follow the same settings
+migration steps above. [Recovery steps in Russian](docs/INSTALL.ru.md#если-обновление-прервалось).
+
+### Play with a friend
+
+1. **Host.** In **My server → Set up LAN / VPN access**, select the network
+   adapter and start the server.
+2. **Player.** Choose **On another server** in the setup wizard and select
+   the host from the discovered servers. An existing prepared client can
+   switch servers through the wizard with the game closed.
+
+Discovery uses IPv4 broadcasts on LAN and direct queries to visible peers
+when the local Tailscale client is running. If discovery is unavailable, the
+host can export `connection.json` with **My server → Share connection**.
+For direct internet play, configure HTTPS, a reachable public IPv4, the two
+UDP ports and the access list. [Network guide in Russian](docs/SERVER.ru.md#сеть-и-https).
 
 ### Server only
 
@@ -90,13 +121,13 @@ On Windows, use `setup.ps1 -Game 'D:\Games\CompatibleBuild'` followed by
 The initial account is written to `data/private/initial-login.txt`; players can
 also register an email, nickname and password inside the game.
 
-For network hosting, configure the addresses, ports and HTTPS profile before
-sharing `data/connection.json`. See the [network guide](README.ru.md#сеть-и-https)
-and [example configuration](examples/network-public.toml).
+Prepared local play works offline. Remote play needs a network path to the
+server. Keep the original game folder available on Linux, where the prepared
+client links to its resources.
 
 ## What is included
 
-- Native ground physics in Rust, with Rapier dynamics and Bullet geometry queries.
+- Native ground physics in Rust, verified on Linux and Windows x64. See the [verification scope](docs/NATIVE_PHYSICS.md).
 - A 60 Hz simulation; bot decisions run at 15 Hz.
 - GUI and TUI launchers, with Russian and English in the GUI.
 - Local and remote server profiles, account registration and server backups.

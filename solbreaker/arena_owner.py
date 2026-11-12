@@ -253,9 +253,11 @@ def _worker(factory: Callable[[], ArenaHandler], incoming, outgoing) -> None:
 class ArenaOwner:
     """Synchronous isolated owner; methods must be called from one thread only."""
     def __init__(self, factory: Callable[[], ArenaHandler], *, queue_size: int = 4,
-                 timeout: float = 5.0, ipc: str | None = None):
+                 timeout: float = 5.0, startup_timeout: float | None = None, ipc: str | None = None):
         if type(queue_size) is not int or not 1 <= queue_size <= 64 or not math.isfinite(timeout) or timeout <= 0:
             raise ValueError('invalid owner limits')
+        if startup_timeout is not None and (not math.isfinite(startup_timeout) or startup_timeout <= 0):
+            raise ValueError('invalid owner startup timeout')
         ipc = configured_ipc(ipc)
         _freeze(factory)  # fail synchronously before starting a child
         self._ctx = mp.get_context('spawn')
@@ -280,14 +282,14 @@ class ArenaOwner:
                 q.close()
             raise
         try:
-            if self._receive() != ('ready',):
+            if self._receive(timeout=startup_timeout) != ('ready',):
                 raise OwnerError('owner failed to initialize')
         except BaseException:
             self.close()
             raise
 
-    def _receive(self):
-        deadline = time.monotonic() + self._timeout
+    def _receive(self, *, timeout=None):
+        deadline = time.monotonic() + (self._timeout if timeout is None else timeout)
         while True:
             try:
                 return pickle.loads(self._out.get(timeout=min(.1, max(0., deadline-time.monotonic()))))
@@ -374,9 +376,11 @@ class AsyncArenaOwner:
         self._cleanup = None
 
     @classmethod
-    async def create(cls, factory: Callable[[], ArenaHandler], *, queue_size: int = 4, timeout: float = 5.0) -> AsyncArenaOwner:
+    async def create(cls, factory: Callable[[], ArenaHandler], *, queue_size: int = 4,
+                     timeout: float = 5.0, startup_timeout: float | None = None) -> AsyncArenaOwner:
         import asyncio
-        task = asyncio.create_task(asyncio.to_thread(ArenaOwner, factory, queue_size=queue_size, timeout=timeout))
+        task = asyncio.create_task(asyncio.to_thread(ArenaOwner, factory, queue_size=queue_size,
+                                                     timeout=timeout, startup_timeout=startup_timeout))
         try:
             return cls(await asyncio.shield(task))
         except asyncio.CancelledError:

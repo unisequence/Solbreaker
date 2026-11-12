@@ -85,6 +85,25 @@ class DesktopTests(unittest.TestCase):
         self.assertEqual(settings.server_url, 'https://example.test')
         wizard.reject()
 
+    def test_selecting_a_discovered_server_uses_the_existing_profile_workflow(self):
+        from concurrent.futures import Future
+        from solbreaker.discovery import DiscoveredServer
+
+        self.window.remote.setChecked(True)
+        self.window.start_wizard()
+        wizard = self.window.wizard
+        server = DiscoveredServer('Nearby server', '192.168.1.10', 18080, 'test-id', b'{}')
+        wizard.lan_scan = Future()
+        wizard.lan_scan.set_result([server])
+        wizard.show_discovered()
+        self.assertIn('Nearby server', wizard.lan_results.itemText(0))
+        wizard.choose_discovered(0)
+        settings = wizard.settings()
+        self.assertTrue(wizard.by_file.isChecked())
+        self.assertEqual(settings.server_url, '')
+        self.assertEqual(Path(settings.connection).read_bytes(), server.profile)
+        wizard.reject()
+
     def test_theme_switch_is_saved_without_changing_connection(self):
         from solbreaker.management import Settings
         before = self.window.manager.settings.connection
