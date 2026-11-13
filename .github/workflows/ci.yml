@@ -27,7 +27,7 @@ jobs:
         env:
           BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: |
-          if [[ -n "$BASE" && ! "$BASE" =~ ^0+$ ]]; then
+          if [[ "$GITHUB_REF_TYPE" != tag && -n "$BASE" && ! "$BASE" =~ ^0+$ ]]; then
             python tools/audit_repository.py --base "$BASE"
           else
             python tools/audit_repository.py
