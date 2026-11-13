@@ -35,6 +35,7 @@ class Settings:
     gui_language: str = 'ru'
     remember_login: bool = True
     server_name: str = 'Solbreaker'
+    sandbox: bool = False
 
     def __post_init__(self):
         for name, value in vars(self).items():
@@ -57,18 +58,22 @@ class Settings:
             elif name == 'server_name':
                 from .server_identity import validate_name
                 validate_name(value)
-            elif name in ('reuse_native', 'remember_login'):
+            elif name in ('reuse_native', 'remember_login', 'sandbox'):
                 if type(value) is not bool:
                     raise ValueError('Неверное значение логической настройки')
             elif not isinstance(value, str) or '\0' in value:
                 raise ValueError('Неверное значение настройки '+name)
 
     @property
+    def local_profile_path(self):
+        return Path(self.state).expanduser()/'connection.json'
+
+    @property
     def local_connection(self):
         if self.play_mode != 'auto':
             return self.play_mode == 'local'
         return (not self.server_url.strip() and bool(self.connection.strip())
-                and Path(self.connection).resolve() == (Path(self.state)/'connection.json').resolve())
+                and Path(self.connection).expanduser().resolve() == self.local_profile_path.resolve())
 
     @classmethod
     def load(cls, path):
@@ -112,6 +117,12 @@ def command(action, settings, *, windows=None, interface=None):
     state = (required(settings.state, 'папку данных сервера')
              if action in ('prepare-server', 'server', 'network', 'lan', 'server-name', 'export', 'backup') else '')
     client = required(settings.client, 'папку клиента') if action in ('prepare-client', 'play', 'connect') else ''
+    if client:
+        if settings.local_connection:
+            connection = str(Path(required(settings.state, 'папку данных сервера'))/'connection.json')
+            server_url = ''
+        else:
+            connection, server_url = settings.connection.strip(), settings.server_url.strip()
     cli = [python, '-u', '-m', 'solbreaker']
     if action == 'lan':
         address, subnet = interface
@@ -140,8 +151,8 @@ def command(action, settings, *, windows=None, interface=None):
         return args
     if action == 'prepare-client':
         args = cli + ['prepare-client', '--game', required(settings.game, 'папку оригинальной игры'), '--output', client]
-        args += (['--url', settings.server_url.strip()] if settings.server_url.strip()
-                 else ['--connection', required(settings.connection, 'файл подключения')])
+        args += (['--url', server_url] if server_url
+                 else ['--connection', required(connection, 'файл подключения')])
         if windows:
             args.append('--windows')
         else:
@@ -150,22 +161,26 @@ def command(action, settings, *, windows=None, interface=None):
         return args
     if action == 'server':
         if windows:
-            return ['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
+            args = ['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
                     str(PROJECT/'start-server.ps1'), '-Distribution', settings.distribution,
                     '-State', state, '-Owned']
-        return ['bash', str(PROJECT/'start-server.sh'), '--state', state,
+            return args + (['-Sandbox'] if settings.sandbox else [])
+        args = ['bash', str(PROJECT/'start-server.sh'), '--state', state,
                 '--log-file', str(Path(state)/'server.log'), '--stop-on-stdin']
+        return args + (['--sandbox'] if settings.sandbox else [])
     if action == 'play':
         args = cli + ['launch-client', '--lab', client]
         args.append('--auto-login' if settings.remember_login else '--no-auto-login')
-        if not settings.server_url.strip() and settings.connection.strip() and Path(settings.connection).is_file():
-            args += ['--connection', str(Path(settings.connection).absolute())]
+        if server_url:
+            args += ['--url', server_url]
+        elif connection:
+            args += ['--connection', required(connection, 'файл подключения')]
         return args
     if action == 'connect':
         args = cli + ['import-connection', '--lab', client]
-        if settings.server_url.strip():
-            return args + ['--url', settings.server_url.strip()]
-        return args + ['--connection', required(settings.connection, 'файл подключения')]
+        if server_url:
+            return args + ['--url', server_url]
+        return args + ['--connection', required(connection, 'файл подключения')]
     if action == 'network':
         return cli + ['configure-network', '--state', state,
                       '--config', required(settings.network, 'сетевой TOML-файл')]
@@ -248,7 +263,7 @@ class Manager:
             return
         if self.busy and settings != replace(self.settings, gui_theme=settings.gui_theme):
             raise ValueError('Дождись завершения текущей операции')
-        server_fields = ('state', 'host', 'http_port', 'login_port', 'distribution')
+        server_fields = ('state', 'host', 'http_port', 'login_port', 'distribution', 'sandbox')
         if (self.server is not None and self.server.running
                 and any(getattr(settings, key) != getattr(self.settings, key) for key in server_fields)):
             raise ValueError('Останови локальный сервер перед изменением его путей и адресов')
@@ -320,10 +335,11 @@ class Manager:
                 self.run('server')
                 self._play_when_ready = True
                 return
-            if self.server is not None and self.server.running and not self.server.started:
+            if local and self.server is not None and self.server.running and not self.server.started:
                 self._play_when_ready = True
                 self.notice = 'После запуска сервера откроется игра'
                 return
+            self._play_when_ready = False
             private = lab/'private'
             from .platform_io import open_private_file
             descriptor = open_private_file(private, 'launcher-client.log', create=True, writable=True)
@@ -381,6 +397,10 @@ class Manager:
             self.notice = ('Готово' if self.job.returncode == 0
                            else f'Операция завершилась с ошибкой {self.job.returncode}. Подробности в журнале')
             self.job = None
+        if self.client is not None and (code := self.client.poll()) is not None:
+            self.client = None
+            if code != 0:
+                self.notice = 'Не удалось запустить клиент. См. private/launcher-client.log.'
         if self._play_when_ready and self.server is not None:
             if not self.server.running:
                 self._play_when_ready = False

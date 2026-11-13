@@ -28,6 +28,7 @@ OWNED_TANK_CELL = "UI/Screens3/Lobby/Hangar/TanksPanel/OwnedTankCell.yaml.dvpl"
 INVENTORY = "UI/Screens3/Lobby/Inventory/Inventory.yaml.dvpl"
 SIDEBAR = "UI/Screens3/Lobby/Common/Sidebar/SidebarHangarMenu.yaml.dvpl"
 ACCOUNT_OPTIONS = "UI/Screens/Common/Settings/PrimaryTab/PrimaryOptionsPage.yaml.dvpl"
+KEYBOARD_OPTIONS = "UI/Screens/Common/Settings/KeyboardMouseControlOptionsPage.yaml.dvpl"
 GAME_TYPES = "UI/Screens/Lobby/Hangar/GameTypeScreen.yaml.dvpl"
 GAME_TYPE_CARD = "UI/Screens/Lobby/Hangar/GameTypeSelector.yaml.dvpl"
 AVATAR_RATING = "UI/Screens3/Lobby/Hangar/PlayerAvatarWithRating.yaml.dvpl"
@@ -41,12 +42,23 @@ HIDDEN_SECTIONS = ("crew_skills", "clans", "tournaments")
 LOCAL_MAP_STRING_PREFIX = "#maps:user_map:"
 UI_RESOURCES = (BASE_HEADER, BASE_LOBBY, BASE_LOBBY_ACTIONS, STATS_ITEM, INVENTORY_PANEL, INVENTORY_ACTIONS,
                 HANGAR, HANGAR_ACTIONS, BATTLE_BUTTON, TANKS_PANEL, OWNED_TANK_CELL, INVENTORY,
-                SIDEBAR, ACCOUNT_OPTIONS, GAME_TYPES, GAME_TYPE_CARD,
+                SIDEBAR, ACCOUNT_OPTIONS, KEYBOARD_OPTIONS, GAME_TYPES, GAME_TYPE_CARD,
                 AVATAR_RATING, CALIBRATION_POPUP, NOTIFICATION_7X7,
                 LOGIN_ENTRY, SERVER_SELECTION, SERVER_MAP_ELEMENT,
                 client_battle_settings.FORM, *client_recon.MARKER_OPACITY)
 STRINGS_EN = "Strings/en.yaml.dvpl"
 STRINGS_RU = "Strings/ru.yaml.dvpl"
+SANDBOX_BINDINGS_VERSION = 3
+SANDBOX_BINDING_STRINGS = {
+    STRINGS_EN: {'Title': 'Solbreaker Sandbox',
+                 'Boost': 'Toggle boost', 'Flight': 'Toggle flight',
+                 'Missile': 'Toggle missile camera', 'Target': 'Place training target',
+                 'Jump': 'Gravity Force thruster'},
+    STRINGS_RU: {'Title': 'Песочница Solbreaker',
+                 'Boost': 'Включить или выключить форсаж', 'Flight': 'Взлететь или сесть',
+                 'Missile': 'Переключить камеру ПТУР', 'Target': 'Поставить мишень на Полигоне',
+                 'Jump': 'Прыгнуть в «Гравитации»'},
+}
 LOCAL_TRAINING_MAP_STRINGS = {
     STRINGS_EN: {"#maps:lagoon:15_lagoon_ln/15_lagoon_ln.sc2": "Lagoon"},
     STRINGS_RU: {"#maps:lagoon:15_lagoon_ln/15_lagoon_ln.sc2": "Лагуна"},
@@ -113,6 +125,32 @@ class _StringsLoader(getattr(yaml, "CBaseLoader", yaml.BaseLoader)):
         return super().construct_mapping(node, deep=deep)
 
 
+def _sandbox_binding_strings(relative):
+    return {f'Local/Sb{key}': value
+            for key, value in SANDBOX_BINDING_STRINGS[relative].items()}
+
+
+def _sandbox_controls(document):
+    page, = (node for node in document['Prototypes'] if node['name'] == 'KeyboardMouseControlOptionsPage')
+    scroll, = (node for node in page['children'] if node['name'] == 'ScrollView')
+    container, = (node for node in scroll['children'] if node['name'] == 'scrollContainerControl')
+    controls = container['children']
+    bindings, = (node for node in controls if node['name'] == 'KeyBindings')
+
+    title = {'class': 'UIStaticText', 'name': 'SolbreakerSandboxControls', 'input': False,
+             'size': [1024., 38.], 'classes': 'pane-bg', 'components': {
+                 'Anchor': {'leftAnchorEnabled': True, 'leftAnchor': 5.,
+                            'rightAnchorEnabled': True, 'rightAnchor': 5.},
+                 'Background': {'leftRightStretchCap': 5.},
+                 'StyleSheet': {'styles': '~res:/UI/Screens3/Background.style.yaml'},
+                 'UITextComponent': {'text': 'Local/SbTitle', 'fontPath': '~res:/Fonts/WarHeliosCondCBold.ttf',
+                                     'fontSize': 22., 'color': [1., 1., 1., 1.],
+                                     'colorInheritType': 'COLOR_IGNORE_PARENT',
+                                     'align': ['HCENTER', 'VCENTER']}}}
+    controls[:] = [node for node in controls if node['name'] != title['name']]
+    controls.insert(controls.index(bindings), title)
+
+
 def patched_strings(source, relative, *, navigation_enabled=True):
     document = yaml.load(dvpl.read(source), Loader=_StringsLoader)
     if not isinstance(document, dict):
@@ -126,6 +164,7 @@ def patched_strings(source, relative, *, navigation_enabled=True):
         document.setdefault(key, text)
     document.update(LOCAL_PROVISION_STRINGS.get(relative, {}))
     document.update(LOCAL_MODE_STRINGS.get(relative, {}))
+    document.update(_sandbox_binding_strings(relative))
     locale = 'ru' if relative == STRINGS_RU else 'en'
     document.update({'Local/BattleSettings/'+key: value
                      for key, value in client_battle_settings.STRINGS[locale].items()})
@@ -176,7 +215,9 @@ action SolbreakerSettingsSaved(int arg1)
                  '    }')
         return dvpl.encode(text.replace(before, after).encode('utf-8'))
     document = yaml.safe_load(dvpl.read(source))
-    if relative == BASE_LOBBY:
+    if relative == KEYBOARD_OPTIONS:
+        _sandbox_controls(document)
+    elif relative == BASE_LOBBY:
         root, = [n for n in document['Prototypes'] if n.get('name') == 'BaseLobby']
         root['components']['UIDataLocalVarsComponent']['data'].append(
             ['bool', 'localSettingsSavedToast', 'false'])
@@ -455,8 +496,10 @@ def install_ui_guards(lab):
             changed = True
         overrides[relative] = hashlib.sha256(content).hexdigest()
     if (changed or manifest.get("ui_overrides") != overrides
+            or manifest.get('sandbox_bindings_version') != SANDBOX_BINDINGS_VERSION
             or manifest.get("hidden_ui_sections") != list(HIDDEN_SECTIONS)):
         manifest["ui_overrides"] = overrides
+        manifest['sandbox_bindings_version'] = SANDBOX_BINDINGS_VERSION
         manifest["shop_ui_disabled"] = True
         manifest["hidden_ui_sections"] = list(HIDDEN_SECTIONS)
         temporary = manifest_path.with_suffix(".new")
@@ -464,6 +507,55 @@ def install_ui_guards(lab):
         os.replace(temporary, manifest_path)
     return {"shop_ui_disabled": True, "hidden_sections": list(HIDDEN_SECTIONS),
             "changed": changed, "files": list(patches)}
+
+
+def install_sandbox_bindings(lab, manifest):
+    """Add the key reference to an already prepared, idle client."""
+    if manifest.get('sandbox_bindings_version') == SANDBOX_BINDINGS_VERSION:
+        return manifest
+    from .connection import atomic_write
+
+    data = lab/'client/Data'
+    if not all((data/relative).is_file() for relative in (KEYBOARD_OPTIONS, *SANDBOX_BINDING_STRINGS)):
+        return manifest
+    source = Path(manifest.get('source_game', manifest['game'])).resolve(strict=True)
+    overrides = dict(manifest.get('ui_overrides', {}))
+    patches = {KEYBOARD_OPTIONS: patched_resource(data/KEYBOARD_OPTIONS, KEYBOARD_OPTIONS)}
+    for relative in SANDBOX_BINDING_STRINGS:
+        strings = yaml.load(dvpl.read(data/relative), Loader=_StringsLoader)
+        strings.update(_sandbox_binding_strings(relative))
+        patches[relative] = dvpl.encode(yaml.safe_dump(strings, sort_keys=False, allow_unicode=True,
+                                                       width=1 << 30).encode())
+    for relative, content in patches.items():
+        parent = data
+        for component in Path(relative).parts[:-1]:
+            parent /= component
+            local_directory(parent, source)
+            if parent.resolve(strict=True) != parent:
+                raise ValueError(f'Expected a private client UI directory: {parent}')
+        target = data/relative
+        if target.is_symlink() or target.read_bytes() != content:
+            atomic_write(target, content, replace_symlink=True)
+        overrides[relative] = hashlib.sha256(content).hexdigest()
+    updated = dict(manifest, ui_overrides=overrides, sandbox_bindings_version=SANDBOX_BINDINGS_VERSION)
+    atomic_write(lab/'manifest.json', (json.dumps(updated, indent=2)+'\n').encode())
+    return updated
+
+
+def install_training_maps(lab, manifest):
+    from .connection import atomic_write
+    from .map_catalog import MAP_CATALOG_RESOURCE, expose_training_maps
+
+    data = lab/'client/Data'
+    target = data/MAP_CATALOG_RESOURCE
+    if not target.is_file():
+        return
+    document = yaml.safe_load(dvpl.read(target))
+    if not expose_training_maps(document):
+        return
+    local_directory(data, Path(manifest.get('source_game', manifest['game'])))
+    atomic_write(target, dvpl.encode(yaml.safe_dump(
+        document, sort_keys=False, allow_unicode=True).encode()), replace_symlink=True)
 
 
 def install_server_name(lab):

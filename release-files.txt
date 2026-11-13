@@ -327,6 +327,7 @@ solbreaker/catalog.py
 solbreaker/certificate_authorities.py
 solbreaker/cipher.py
 solbreaker/cli.py
+solbreaker/client_atgm_aim.py
 solbreaker/client_battle_settings.py
 solbreaker/client_bot_mode.py
 solbreaker/client_branding.py
@@ -335,7 +336,9 @@ solbreaker/client_patch.py
 solbreaker/client_provisions.py
 solbreaker/client_recon.py
 solbreaker/client_registration.py
+solbreaker/client_sandbox.py
 solbreaker/client_setup.py
+solbreaker/client_t49_textures.py
 solbreaker/client_tls.py
 solbreaker/client_ui.py
 solbreaker/collision.py
@@ -407,6 +410,7 @@ solbreaker/native/recon_client.c
 solbreaker/native/recon_client.h
 solbreaker/native/recon_wire.c
 solbreaker/native/recon_wire.h
+solbreaker/native/sandbox_client.c
 solbreaker/native/sim_core/Cargo.lock
 solbreaker/native/sim_core/Cargo.toml
 solbreaker/native/sim_core/abi.h
@@ -447,6 +451,7 @@ solbreaker/revision.py
 solbreaker/rooms.py
 solbreaker/roster.py
 solbreaker/scene_quality.py
+solbreaker/sandbox.py
 solbreaker/server.py
 solbreaker/server_identity.py
 solbreaker/setup_progress.py
@@ -472,8 +477,11 @@ solbreaker/windows_shortcut.py
 start-server.ps1
 start-server.sh
 tests/__init__.py
+tests/test_ammo_resupply.py
+tests/test_battle_provisions.py
 tests/test_bot_combat.py
 tests/test_captures.py
+tests/test_client_repairs.py
 tests/test_collision_queries.py
 tests/test_contact_queries.py
 tests/test_dependencies.py
@@ -481,9 +489,11 @@ tests/test_desktop.py
 tests/test_diagnostic_fast_paths.py
 tests/test_discovery.py
 tests/test_launcher_stdin.py
+tests/test_loadout_prices.py
 tests/test_login_preferences.py
 tests/test_map_cache.py
 tests/test_management.py
+tests/test_missiles.py
 tests/test_native_build.py
 tests/test_native_physics.py
 tests/test_native_windows.py
@@ -492,11 +502,13 @@ tests/test_packaging.py
 tests/test_profile_redirects.py
 tests/test_registration.py
 tests/test_runtime_flags.py
+tests/test_sandbox.py
 tests/test_server_identity.py
 tests/test_setup.py
 tests/test_static_visibility.py
 tests/test_steam_depot.py
 tests/test_terminal.py
+tests/test_training_room_bots.py
 tests/test_token_capacity.py
 tests/test_updates.py
 tests/test_windows_bundle.py

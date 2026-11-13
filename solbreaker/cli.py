@@ -18,6 +18,7 @@ def main(argv=None):
     init.add_argument('--username', default='admin@solbreaker.local')
     serve = commands.add_parser('serve', help='Run the headless game server')
     serve.add_argument('--stop-on-stdin', action='store_true', help=argparse.SUPPRESS)
+    serve.add_argument('--sandbox', action='store_true', help='Allow sandbox controls in every battle')
     serve.add_argument('--state', type=Path, default=Path('data'))
     serve.add_argument('--log-file', type=Path)
     serve.add_argument('--diagnostic-log', nargs='?', const='auto', type=Path)
@@ -48,12 +49,17 @@ def main(argv=None):
     connect = commands.add_parser('connect-client', help='Import a public server profile into an idle prepared client')
     connect.add_argument('--lab', type=Path, required=True)
     connect.add_argument('--connection', type=Path, required=True)
+    t49 = commands.add_parser('restore-t49-textures', help='Restore T49 P textures from an owned Steam depot')
+    t49.add_argument('--lab', type=Path, required=True)
+    t49.add_argument('--source', type=Path, required=True)
     for mode in ('gui', 'tui'):
         interface = commands.add_parser(mode, help='Open the Solbreaker management interface')
         interface.add_argument('--config', type=Path, default=Path('runtime/manager.json'))
     launch = commands.add_parser('launch-client', help='Launch an idle prepared client with its private profile')
     launch.add_argument('--lab', type=Path, required=True)
-    launch.add_argument('--connection', type=Path)
+    launch_origin = launch.add_mutually_exclusive_group()
+    launch_origin.add_argument('--connection', type=Path)
+    launch_origin.add_argument('--url')
     launch.add_argument('--auto-login', action=argparse.BooleanOptionalAction, default=None)
     backup = commands.add_parser('backup-state', help='Back up offline accounts, progress and server keys')
     backup.add_argument('--state', type=Path, default=Path('data'))
@@ -76,10 +82,8 @@ def main(argv=None):
             return run(args.config)
         elif args.command == 'launch-client':
             from .management_tasks import launch_client
-            if args.connection:
-                from .management_tasks import import_connection
-                import_connection(args.lab, profile=args.connection)
-            result = launch_client(args.lab, auto_login=args.auto_login)
+            result = launch_client(args.lab, auto_login=args.auto_login,
+                                   profile=args.connection, url=args.url)
             if result not in (0, 1):
                 parser.exit(1, f'Client exited with code {result}\n')
             return
@@ -117,6 +121,9 @@ def main(argv=None):
                 result = connect_client(args.lab, args.connection)
                 manifest = json.loads((args.lab/'manifest.json').read_text())
                 configure_environment({}, args.lab, manifest)
+        elif args.command == 'restore-t49-textures':
+            from .client_t49_textures import restore
+            result = restore(args.lab, args.source)
         elif args.command == 'prepare-client':
             from .client_setup import prepare
             import tempfile
@@ -143,7 +150,8 @@ def main(argv=None):
                 path = diagnostics.directory(args.state.resolve(), args.diagnostic_log)
                 if path is not None:
                     diagnostics.install(path)
-                asyncio.run(serve_cli(args.state.resolve(), stop_on_stdin=args.stop_on_stdin))
+                asyncio.run(serve_cli(args.state.resolve(), stop_on_stdin=args.stop_on_stdin,
+                                      sandbox=args.sandbox))
             finally:
                 diagnostics.close()
             return

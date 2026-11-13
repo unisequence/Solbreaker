@@ -43,10 +43,10 @@ def arena_update(opcode, message):
     return b"\x13" + variable16(59 + 48, bytes([opcode]) + packed_blob(message))
 
 
-def vehicle_info(entity_id, name, team, account_id, descriptor):
+def vehicle_info(entity_id, name, team, account_id, descriptor, *, alive=True):
     return (pb_int(1, entity_id) + pb_blob(2, descriptor)
             + pb_blob(3, name.encode()) + pb_int(4, team)
-            + pb_int(5, 1) + pb_int(6, 1) + pb_int(7, account_id)
+            + pb_int(5, int(alive)) + pb_int(6, 1) + pb_int(7, account_id)
             + varint((18 << 3) | 5) + struct.pack("<f", 1.0))
 
 
@@ -151,6 +151,14 @@ def avatar_method(method, payload=b""):
         from .mercury import variable8
         return b"\x13" + variable8(59+method,payload)
     return b"\x13" + bytes([59 + method]) + payload
+
+
+def missile_message(shooter, shot, effect, position, velocity):
+    # Avatar30 / 0x177f175, moveATGM. TracerManager at 0x1bb9440 reads
+    # the shooter, shot, first/third vectors and the effect. The other
+    # fields are unused by the pinned client's tracer and player listeners.
+    return avatar_method(30,struct.pack('<II10fBf',shooter,shot,
+        *position,0.,0.,0.,*velocity,0.,effect,0.))
 
 
 def provision_effect_message(entity_id, compact_id):
@@ -329,28 +337,40 @@ def module_snapshot(arena, vehicle):
     return state(vehicle) if state else ((),())
 
 
+def present_vehicles(arena):
+    slots = getattr(arena, 'practice_slots', ())
+    for alias, vehicle in enumerate(arena.vehicles.values()):
+        if vehicle.entity_id not in slots or vehicle.entity_id in arena.practice_spawned:
+            yield alias, vehicle
+
+
+def vehicle_spawn_parts(arena, vehicle, alias):
+    pose = vehicle.pose
+    critical, destroyed = module_snapshot(arena, vehicle)
+    # Entity creation reads yaw/pitch/roll, detailed movement roll/pitch/yaw.
+    yield create_vehicle({'nickname':vehicle.nickname}, vehicle.descriptor, pose.position,
+        vehicle.health, vehicle.entity_id, vehicle.team, alias, (pose.yaw,pose.pitch,pose.roll),
+        vehicle.max_health, vehicle.definition.optional_devices if vehicle.definition else (),
+        critical, destroyed, gun_angles=vehicle.gun.packed(),
+        state_modifiers=getattr(arena, 'state_modifiers', lambda vehicle: ())(vehicle))
+    armor_state = movable_armor_states_message(vehicle)
+    if armor_state:
+        # Dynamic property16 is applied only after the Vehicle exists.
+        yield armor_state
+
+
 def spawn_message_parts(arena, player, *, include_owner_state=True):
     """Complete wire units; native Mercury cannot split an element header."""
     participants = participant_ids((v.entity_id,v.account_id) for v in arena.vehicles.values())
-    rows = b''.join(pb_blob(1,vehicle_info(v.entity_id,v.nickname,v.team,participants[v.entity_id],v.descriptor))
-                    for v in arena.vehicles.values())
-    stats = b''.join(pb_blob(1,pb_int(1,v.entity_id)+pb_int(2,v.kills)) for v in arena.vehicles.values())
+    present = tuple(present_vehicles(arena))
+    rows = b''.join(pb_blob(1,vehicle_info(v.entity_id,v.nickname,v.team,participants[v.entity_id],v.descriptor,
+                                         alive=v.alive if getattr(arena, 'practice', False) else True))
+                    for _,v in present)
+    stats = b''.join(pb_blob(1,pb_int(1,v.entity_id)+pb_int(2,v.kills)) for _,v in present)
     parts = [arena_update(1,pb_blob(1,rows)),arena_update(4,pb_blob(4,stats)),
              b'\x13\xa6'+struct.pack('<I',player.vehicle_id)]
-    for alias,v in enumerate(arena.vehicles.values()):
-        p = v.pose
-        critical,destroyed = module_snapshot(arena,v)
-        # Entity creation reads yaw/pitch/roll. Detailed movement has its
-        # separate Direction3 reader and takes roll/pitch/yaw instead.
-        parts.append(create_vehicle({'nickname':v.nickname},v.descriptor,p.position,v.health,v.entity_id,
-                  v.team,alias,(p.yaw,p.pitch,p.roll),v.max_health,
-                  v.definition.optional_devices if v.definition else (),critical,destroyed,gun_angles=v.gun.packed(),
-                  state_modifiers=getattr(arena, 'state_modifiers', lambda vehicle: ())(v)))
-        armor_state = movable_armor_states_message(v)
-        if armor_state:
-            # property16 is dynamic, not a create-entity property: native
-            # state consumers receive it only after the Vehicle exists.
-            parts.append(armor_state)
+    for alias,v in present:
+        parts.extend(vehicle_spawn_parts(arena, v, alias))
     parts.append(b'\x14'+struct.pack('<III6f',player.avatar_id,arena.space_id,player.vehicle_id,0,0,0,0,0,0))
     # Creation/public vectors do not establish the owner's private crew
     # Health objects. Replay only that owner's wounds after control is set.
@@ -457,6 +477,20 @@ def consumable_message(compact_id, state, remaining=0, total=0):
     # slot state: 1 ready, 2 active, 3 cooldown. Durations are signed seconds.
     return avatar_method(17, struct.pack('<BIHBhh', 11, compact_id, 1 if compact_id else 0,
                                         state, remaining, total))
+
+
+def provision_messages(vehicle):
+    """Owner-only passive equipment slots for the native Tab HUD."""
+    # Avatar17 kind13 dispatches to the provision panel. Full CDs use
+    # common nation 15. CD0 advances the separate provision slot cursor
+    # (0x184697e), so keep gaps. Raw XML ID0 is a real provision.
+    messages = []
+    for ident in getattr(vehicle.definition, 'provisions', ()):
+        installed = int(ident is not None)
+        compact_id = (ident << 8) | 0xfd if installed else 0
+        messages.append(avatar_method(17, struct.pack('<BIHBhh', 13, compact_id,
+                                                      installed, installed, 0, 0)))
+    return tuple(messages)
 
 
 def active_equipment_message(arena, vehicle, equipment=None):
@@ -625,7 +659,7 @@ def marker_message(arena, vehicle):
 
 def motion_messages(arena, player, frame=None):
     result = bytearray()
-    for v in arena.vehicles.values():
+    for _,v in present_vehicles(arena):
         sample = frame.samples[v.entity_id] if frame is not None else None
         p = sample.pose if sample is not None else v.pose
         result += vehicle_snapshot(v.entity_id,p.position,p.yaw,p.pitch,p.roll)
@@ -675,10 +709,34 @@ def event_messages(arena, player, events):
         if (event.kind in ('ready','reload','pump_reload') and not own
                 and actor is not None and actor.team == player.team):
             allied_reload.add(event.actor)
-        if event.kind=='ready' and own:
+        if event.kind == 'practice_spawn':
+            entity = actor.entity_id
+            if d['first']:
+                participants = participant_ids((v.entity_id,v.account_id) for v in arena.vehicles.values())
+                info = vehicle_info(entity, actor.nickname, actor.team, participants[entity], actor.descriptor)
+                result += arena_update(2, pb_blob(2, pb_blob(1, info)))
+                alias = tuple(arena.vehicles).index(entity)
+                result += b''.join(vehicle_spawn_parts(arena, actor, alias))
+            else:
+                pose = actor.pose
+                result += b'\x14'+struct.pack('<III6f',entity,arena.space_id,0,
+                                               *pose.position,pose.roll,pose.pitch,pose.yaw)
+                result += module_state_messages(entity, *module_snapshot(arena, actor))
+                if own:
+                    for extra in d['repaired']:
+                        result += module_damage_message(entity, 19, extra)
+                result += state_modifiers_message(entity, arena.state_modifiers(actor))
+                result += movable_armor_states_message(actor)
+                result += vehicle_property(entity,3,struct.pack('<h',actor.health))
+                result += vehicle_property(entity,1,b'\1')
+                # The pinned ClientArena::OnVehicleResurrect reads the same
+                # victim ID field as OnVehicleKilled (UpdateArena field 6).
+                result += arena_update(20, pb_blob(6, pb_int(1, entity)))
+        elif event.kind=='ready' and own:
             allied_reload.update(v.entity_id for v in arena.vehicles.values()
                                  if v.team == player.team and v.entity_id != player.vehicle_id)
             result += ammo_message(actor)
+            result += b''.join(provision_messages(actor))
             for state in actor.consumables:
                 if state:
                     view = state.state_at(arena.simulation_time)
@@ -724,7 +782,12 @@ def event_messages(arena, player, events):
             count=d.get('shooting_count',1)
             if count:
                 result += shooting_message(event.actor,count)
-            result += avatar_method(29,struct.pack('<IIB7f',event.actor,d['shot'],d.get('effect_index',0),*d['origin'],*d['velocity'],d['gravity']))
+            if d.get('guided'):
+                result += missile_message(event.actor,d['shot'],d['effect_index'],d['origin'],d['velocity'])
+            else:
+                result += avatar_method(29,struct.pack('<IIB7f',event.actor,d['shot'],d.get('effect_index',0),*d['origin'],*d['velocity'],d['gravity']))
+        elif event.kind=='missile_move':
+            result += missile_message(event.actor,d['shot'],d['effect_index'],d['origin'],d['velocity'])
         elif event.kind=='ammo' and own:
             result += ammo_message(actor)
         elif event.kind=='shell_selected' and own:
@@ -791,7 +854,12 @@ def event_messages(arena, player, events):
                 *d['point'],*d['direction'],0))
         elif event.kind in ('impact','shot_end','splash'):
             if event.kind != 'splash':
-                result += avatar_method(20,struct.pack('<I3f',d['shot'],*d['point']))
+                if d.get('guided'):
+                    # Avatar23 / 0x177f25b, stopATGM. The final byte is
+                    # unused by the pinned client's tracer and player listeners.
+                    result += avatar_method(23,struct.pack('<I3fB',d['shot'],*d['point'],0))
+                else:
+                    result += avatar_method(20,struct.pack('<I3f',d['shot'],*d['point']))
             # HP hits are reported once, immediately before their health
             # update below. Blocked/external hits have no health event but
             # still need the native hit/ricochet screen reaction.
@@ -881,17 +949,18 @@ def reconnect_message_parts(arena, player):
     """Authoritative owner/private state that is not retained by entity spawn."""
     own = arena.vehicles[player.vehicle_id]
     stats = b''.join(pb_blob(1, pb_int(1, v.entity_id)+pb_int(2, v.kills))
-                     for v in arena.vehicles.values())
+                     for _,v in present_vehicles(arena))
     parts = [arena_update(4, pb_blob(4, stats)),
              *base_capture_messages(arena), *supremacy_messages(arena, player),
-             ammo_message(own), b'\x13\xa8'+struct.pack('<I',own.damage),
+             ammo_message(own), *provision_messages(own), b'\x13\xa8'+struct.pack('<I',own.damage),
              b'\x13\xa9'+struct.pack('<I',own.blocked_damage),
              b'\x13\xaa'+struct.pack('<I',own.assisted_damage)]
     if arena.finished_at:
         parts.append(period_message(4, max(0., arena.finished_at+arena.POSTBATTLE_SECONDS-arena.simulation_time),
                                     arena.winner, arena.battle_seconds, finish_reason=arena.finish_reason))
     elif arena.started:
-        parts.append(period_message(3, max(0., arena.started+arena.battle_seconds-arena.simulation_time),
+        ends = getattr(arena, 'practice_timer_at', 0.) or arena.started+arena.battle_seconds
+        parts.append(period_message(3, max(0., ends-arena.simulation_time),
                                     battle_seconds=arena.battle_seconds))
     elif getattr(arena, 'prebattle_end', 0.):
         parts.append(period_message(2, max(0., arena.prebattle_end-arena.simulation_time),
@@ -908,7 +977,7 @@ def reconnect_message_parts(arena, player):
     # Creation does carry these state vectors, but repeat full snapshots after
     # the new Avatar owns its vehicle.  This also covers client-side reset of
     # damaged-module visuals during a BaseApp replacement.
-    for vehicle in arena.vehicles.values():
+    for _, vehicle in present_vehicles(arena):
         parts.append(vehicle_property(vehicle.entity_id, 1, bytes([vehicle.alive])))
         parts.append(vehicle_property(vehicle.entity_id, 3, struct.pack('<h', vehicle.health)))
         critical, destroyed = module_snapshot(arena, vehicle)

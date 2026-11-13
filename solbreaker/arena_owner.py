@@ -18,8 +18,11 @@ from typing import Callable, Literal, Protocol
 from .entities import BattleResult
 from .owner_channel import FramedChannel, configured_ipc
 
-Operation = Literal['ready', 'control', 'aim', 'fire', 'leave', 'disconnect', 'step', 'motion', 'motion_light', 'motions', 'spawn', 'reconnect', 'flush', 'aim_entity', 'aim_entity_local', 'autoaim', 'autoaim_point', 'aim_angles', 'consumable', 'select_shell', 'recon_aim', 'recon_clear', 'recon_snapshot']
+from .sandbox import INPUT as SANDBOX_INPUT
+
+Operation = Literal['ready', 'control', 'aim', 'fire', 'leave', 'disconnect', 'step', 'motion', 'motion_light', 'motions', 'spawn', 'reconnect', 'flush', 'aim_entity', 'aim_entity_local', 'autoaim', 'autoaim_point', 'aim_angles', 'consumable', 'select_shell', 'recon_aim', 'recon_clear', 'recon_snapshot', 'sandbox']
 _LENGTHS = {'ready': 0, 'control': 2, 'aim': 12, 'fire': 0, 'leave': 0, 'disconnect': 0, 'step': 0, 'motion': 0, 'motion_light': 0, 'motions': None, 'spawn': 0, 'reconnect': 0, 'flush': 0, 'aim_entity': 16, 'aim_entity_local': 16, 'autoaim': 8, 'autoaim_point': 20, 'aim_angles': 8, 'consumable': None, 'select_shell': 5, 'recon_aim': 4, 'recon_clear': 0, 'recon_snapshot': 4}
+_LENGTHS['sandbox'] = SANDBOX_INPUT.size
 _MAX_MESSAGE = 1024 * 1024
 _TIMED = frozenset(('ready', 'control', 'fire', 'leave', 'disconnect', 'step',
                     'consumable', 'select_shell'))

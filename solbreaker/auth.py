@@ -21,6 +21,9 @@ class LocalAccounts:
     PASSWORD_JOB_LIMIT = 16  # Includes queued/running work; accommodates a 7x7 login batch.
     TOKEN_LIMIT = 128
     ACCOUNT_TOKEN_LIMIT = 8
+    SESSION_LIFETIME = 3600
+    # The native client stores the game token as WGNtoken2 for the next launch.
+    SAVED_LOGIN_LIFETIME = 30 * 24 * 3600
 
     def __init__(self, private: Path, origin: str, *, autocreate=True):
         from .storage import AccountStore
@@ -74,6 +77,7 @@ class LocalAccounts:
         if removed is None:
             return None
         token = secrets.token_urlsafe(32)
+        expires = now + (self.SAVED_LOGIN_LIFETIME if collection is self.game else self.SESSION_LIFETIME)
         if collection is self.access or collection is self.game:
             kind = 'access' if collection is self.access else 'game'
             with self.store.db:
@@ -81,10 +85,10 @@ class LocalAccounts:
                 self.store.db.executemany('DELETE FROM tokens WHERE token=? AND kind=?',
                                          ((old, kind) for old in removed))
                 self.store.db.execute('INSERT INTO tokens VALUES (?,?,?,?)',
-                                     (token, kind, account_id, now + 3600))
+                                     (token, kind, account_id, expires))
         for old in removed:
             del collection[old]
-        collection[token] = Session(account_id, now + 3600)
+        collection[token] = Session(account_id, expires)
         return token
 
     @staticmethod
@@ -167,7 +171,7 @@ class LocalAccounts:
         if token is None:
             return 429, {'error': 'local_token_capacity'}, {'Retry-After': '1'}
         return 200, {'access_token': token, 'token_type': 'Bearer', 'scope': 'wotb',
-                     'user': account_id, 'expires_in': '3600'}, {}
+                     'user': account_id, 'expires_in': str(self.SESSION_LIFETIME)}, {}
 
     def close(self):
         self._closed = True

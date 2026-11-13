@@ -83,6 +83,7 @@ class ClientSession:
     ammo_operation_serial: int = 0
     ammo_last_request: tuple | None = None
     reconnect_replay: bool = False
+    sandbox_input: tuple | None = None
     _packet_cipher: PacketCipher | None = field(default=None, init=False, repr=False, compare=False)
 
     @property
@@ -475,6 +476,7 @@ class BaseEndpoint(asyncio.DatagramProtocol):
             'arena_retirement_failed',arena_id=arena.result_id,reason=reason))
         self.arenas = ArenaManager(self.terrain,self.collision_scene,self.definition.descriptor,
                                   map_spec=self.map_spec,
+                                  sandbox_enabled=getattr(server, 'sandbox', False),
                                   step_budget=self.SIMULATION_BUDGET,
                                   recon_enabled=getattr(server, 'recon_enabled', False),
                                   recon_game=server.manifest['game'],
@@ -1027,7 +1029,7 @@ class BaseEndpoint(asyncio.DatagramProtocol):
                                   entity_id=event.actor,**event.data)
             elif event.kind == 'destruction':
                 self.server.event('training_destructibles',destroyed=sorted(arena.destructions))
-            elif event.kind in ('airborne','landed','auto_recovered'):
+            elif event.kind in ('airborne','landed','auto_recovered','practice_spawn','gravity_jump'):
                 self.server.event('training_'+event.kind,entity_id=event.actor,**event.data)
             elif event.kind == 'ground_impact':
                 self.server.event('training_ground_impact', arena_id=arena.result_id,
@@ -1432,8 +1434,11 @@ class BaseEndpoint(asyncio.DatagramProtocol):
                 config = training or TrainingConfig(mode='bots')
                 training = config
                 identity = uuid.uuid4().hex
+                from .map_catalog import map_team_capacity
+                capacity = map_team_capacity(spec.map_id)
                 recipe = select_bot_roster(Path(self.server.manifest['game']), definition,
-                    enemies=config.enemies, allies=config.active_allies, seed=identity)
+                    enemies=min(capacity, config.enemies), allies=min(capacity-1, config.active_allies),
+                    seed=identity)
                 options.update(result_id=identity, bot_roster=recipe,
                     bot_game=Path(self.server.manifest['game']),
                     training=config,
@@ -1469,12 +1474,19 @@ class BaseEndpoint(asyncio.DatagramProtocol):
     def send_join_failure(self, addr, client, reason):
         self.send(addr, client, b"\x13" + account_method(24, bytes([reason]) + packed_blob(b"")))
 
-    def start_shared(self, account_ids, teams=(1,2), map_id=None):
+    def start_shared(self, account_ids, teams=(1,2), map_id=None, *, bot_counts=(0, 0),
+                     room_mode='encounter'):
         """Attach independent sessions to one authoritative world."""
         self.require_arena_capacity()
         from .roster import validate_teams
-        validate_teams(teams)
-        if len(account_ids)!=len(teams) or len(set(account_ids))!=len(account_ids):
+        from .rooms import room_bot_counts
+        from .map_catalog import map_team_capacity
+        from .training_config import BATTLE_MODES
+        if room_mode not in BATTLE_MODES:
+            raise ValueError('Choose a supported room battle mode')
+        bot_counts = room_bot_counts(bot_counts)
+        validate_teams([*teams, *([1]*bot_counts[0]), *([2]*bot_counts[1])])
+        if not account_ids or len(account_ids)!=len(teams) or len(set(account_ids))!=len(account_ids):
             raise ValueError('Every battle participant must have a distinct account and a team')
         selected = []
         for account_id in account_ids:
@@ -1489,11 +1501,17 @@ class BaseEndpoint(asyncio.DatagramProtocol):
             selected.append((addr,client))
         accounts = [dict(self.server.accounts.get(a).identity(), team=t) for a,t in zip(account_ids,teams)]
         spec = self.selected_map(map_id)
+        capacity = map_team_capacity(spec.map_id)
+        if any(teams.count(team) + bots > capacity for team, bots in enumerate(bot_counts, 1)):
+            raise ValueError(f'This map supports up to {capacity} participants per team')
+        if room_mode == 'supremacy' and not getattr(spec, 'strategic_points', ()):
+            raise ValueError('This map has no Supremacy capture points')
         if (prewarm := getattr(self, 'map_prewarm', None)) is not None:
             prewarm.selected(spec.map_id)
         runtime = self.map_runtime(spec.map_id)
         options = dict(terrain=runtime['terrain'], map_spec=spec,
-                       collision_scene=runtime['collision_scene'], prebattle_seconds=7.)
+                       collision_scene=runtime['collision_scene'], prebattle_seconds=7.,
+                       room_mode=room_mode, bot_game=self.game if room_mode == 'gravity' else None)
         owners = getattr(self, 'arena_owners_enabled', False)
         definitions = ({account_id: self.definition for account_id in account_ids}
                        if owners and getattr(self, 'progression', None) is None else {})
@@ -1524,6 +1542,15 @@ class BaseEndpoint(asyncio.DatagramProtocol):
                 definitions[account_id] = definition
                 scenes[account_id] = self.scene_for_vehicle(definition, spec.map_id)
             options['vehicle_scenes'] = scenes
+        if any(bot_counts):
+            import uuid
+            from .bot_roster import select_room_bot_roster
+            identity = uuid.uuid4().hex
+            definition = definitions.get(account_ids[0], self.definition)
+            roster = select_room_bot_roster(self.game, definition, teams=teams,
+                                           bot_counts=bot_counts, seed=identity)
+            options.update(result_id=identity, bot_roster=roster, bot_game=self.game,
+                           bot_scene_settings=self.bot_scene_settings(roster, scenes[account_ids[0]]))
         if owners:
             mirror_options = {key: value for key, value in options.items()
                               if key not in ('collision_scene', 'vehicle_scenes')}
@@ -1539,8 +1566,8 @@ class BaseEndpoint(asyncio.DatagramProtocol):
             arena = self.arenas.create(accounts,solo=False,incremental=hasattr(self,'loading'), **options)
             self.begin_load(arena,selected)
         self.server.event('shared_requested',arena_id=arena.result_id,accounts=account_ids,
-                          map_id=spec.map_id,map_key=spec.key,
-                          entities=list(arena.vehicles),teams=list(teams))
+                          map_id=spec.map_id,map_key=spec.key,battle_mode=room_mode,
+                          entities=list(arena.vehicles),teams=list(teams),bot_counts=list(bot_counts))
         return arena
 
     def progression_update(self, client, *, inventory=True, removed=(), removed_types=()):
@@ -1670,6 +1697,7 @@ class BaseEndpoint(asyncio.DatagramProtocol):
                     garage.set_loadout(client.account_id, inventory_id, 'devices', current,
                                        allowed_tags=[i.tag for i in catalog.optional_devices])
             else:
+                from .catalog import SUPPLY_SELL_PRICE_FACTOR, supply_credits
                 category, item_kind, low = (('provisions', PROVISION, 0xfd) if command_id == 110
                                              else ('consumables', CONSUMABLE, 0xfb))
                 slot_counts = catalog.vehicle_slots(nation, name)
@@ -1687,7 +1715,8 @@ class BaseEndpoint(asyncio.DatagramProtocol):
                 if compatible != COMPATIBLE:
                     raise ValueError('This item is incompatible or requires an unsupported vehicle filter')
                 from .consumables import BATTLE_CONSUMABLES, resolve_loadout
-                current = garage.loadout(client.account_id, inventory_id)[category]
+                previous = garage.loadout(client.account_id, inventory_id)[category]
+                current = previous.copy()
                 current[a] = item.tag if item else None
                 if command_id == 110 and item:
                     from .loadout_effects import resolve_provisions
@@ -1697,8 +1726,12 @@ class BaseEndpoint(asyncio.DatagramProtocol):
                         raise ValueError('Battle effect is not implemented yet: ' + item.tag)
                     resolve_loadout(catalog.game, definition, dict(consumables=current),
                                     **self.crew_metadata(definition))
-                garage.set_loadout(client.account_id, inventory_id, category, current,
-                                   allowed_tags=[i.tag for i in catalog._items(item_kind)])
+                entries = {entry.tag: entry for entry in catalog._items(item_kind)}
+                tier = self.progression.resolve_type(vehicle['type_cd']).tier
+                refund = int(supply_credits(entries.get(previous[a]), tier) * SUPPLY_SELL_PRICE_FACTOR)
+                garage.set_loadout(client.account_id, inventory_id, category, current, allowed_tags=entries,
+                                   credits_cost=supply_credits(item, tier), credits_refund=refund,
+                                   expected_values=previous)
             self.server.event('vehicle_loadout_changed', account_id=client.account_id,
                               inventory_id=inventory_id, command_id=command_id)
             return self.progression_update(client)+command_response(request_id, 0)
@@ -2024,6 +2057,10 @@ class BaseEndpoint(asyncio.DatagramProtocol):
                     self.return_to_hangar(addr, client)
                     continue
                 arena = self.arenas.get(client.arena_id)
+                if client.phase == 'battle' and kind == 166 and request is None:
+                    from .sandbox import receive
+                    if receive(self, addr, client, arena, body, time.monotonic()):
+                        continue
                 recon_transport = getattr(self, 'recon_transport', None)
                 if (recon_transport is not None and client.phase == 'battle' and
                         kind == 166 and request is None and

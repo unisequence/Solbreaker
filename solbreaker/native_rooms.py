@@ -4,18 +4,23 @@ RoomManager owns membership and authority; this module encodes Account RPCs.
 See docs/native-training-rooms.md for the recovered layouts and evidence.
 """
 from fnmatch import fnmatchcase
+import re
 import sqlite3
 import struct
 import time
 
 from .account import account_method, command_response, pickle_document, resource_response
 from .mercury import packed_blob
-from .roster import TEAM_SIZE
+from .map_catalog import map_team_capacity
+from .roster import TEAMS
+from .training_config import BATTLE_MODES
 
 # ClientPrebattle::IsTrainingCreator (0x171cd40) checks the entire mask.
 OWNER_ROLE = 0x27e7f
 NO_RESPONSE = 202
 COMMANDS = {400,401,402,403,404,406,411,414,415,523,524}
+BOT_PREFIX = re.compile(r'^\[bots\s+([0-7])\s*:\s*([0-7])\]', re.IGNORECASE)
+MODE_PREFIX = re.compile(r'^\[mode\s+([a-z]+)\]', re.IGNORECASE)
 
 
 def varint(value):
@@ -57,7 +62,42 @@ def room_text(title,description):
     return title,description
 
 
-def create_request(body,*,with_vehicle=False,with_map=False,configured_map_id=6,
+def room_bot_options(description):
+    """Read the optional counts at the start of the stock description field."""
+    text = description.lstrip()
+    if not re.match(r'^\[bots\b', text, re.IGNORECASE):
+        return description, (0, 0)
+    match = BOT_PREFIX.match(text)
+    if match is None:
+        raise ValueError('Use [bots 2:3] for Team 1 and Team 2, with 0 to 7 per team')
+    return text[match.end():].lstrip(), tuple(map(int, match.groups()))
+
+
+def room_comment(room):
+    first, second = room.bot_counts
+    options = []
+    if room.battle_mode != 'encounter':
+        options.append(f'[mode {room.battle_mode}]')
+    if first or second:
+        options.append(f'[bots {first}:{second}]')
+    return ' '.join(filter(None, (*options, room.description)))
+
+
+def room_options(description):
+    mode = None
+    text = description.lstrip()
+    while re.match(r'^\[mode\b', text, re.IGNORECASE):
+        match = MODE_PREFIX.match(text)
+        if match is None or match[1].lower() not in BATTLE_MODES:
+            raise ValueError('Choose a supported room battle mode')
+        if mode is None:
+            mode = match[1].lower()
+        text = description = text[match.end():].lstrip()
+    description, bots = room_bot_options(description)
+    return description, bots, mode
+
+
+def create_request(body,*,with_vehicle=False,with_map=False,with_mode=False,configured_map_id=6,
                    available_map_ids=None):
     # Generated Account base method 15 writer 0x1779ac0: IIHHssBBI.
     if len(body)<20:raise ValueError('Truncated training room request')
@@ -81,12 +121,14 @@ def create_request(body,*,with_vehicle=False,with_map=False,configured_map_id=6,
     settings_get = title == GET_TITLE.encode()
     bot_setup = title == TITLE.encode()
     invalid_options = ((battle_type not in (0, 1) or teamkill not in (0, 1)) if bot_setup
-                       else bool(battle_type or teamkill))
+                       else (battle_type not in (0, 1, 2) or bool(teamkill)))
     valid_vehicle = vehicle == 0 if settings_get else (vehicle >= 1 if with_vehicle else vehicle == 1)
     if (invalid_options or selection_mask!=0x3ff or opened!=1 or not valid_vehicle
             or (settings_get and (map_id != 0 or description))):
         raise ValueError('Use default room options and a valid inventory vehicle')
     text = room_text(title,description)
+    if with_mode:
+        text += (battle_type,)
     if with_vehicle and with_map:return (*text,vehicle,map_id)
     if with_vehicle:return (*text,vehicle)
     if with_map:return (*text,map_id)
@@ -141,11 +183,15 @@ class NativeRooms:
         map_id=room.map_id
         roles=b''.join(field(1,field(1,m.account_id)+field(2,field(1,field(1,
             OWNER_ROLE if m.account_id==room.owner else 0)))) for m in room.members.values())
-        return dict(type=2,startType=1,defaultRoster=0,comment=room.description,
+        occupied = {member.team for member in room.members.values()}
+        limits = {team: dict(minCount=0 if bots and team not in occupied else 1,
+                             maxCount=(map_team_capacity(map_id),)*3, level=(1,10))
+                  for team, bots in zip(TEAMS, room.active_bot_counts)}
+        return dict(type=2,startType=1,defaultRoster=0,comment=room_comment(room),
             creator=owner.nickname,creatorDBID=owner.id,creatorClanDBID=0,creatorClanTag='',
             isOpened=True,arenaTypeID=map_id,roundLength=600,lifeTime=3600,gameModeID=2,
             title=room.title,isTeamKill=False,password='',startTime=0,matchID='',
-            teamRoles={1:0,2:0},limits={n:dict(minCount=1,maxCount=(TEAM_SIZE,)*3,level=(1,10)) for n in (1,2)},
+            teamRoles={1:0,2:0},limits=limits,
             roles=roles,spectatorsMaxScope=0,extraData=None,extraDataQuick=None)
 
     def member(self,member,in_battle=False):
@@ -209,7 +255,8 @@ class NativeRooms:
     def version(self,room):
         statistics = self.statistics(room)
         arena = self.endpoint.arenas.get(room.arena_id) if room.arena_id else None
-        return (room.id,room.owner,room.title,room.description,room.map_id,room.arena_id,
+        return (room.id,room.owner,room.title,room.description,room.map_id,room.arena_id,room.bot_counts,
+                room.battle_mode,
                 statistics['createTime'],statistics['battlesCount'],
                 tuple(statistics['wins'][team] for team in (1,2)),statistics['waitPrepareClients'],
                 tuple((m.account_id,m.team,m.ready,m.inventory_id,m.descriptor) for m in room.members.values()),
@@ -244,10 +291,10 @@ class NativeRooms:
         try:
             account=client.account_id
             if self.progression is None:
-                title,description,map_id=create_request(body,with_map=True,
+                title,description,mode,map_id=create_request(body,with_map=True,with_mode=True,
                     configured_map_id=self.map_id,available_map_ids=self.map_ids);vehicle=None
             else:
-                title,description,vehicle,map_id=create_request(body,with_vehicle=True,
+                title,description,mode,vehicle,map_id=create_request(body,with_vehicle=True,with_mode=True,
                     with_map=True,configured_map_id=self.map_id,
                     available_map_ids=self.map_ids)
                 self.manager.hangar(account)
@@ -280,7 +327,10 @@ class NativeRooms:
                 self.endpoint.server.event('native_bot_settings_saved', account_id=account,
                                            settings=config.to_dict())
                 return
-            room=self.manager.create(account,map_id=self.map_id if map_id==0 else map_id)
+            description,bot_counts,override=room_options(description)
+            room=self.manager.create(account,map_id=self.map_id if map_id==0 else map_id,
+                                     bot_counts=bot_counts,
+                                     battle_mode=override or ('supremacy' if mode==1 else 'encounter'))
             room.title,room.description=title,description
             if vehicle is not None:
                 try:self.refresh_vehicle(account,vehicle)
@@ -289,7 +339,7 @@ class NativeRooms:
             self.attach(client,room)
             self.endpoint.server.event('native_room_created',account_id=client.account_id,
                 room_id=room.id,map_id=room.map_id,
-                map_key=self.endpoint.map_catalog[room.map_id])
+                map_key=self.endpoint.map_catalog[room.map_id],battle_mode=room.battle_mode)
         except ValueError as exc:
             self.send(client,account_method(19,struct.pack('<IB',0xffffffff,1)))
             self.endpoint.server.event('native_room_rejected',account_id=client.account_id,reason=str(exc))
@@ -299,7 +349,7 @@ class NativeRooms:
         map_id=room.map_id
         return (int(room.id,16),{1:2,2:bool(room.arena_id),3:0,4:True,5:len(room.members),
             6:self.endpoint.server.accounts.get(room.owner).nickname,7:room.owner,8:0,
-            9:room.description,11:map_id,12:600,14:2,15:'',16:room.title,
+            9:room_comment(room),11:map_id,12:600,14:2,15:'',16:room.title,
             17:(0,0,0),18:0x3ff,21:False,22:False,24:0})
 
     def command(self,client,kind,body,request,command):
@@ -325,17 +375,20 @@ class NativeRooms:
                 return True
             if command==406:
                 if (kind!=149 or len(numbers)!=4 or numbers[0] not in (0,*self.map_ids)
-                        or numbers[1:]!=(0,0,0) or len(strings)!=2):
+                        or numbers[1] not in (0,1,2) or numbers[2:]!=(0,0) or len(strings)!=2):
                     raise ValueError('Choose a supported map and default battle options')
                 from .battle_settings_wire import TITLE
                 if strings[0] == TITLE.encode():
                     raise ValueError('Leave the training room before starting a bot battle')
+                title,description=room_text(*strings)
+                description,bot_counts,mode=room_options(description)
+                changed=self.manager.rename(client.account_id,title,description,
+                    map_id=numbers[0] or None,bot_counts=bot_counts,
+                    battle_mode=mode or ('supremacy' if numbers[1]==1 else 'encounter'))
                 if numbers[0]:
-                    changed=self.manager.set_map(client.account_id,numbers[0])
                     self.endpoint.server.event('native_room_map_changed',account_id=client.account_id,
                         room_id=changed.id,map_id=changed.map_id,
-                        map_key=self.endpoint.map_catalog[changed.map_id])
-                self.manager.rename(client.account_id,*room_text(*strings))
+                        map_key=self.endpoint.map_catalog[changed.map_id],battle_mode=changed.battle_mode)
                 self.reply(client,request)
                 return True
             if kind!=140 or strings:raise ValueError('Invalid room command layout')

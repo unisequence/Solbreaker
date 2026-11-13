@@ -88,6 +88,8 @@ class ArenaOwnerService:
             recon_enabled=getattr(self.endpoint.server, 'recon_enabled', False),compact_inputs=True,
             bot_roster=arena.bot_roster, bot_scene_settings=arena.bot_scene_settings,
             prebattle_seconds=arena.prebattle_seconds,
+            sandbox_enabled=arena.sandbox_enabled,
+            room_mode=arena.room_mode,
             map_cache=getattr(self.endpoint, 'map_cache', None))
 
     def start(self, arena, selected, factory):
@@ -260,6 +262,8 @@ class ArenaOwnerService:
             for entity_id,flags in state['flags']:
                 arena.vehicles[entity_id].flags=flags
         else:
+            if getattr(arena, 'practice', False):
+                arena.practice_spawned = set(state['practice_spawned'])
             capture = getattr(arena, 'base_capture', None)
             view = state.get('base_capture')
             if capture is not None and view is not None:
@@ -370,6 +374,13 @@ class ArenaOwnerService:
             raise OwnerError('arena owner is unavailable')
         return job.transport.submit_client(
             addr, client, Command('leave', time.monotonic(), client.account_id))
+
+    def sandbox(self, addr, client, body):
+        job = self.jobs.get(client.arena_id)
+        if job is not None and job.transport is not None and not job.closing:
+            return job.transport.submit_client(
+                addr, client, Command('sandbox', time.monotonic(), client.account_id, body))
+        return None
 
     def disconnect(self, arena, account_id):
         job = self.jobs.get(arena.result_id)

@@ -435,6 +435,22 @@ pub extern "C" fn tfs_rapier_activate(world: *mut World, id: u32, position: *con
 }
 
 #[no_mangle]
+pub extern "C" fn tfs_rapier_set_velocity(world: *mut World, id: u32,
+        velocity: *const f64, angular: *const f64) -> i32 {
+    if velocity.is_null() || angular.is_null() { return -2; }
+    let velocity = unsafe { std::slice::from_raw_parts(velocity, 3) };
+    let angular = unsafe { std::slice::from_raw_parts(angular, 3) };
+    if !velocity.iter().chain(angular).all(|value| value.is_finite()) { return -2; }
+    guarded(world, |world| {
+        let Some(handle) = world.dynamic.get(&id) else { return 1; };
+        let body = &mut world.bodies[*handle];
+        body.set_linvel(Vector::from_column_slice(velocity), true);
+        body.set_angvel(Vector::from_column_slice(angular), true);
+        0
+    })
+}
+
+#[no_mangle]
 pub extern "C" fn tfs_rapier_sync(world: *mut World, rows: *const c_char) -> i32 {
     // Parse/validate before touching World; malformed input does not poison it.
     let parsed = catch_unwind(AssertUnwindSafe(|| {

@@ -146,6 +146,24 @@ def _load_prefs(db, account_id, inventory_id):
                 free=dict(zip(free[::2], free[1::2])))
 
 
+def _default_prefs(counts):
+    return dict(settings=AMMO_AUTO_RESUPPLY, layouts=[], free={cd: n for cd, n in counts.items() if n})
+
+
+def _ammo_layout(prefs, key):
+    return next((entry for entry in prefs['layouts'] if (entry['turret_cd'], entry['gun_cd']) == key), None)
+
+
+def _seed_ammo_layout(prefs, key, allowed, counts, *, credit_shells=()):
+    if _ammo_layout(prefs, key) is not None:
+        return False
+    if any(n and cd not in allowed for cd, n in counts.items()):
+        raise ValueError('Stored loadout does not match the installed gun')
+    prefs['layouts'].append(dict(turret_cd=key[0], gun_cd=key[1],
+        shells=[v for cd in allowed for v in (-cd if cd in credit_shells else cd, counts.get(cd, 0))]))
+    return True
+
+
 def _store_prefs(db, account_id, inventory_id, prefs):
     free = [v for cd in sorted(prefs['free']) for v in (cd, prefs['free'][cd])]
     layouts = sorted(prefs['layouts'], key=lambda e: (e['turret_cd'], e['gun_cd']))
@@ -215,16 +233,25 @@ def settle_battle_ammo(db, account_id, inventory_id, settlement, progress, inven
     initial, left = _counts(settlement['initial']), settlement['left']
     used = {cd: initial[cd] - left[cd] for cd in initial if initial[cd] != left[cd]}
     shells = [v for cd in initial for v in (cd, left[cd])]
-    outcome = dict(consumed=[v for cd in used for v in (cd, used[cd])], refill='no_prefs', cost=[0, 0])
+    outcome = dict(consumed=[v for cd in used for v in (cd, used[cd])], cost=[0, 0])
     prefs = _load_prefs(db, account_id, inventory_id)
-    if prefs is not None:
-        free = {cd: max(0, n - used.get(cd, 0)) for cd, n in prefs['free'].items()}
-        free = {cd: n for cd, n in free.items() if n}
-        if free != prefs['free']:
-            _store_prefs(db, account_id, inventory_id, dict(prefs, free=free))
-        outcome['refill'], refilled = _refill(prefs, settlement, progress, outcome)
-        if refilled is not None:
-            shells = refilled
+    created = prefs is None
+    if created:
+        prefs = _default_prefs(initial)
+    seeded = False
+    if prefs['settings'] & AMMO_AUTO_RESUPPLY:
+        # Preserve the pre-battle loadout on first use, even if funds run out.
+        # An implicit layout uses credits for premium rounds. Saved signed
+        # layouts retain the player's currency selection.
+        credit_shells = {cd for cd, (price, _, _) in settlement['costs'].items() if price[1]}
+        seeded = _seed_ammo_layout(prefs, settlement['key'], settlement['allowed'], initial,
+                                   credit_shells=credit_shells)
+    free = {cd: n-used.get(cd, 0) for cd, n in prefs['free'].items() if n > used.get(cd, 0)}
+    if created or seeded or free != prefs['free']:
+        _store_prefs(db, account_id, inventory_id, dict(prefs, free=free))
+    outcome['refill'], refilled = _refill(prefs, settlement, progress, outcome)
+    if refilled is not None:
+        shells = refilled
     outcome['shells'] = shells
     if shells != settlement['initial']:
         db.execute('UPDATE garage_vehicles SET shells=? WHERE account_id=? AND inventory_id=?',
@@ -240,10 +267,7 @@ def _refill(prefs, settlement, progress, outcome):
     """(status, shells or None); charges `progress` only when the whole refill is affordable."""
     if not prefs['settings'] & AMMO_AUTO_RESUPPLY:
         return 'disabled', None
-    turret_cd, gun_cd = settlement['key']
-    entry = next((e for e in prefs['layouts'] if (e['turret_cd'], e['gun_cd']) == (turret_cd, gun_cd)), None)
-    if entry is None:
-        return 'no_layout', None
+    entry = _ammo_layout(prefs, settlement['key'])
     layout = entry['shells']
     targets = {abs(signed): (signed, n) for signed, n in zip(layout[::2], layout[1::2])}
     allowed, left = settlement['allowed'], settlement['left']
@@ -349,9 +373,15 @@ class GarageStore:
                     ON DELETE CASCADE)'''):
             self.db.execute(statement)
         # Legacy garages have vehicles but no counter; seed it before any sale can delete the highest ID.
-        self.db.execute('INSERT OR IGNORE INTO garage_counters '
-                        'SELECT account_id,MAX(inventory_id)+1 FROM garage_vehicles GROUP BY account_id')
-        self.db.commit()
+        with self.db:
+            self.db.execute('INSERT OR IGNORE INTO garage_counters '
+                            'SELECT account_id,MAX(inventory_id)+1 FROM garage_vehicles GROUP BY account_id')
+            # Enable it once in old preference rows. Subsequent restarts
+            # leave explicit per-tank changes to the flag alone.
+            if self.db.execute('PRAGMA user_version').fetchone()[0] == 0:
+                self.db.execute('UPDATE garage_ammo_prefs SET settings=settings | ?',
+                                (AMMO_AUTO_RESUPPLY,))
+                self.db.execute('PRAGMA user_version=1')
 
     # -- reads ---------------------------------------------------------
     def snapshot(self, account_id):
@@ -408,9 +438,10 @@ class GarageStore:
         for v in vehicles:
             if v['id'] in loadouts:
                 v['loadout'] = loadouts[v['id']]
-            if v['id'] in prefs:
-                row = prefs[v['id']]
-                v.update(ammo_settings=row['settings'], ammo_layouts=json.loads(row['layouts']),
+            row = prefs.get(v['id'])
+            v['ammo_settings'] = AMMO_AUTO_RESUPPLY if row is None else row['settings']
+            if row is not None:
+                v.update(ammo_layouts=json.loads(row['layouts']),
                          ammo_free=json.loads(row['free']))
         type_xp = {v['type_cd']: v['xp'] for v in vehicles}
         for r in self.db.execute('SELECT type_cd,xp FROM garage_type_xp WHERE account_id=?', (account_id,)):
@@ -484,7 +515,7 @@ class GarageStore:
         prefs = self._prefs(account_id, inventory_id)
         if prefs is not None:
             return prefs, False
-        return dict(settings=0, layouts=[], free={cd: n for cd, n in _counts(shells).items() if n}), True
+        return _default_prefs(_counts(shells)), True
 
     def _save_prefs(self, account_id, inventory_id, prefs):
         _store_prefs(self.db, account_id, inventory_id, prefs)
@@ -794,13 +825,7 @@ class GarageStore:
             if enabled and setting == AMMO_AUTO_RESUPPLY and key is not None:
                 if vehicle['descriptor'] != expected_descriptor:
                     raise ValueError('Vehicle changed since the setting was prepared')
-                if not any((e['turret_cd'], e['gun_cd']) == key for e in prefs['layouts']):
-                    counts = _counts(json.loads(vehicle['shells']))
-                    if any(n and cd not in allowed for cd, n in counts.items()):
-                        raise ValueError('Stored loadout does not match the installed gun')
-                    prefs['layouts'].append(dict(turret_cd=key[0], gun_cd=key[1],
-                        shells=[v for cd in allowed for v in (cd, counts.get(cd, 0))]))
-                    seeded = True
+                seeded = _seed_ammo_layout(prefs, key, allowed, _counts(json.loads(vehicle['shells'])))
             flags = prefs['settings'] | setting if enabled else prefs['settings'] & ~setting
             if flags == prefs['settings'] and not created and not seeded:
                 return
@@ -956,13 +981,17 @@ class GarageStore:
                          action)
 
     def set_loadout(self, account_id, inventory_id, category, values, *, allowed_tags,
-                    credits_cost=0, operation_id=None):
+                    credits_cost=0, credits_refund=0, expected_values=None, operation_id=None):
         """Replace one loadout category with catalog tags the caller already verified."""
         _int(inventory_id, 'inventory_id', low=1)
         _int(credits_cost, 'credits_cost')
+        _int(credits_refund, 'credits_refund')
         tags = _tags(category, values, allowed_tags)
+        expected = list(expected_values) if expected_values is not None else None
         request = dict(op='set_loadout', inventory_id=inventory_id, category=category, values=tags,
                        credits_cost=credits_cost)
+        if credits_refund:
+            request['credits_refund'] = credits_refund
 
         def action(ctx):
             self._require(ctx)
@@ -974,7 +1003,14 @@ class GarageStore:
                 raise ValueError('Device slot is locked')
             if current[category] == tags:
                 return
-            ctx.charge(credits_cost)
+            if expected is not None and current[category] != expected:
+                raise ValueError('Loadout changed since the exchange was prepared')
+            credits = ctx.progress['credits'] + credits_refund - credits_cost
+            if credits < 0:
+                raise ValueError('Not enough credits')
+            if credits > MAX_INT:
+                raise ValueError('Credits total out of range')
+            ctx.progress['credits'] = credits
             current[category] = tags
             self._save_loadout(account_id, inventory_id, current)
             ctx.changed = True

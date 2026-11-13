@@ -22,6 +22,7 @@ from .orientation import matrix, quaternion
 
 
 MAX_STEP = 1/240
+MISSILE_TURN_MULTIPLIER = 2.4
 # A target's curved surface can move several centimetres during a very fast
 # free-flight tumble.  Bound the *attitude* increment separately from time: a
 # midpoint ray sample stays within 0.75 degrees of either endpoint.  This is
@@ -429,7 +430,27 @@ def armor_contacts(world, projectile, start, delta, before, after, left, right, 
     return sorted(contacts,key=lambda item:(item[0],item[1]))
 
 
-def advance(projectile, world, before, after, dt, rng, *, sweep_cache=None):
+def _missile_velocity(projectile, position, velocity, target, dt):
+    flight = projectile.shell.missile
+    speed = _vector_length(velocity)
+    direction = velocity/speed
+    turn = 0.
+    if target is not None:
+        offset = np.asarray(target) - position
+        # A point behind the rocket cannot turn it around after an overshoot.
+        ahead = float(np.dot(direction, offset))
+        if ahead > 0:
+            lateral = offset - direction*ahead
+            side = _vector_length(lateral)
+            if side > 1e-9:
+                turn = min(math.atan2(side,ahead), flight.turn_speed*MISSILE_TURN_MULTIPLIER*dt)
+                direction = direction*math.cos(turn) + lateral*(math.sin(turn)/side)
+    speed = min(flight.max_speed, max(projectile.shell.speed,
+        speed + flight.acceleration*dt - flight.rotational_deceleration*turn))
+    return direction*speed
+
+
+def advance(projectile, world, before, after, dt, rng, *, sweep_cache=None, missile_target=None):
     """Advance one shell over this world step; return only an actual contact/end."""
     # A free rigid body can rotate far faster than a tracked hull.  Keep the
     # same time cap for gravity and translational sweep, plus a strictly bound
@@ -446,6 +467,8 @@ def advance(projectile, world, before, after, dt, rng, *, sweep_cache=None):
     for i in range(count):
         start = np.asarray(projectile.position)
         velocity = np.asarray(projectile.velocity)
+        if projectile.shell.missile is not None:
+            velocity = _missile_velocity(projectile,start,velocity,missile_target,h)
         delta = velocity*h+acceleration*(h*h/2)
         length = _vector_length(delta)
         if length < 1e-12:
@@ -521,7 +544,8 @@ def advance(projectile, world, before, after, dt, rng, *, sweep_cache=None):
                                   for entity,old in before.items() if entity in after}
                 segment_after = {entity:interpolate(old,after[entity],(i+1)/count)
                                  for entity,old in before.items() if entity in after}
-                impact = advance(projectile,world,segment_before,segment_after,remainder,rng)
+                impact = advance(projectile,world,segment_before,segment_after,remainder,rng,
+                                 missile_target=missile_target)
                 if impact is not None:
                     return impact
             continue

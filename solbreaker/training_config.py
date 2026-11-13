@@ -20,7 +20,7 @@ SCHEMA_VERSION = 1
 FILE_NAME = 'training.json'
 MAX_BYTES = 4096
 MODES = ('target', 'bots')
-BATTLE_MODES = ('encounter', 'elimination', 'supremacy')
+BATTLE_MODES = ('elimination', 'encounter', 'supremacy', 'gravity')
 # The player occupies one slot of team 1.
 MAX_ENEMIES = TEAM_SIZE
 MAX_ALLIES = TEAM_SIZE-1
@@ -45,7 +45,7 @@ class TrainingConfig:
 
     def __post_init__(self):
         if type(self.battle_mode) is not str or self.battle_mode not in BATTLE_MODES:
-            raise ValueError('Battle mode must be encounter, elimination or supremacy')
+            raise ValueError('Battle mode must be one of ' + ', '.join(BATTLE_MODES))
         if type(self.mode) is not str or self.mode not in MODES:
             raise ValueError('Training mode must be target or bots')
         if type(self.enemies) is not int or not 1 <= self.enemies <= MAX_ENEMIES:

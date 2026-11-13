@@ -708,6 +708,7 @@ def apply_definition(game, definition, loadout, *, crew_specs=None, crew_binding
     from .consumables import resolve_loadout
     resolve_loadout(game, definition, loadout, crew_specs=crew_specs, crew_bindings=crew_bindings)
     resolved = resolve_provisions(game, definition, loadout)
+    provision_slots = tuple(item.ident if item is not None else None for item in resolved) if provisions else ()
     # Keep every valid selection on the vehicle, even when its battle effect
     # has not been implemented. Only pass reviewed devices to the compositor:
     # some unimplemented variants share scripts with supported devices but have
@@ -765,7 +766,7 @@ def apply_definition(game, definition, loadout, *, crew_specs=None, crew_binding
     return replace(definition, **armored,
         health_bonus=_max_health(definition.health, hp_percents)-definition.health,
         optional_devices=tuple(by_tag[tag].ident for tag in devices),
-        provisions=tuple(item.ident for item in resolved if item),
+        provisions=provision_slots,
         crew_mastery=100,
         track_spec=track_spec,
         he_damage_factor=e.he_damage_factor,

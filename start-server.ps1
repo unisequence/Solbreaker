@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([string]$Distribution = 'Ubuntu', [string]$State, [switch]$Owned, [switch]$UseWsl)
+param([string]$Distribution = 'Ubuntu', [string]$State, [switch]$Owned, [switch]$UseWsl, [switch]$Sandbox)
 $ErrorActionPreference = 'Stop'
 if (-not $State) { $State = Join-Path $PSScriptRoot 'data' }
 if (-not $UseWsl) {
@@ -23,6 +23,7 @@ if (-not $UseWsl) {
     $arguments = @('-u', '-m', 'solbreaker', 'serve', '--state', $State,
                    '--log-file', (Join-Path $State 'server.log'))
     if ($Owned) { $arguments += '--stop-on-stdin' }
+    if ($Sandbox) { $arguments += '--sandbox' }
     & $python @arguments
     exit $LASTEXITCODE
 }
@@ -39,5 +40,6 @@ if ($LASTEXITCODE -ne 0) { throw 'Cannot determine the WSL server address.' }
 if ($LASTEXITCODE -ne 0) { throw 'Could not update the WSL connection profile.' }
 $arguments = @('bash', "$linuxProject/start-server.sh", '--state', $linuxState, '--log-file', "$linuxState/server.log")
 if ($Owned) { $arguments += '--stop-on-stdin' }
+if ($Sandbox) { $arguments += '--sandbox' }
 & wsl.exe --distribution $Distribution --exec @arguments
 exit $LASTEXITCODE

@@ -85,6 +85,66 @@ class DesktopTests(unittest.TestCase):
         self.assertEqual(settings.server_url, 'https://example.test')
         wizard.reject()
 
+    def install_client_fixture(self):
+        import json
+        from dataclasses import replace
+
+        game = self.root/'game'
+        game.mkdir()
+        (game/'wotblitz.exe').touch()
+        client = self.root/'client'
+        (client/'client').mkdir(parents=True)
+        (client/'client/wotblitz.exe').touch()
+        (client/'manifest.json').write_text(json.dumps({'game': str(game), 'server_id': 'remote'}))
+        self.window.manager.update_settings(replace(self.window.manager.settings, game=str(game)))
+        self.window.sync_fields()
+
+    def test_switching_between_saved_servers_plays_without_opening_setup(self):
+        from dataclasses import replace
+        from unittest.mock import patch
+        from solbreaker.management import Settings
+
+        self.install_client_fixture()
+        settings = self.window.manager.settings
+        remote = self.root/'friend.json'
+        remote.write_text('{"server_id":"remote"}')
+        settings.local_profile_path.parent.mkdir()
+        settings.local_profile_path.with_name('manifest.json').write_text('{"game":"example"}')
+        settings.local_profile_path.write_text('{"server_id":"local"}')
+        self.window.manager.update_settings(replace(settings, play_mode='remote', connection=str(remote)))
+        self.window.remote.setChecked(True)
+
+        with patch.object(self.window.manager, 'run') as run:
+            for mode, radio in (('local', self.window.own), ('remote', self.window.remote)):
+                radio.setChecked(True)
+                self.assertEqual(self.window.play_button.text(), 'Играть')
+                self.window.play_button.click()
+                self.assertIsNone(self.window.wizard)
+                run.assert_called_once_with('play')
+                run.reset_mock()
+                saved = Settings.load(self.config)
+                self.assertEqual(saved.play_mode, mode)
+                self.assertEqual(saved.connection, str(remote))
+
+    def test_installed_client_opens_setup_at_the_missing_server_step(self):
+        from unittest.mock import patch
+        from solbreaker.desktop import SetupWizard
+
+        self.install_client_fixture()
+        with patch.object(SetupWizard, 'search_discovery'):
+            for radio, action in ((self.window.remote, 'Выбрать сервер'),
+                                  (self.window.own, 'Настроить сервер')):
+                radio.setChecked(True)
+                self.window.refresh_status()
+                self.assertEqual(self.window.play_button.text(), action)
+                self.window.play_button.click()
+                wizard = self.window.wizard
+                self.assertEqual(wizard.pages.currentIndex(), 1)
+                self.assertFalse(wizard.back.isVisible())
+                wizard.previous()
+                self.assertEqual(wizard.pages.currentIndex(), 1)
+                wizard.reject()
+
     def test_selecting_a_discovered_server_uses_the_existing_profile_workflow(self):
         from concurrent.futures import Future
         from solbreaker.discovery import DiscoveredServer

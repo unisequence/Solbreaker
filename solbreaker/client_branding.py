@@ -32,18 +32,21 @@ SCENES = {
 }
 
 
-def scene_patch(source, replacements):
-    data = dvpl.read(source)
-    if data[:8] != b'SFV2' + struct.pack('<I', 48):
-        raise ValueError('Unsupported branded hangar scene')
+def replace_texture_names(data, replacements, *, version):
+    if data[:8] != b'SFV2' + struct.pack('<I', version):
+        raise ValueError('Unsupported SC2 scene version')
     for old, new in replacements.items():
         old, new = old.encode(), new.encode()
         before = struct.pack('<H', len(old)) + old
         after = struct.pack('<H', len(new)) + new
         if data.count(before) != 1:
-            raise ValueError('Unsupported hangar texture name table')
+            raise ValueError('Unsupported SC2 texture name table')
         data = data.replace(before, after)
-    return dvpl.encode(data)
+    return data
+
+
+def scene_patch(source, replacements):
+    return dvpl.encode(replace_texture_names(dvpl.read(source), replacements, version=48))
 
 
 def scene_patches(game):

@@ -76,6 +76,25 @@ class TokenCapacityTests(unittest.TestCase):
         self.assertEqual(set(restored.game), {victim, *(f'legacy-{i}' for i in range(112, 120))})
         self.assertEqual(restored.store.db.execute("SELECT count(*) FROM tokens WHERE kind='game'").fetchone()[0], 9)
 
+    def test_saved_login_outlives_access_session_and_survives_server_restart(self):
+        now = time.time()
+        path = '/id/api/v2/account/credentials/create/token1/'
+        with patch('solbreaker.auth.time.time', return_value=now):
+            access = self.accounts.issue(self.accounts.access, self.other)
+            status, data, _ = self.accounts.handle('POST', path, {}, {'authorization': 'Bearer '+access})
+            self.assertEqual(status, 200)
+            saved = data['token']
+        self.accounts.close()
+
+        with patch('solbreaker.auth.time.time', return_value=now + 7200):
+            restored = LocalAccounts(self.private, 'http://127.0.0.1', autocreate=False)
+            self.addCleanup(restored.close)
+            self.assertFalse(restored.valid(restored.access, access))
+            self.assertTrue(restored.valid(restored.game, saved))
+            self.assertEqual(restored.game[saved].account_id, self.other)
+        with patch('solbreaker.auth.time.time', return_value=now + 30 * 24 * 3600):
+            self.assertFalse(restored.valid(restored.game, saved))
+
     def test_failed_persistence_rolls_back_retirement_before_mutating_memory(self):
         victim = self.accounts.issue(self.accounts.game, 1)
         for _ in range(self.accounts.ACCOUNT_TOKEN_LIMIT):

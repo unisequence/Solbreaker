@@ -29,10 +29,24 @@ _SUPPORTED = {
     "skit": 35, "lumber": 38, "faust": 39, "forgecity": 40,
     "neptune": 42, "rift": 43, "erlenberg_old": 83,
     "amigosville_old": 85, "savanna_old": 89,
+    "desert_train_02": 44, "desert_train_03": 45,
+    "medvedkovo_02": 46, "medvedkovo_03": 47,
+    "amigosville_02": 48, "amigosville_03": 49,
+    "milbase_02": 50, "milbase_03": 51, "milbase_04": 52, "milbase_05": 53,
+    "erlenberg_01": 54, "erlenberg_02": 55, "canal_01": 56, "lumber_01": 57,
+    "neptune_01": 58, "neptune_02": 59,
+    "rudniki_01": 60, "rudniki_02": 61, "rudniki_03": 62,
+    "moon": 70, "holmeisk": 71, "iceworld": 72,
     # Registered in the private lab's maps.yaml overlay. The installed game
     # catalog does not contain this artist map.
     "user_map": 100,
 }
+MAP_CATALOG_RESOURCE = "maps.yaml.dvpl"
+_HIDDEN_MAPS = frozenset(key for key, ident in _SUPPORTED.items() if 44 <= ident <= 72)
+
+
+def map_team_capacity(map_id):
+    return 5 if map_id in (_SUPPORTED["rudniki_01"], _SUPPORTED["rudniki_02"]) else 7
 
 # Local training placement, shared by solo and room runtimes. The source map
 # tree stays intact: its canopy obscured the native camera behind this slot.
@@ -91,14 +105,19 @@ def supported_maps(game=None):
     """
     if game is None:
         return tuple(_SUPPORTED)
-    rows = yaml.safe_load(read(Path(game) / "Data/maps.yaml.dvpl"))
-    maps = rows.get("maps") if isinstance(rows, dict) else None
-    if not isinstance(maps, dict):
-        raise ValueError("Pinned map catalog is invalid")
-    return tuple(key for key, ident in _SUPPORTED.items()
-                 if isinstance(maps.get(key), dict)
-                 and maps[key].get("id") == ident
-                 and maps[key].get("avaliableInTrainingRoom") is True)
+    return tuple(training_map_catalog(game).values())
+
+
+def expose_training_maps(document):
+    """Enable the same pinned hidden maps in a prepared client's picker."""
+    changed = False
+    for key in _HIDDEN_MAPS:
+        row = document["maps"].get(key)
+        if (isinstance(row, dict) and row.get("id") == _SUPPORTED[key]
+                and row.get("avaliableInTrainingRoom") is not True):
+            row["avaliableInTrainingRoom"] = True
+            changed = True
+    return changed
 
 
 def training_map_catalog(game):
@@ -116,7 +135,7 @@ def training_map_catalog(game):
         row = maps.get(key)
         if (not isinstance(row, dict) or type(row.get("id")) is not int
                 or row["id"] != expected_id
-                or row.get("avaliableInTrainingRoom") is not True):
+                or (key not in _HIDDEN_MAPS and row.get("avaliableInTrainingRoom") is not True)):
             continue
         if row["id"] in result:
             raise ValueError("Training map catalog contains a duplicate map ID")
@@ -139,7 +158,8 @@ def _load_map_spec(game, key):
     row = maps.get(key) if isinstance(maps, dict) else None
     if not isinstance(row, dict):
         raise ValueError(f"Pinned map catalog has no entry for {key}")
-    if row.get("id") != _SUPPORTED[key] or row.get("avaliableInTrainingRoom") is not True:
+    if (row.get("id") != _SUPPORTED[key]
+            or (key not in _HIDDEN_MAPS and row.get("avaliableInTrainingRoom") is not True)):
         raise ValueError(f"Pinned map metadata does not admit {key} for training")
 
     local_name = row.get("localName")
@@ -222,7 +242,7 @@ def _load_map_spec(game, key):
     lka_paths = terrain.get("tdc.lkaPaths")
     lka_relative = lka_paths.get(tag) if isinstance(lka_paths, dict) else None
     if (lka_relative is None and isinstance(lka_paths, dict)
-            and set(lka_paths) == {""}):
+            and (set(lka_paths) == {""} or key == "lumber_01")):
         # Mines labels its active destruction state rd0 in the scene, while
         # its single TerrainData LKA path is the empty/default tag.
         lka_relative = lka_paths[""]
@@ -279,8 +299,9 @@ def _load_map_spec(game, key):
     if any(not (min_x <= x <= max_x and min_z <= z <= max_z)
            for team in points for x, z in team):
         raise ValueError(f"Pinned map {key} has a spawn outside its map border")
-    if any(len(team) < 7 for team in points):
-        raise ValueError(f"Pinned map {key} has fewer than seven team spawns")
+    minimum = map_team_capacity(_SUPPORTED[key])
+    if any(len(team) < minimum for team in points):
+        raise ValueError(f"Pinned map {key} has fewer than {minimum} team spawns")
     return MapSpec(key, _SUPPORTED[key], tag, local_name, map_root,
                    scene_path, geometry_path, lka_path, heightmap_path,
                    mkm_path, effects_path, bounds, bbox, points,

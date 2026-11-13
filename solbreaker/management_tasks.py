@@ -19,16 +19,28 @@ from .platform_runtime import require_executable_idle
 from .storage import account_access
 
 
-def launch_client(lab, *, auto_login=None):
+def launch_client(lab, *, auto_login=None, profile=None, url=None):
     with client_configuration_access(lab):
         lab, manifest = ensure_lab(lab)
         executable = lab/'client/wotblitz.exe'
         require_executable_idle(executable)
         with executable.open('rb') as source:
             digest = hashlib.file_digest(source, 'sha256').hexdigest()
-        if executable.is_symlink() or digest != manifest.get('client_exe_sha256'):
+        if executable.is_symlink():
             raise ValueError('Клиент отличается от подготовленной копии')
-        from .client_ui import install_server_name
+        from . import client_atgm_aim, client_sandbox
+        if digest != client_sandbox.OUTPUT_SHA256 and digest not in client_sandbox.PREVIOUS_ENTRIES:
+            manifest = client_atgm_aim.upgrade(lab, manifest, digest)
+            digest = manifest['client_exe_sha256']
+        manifest = client_sandbox.upgrade(lab, manifest, digest)
+        if profile is not None or (url and not connection_url_matches(lab, url)):
+            _apply_connection(lab, profile, url)
+            lab, manifest = ensure_lab(lab)
+        from .client_battle_settings import upgrade_form
+        manifest = upgrade_form(lab, manifest)
+        from .client_ui import install_sandbox_bindings, install_server_name, install_training_maps
+        manifest = install_sandbox_bindings(lab, manifest)
+        install_training_maps(lab, manifest)
         install_server_name(lab)
         if auto_login is not None:
             from .login_preferences import configure_automatic_login
@@ -53,12 +65,29 @@ class _ProfileRedirectHandler(HTTPRedirectHandler):
         return super().redirect_request(request, response, code, message, headers, new_url)
 
 
-def fetch_profile(url):
+def _parse_profile_url(url):
     parsed = urlsplit(url)
     if (parsed.scheme not in ('http', 'https') or not parsed.hostname
             or parsed.username is not None or parsed.password is not None
             or parsed.query or parsed.fragment or parsed.path not in ('', '/', '/tfs/connection/v1')):
         raise ValueError('Укажи HTTP(S)-адрес сервера без пароля и параметров')
+    return parsed
+
+
+def connection_url_matches(lab, url):
+    from .network import load_network, origin
+    try:
+        if not (Path(lab)/'network.toml').is_file():
+            return False
+        parsed = _parse_profile_url(url)
+        requested = origin(f'{parsed.scheme}://{parsed.netloc}', public=True)
+        return load_network(lab).advertise_http == requested
+    except (OSError, ValueError, KeyError):
+        return False
+
+
+def fetch_profile(url):
+    parsed = _parse_profile_url(url)
     address = url.rstrip('/')
     if not parsed.path.rstrip('/'):
         address += '/tfs/connection/v1'
@@ -70,16 +99,20 @@ def fetch_profile(url):
     return data
 
 
+def _apply_connection(lab, profile, url):
+    if url:
+        profile = lab/'private/import-connection.json'
+        atomic_write(profile, fetch_profile(url))
+    if profile is None:
+        raise ValueError('Выбери файл подключения или укажи адрес сервера')
+    return connect_client(lab, profile)
+
+
 def import_connection(lab, *, profile=None, url=None):
     with client_configuration_access(lab):
-        lab, manifest = ensure_lab(lab)
+        lab, _ = ensure_lab(lab)
         require_executable_idle(lab/'client/wotblitz.exe')
-        if url:
-            profile = lab/'private/import-connection.json'
-            atomic_write(profile, fetch_profile(url))
-        if profile is None:
-            raise ValueError('Выбери файл подключения или укажи адрес сервера')
-        result = connect_client(lab, profile)
+        result = _apply_connection(lab, profile, url)
         from .client_tls import configure_environment
         configure_environment({}, lab, json.loads((lab/'manifest.json').read_text()))
         return result

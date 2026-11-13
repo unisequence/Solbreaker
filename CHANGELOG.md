@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.1.0-alpha.5 — 2026-11-13
+
+- Play Gravity Force in bot battles and training rooms. Eligible tanks get a
+  thruster on Ability 1 with a 20-second HUD cooldown. The hull levels out
+  after takeoff, and gun recoil can change its trajectory.
+- Open 22 hidden maps and variants, including Wasteland, Sea of Tranquility
+  and Everfrost. Training rooms can set battle rules and add bots to either team.
+- Steer guided missiles by hand or lock on to a tank. The sandbox adds boost,
+  flight and a missile camera with rebindable keys. Its solo training ground
+  runs until you leave and lets you place physical targets and respawn.
+- Restore T49 A textures with the optional original-resource repair. Refill
+  ammunition automatically after battles, show provisions on the Tab panel
+  and restore missing loadout prices.
+- Reuse the prepared client when switching between a local and remote server.
+  New saved-login tokens last 30 days.
+
 ## 0.1.0-alpha.4 — 2026-11-12
 
 - Keep prepared map geometry and navigation data between battles and server
