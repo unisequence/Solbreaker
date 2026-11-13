@@ -80,6 +80,16 @@ class ArenaLoader:
         else:
             self.order.append(job.arena.result_id)
 
+    def withdraw_loading_player(self, arena, client):
+        job = self.jobs.get(arena.result_id)
+        if job is None:
+            return
+        job.context = tuple(entry for entry in job.context if entry[1] is not client)
+        if job.context:
+            arena.leave(client.account_id)
+        else:
+            self.cancel(arena, 'All players left during world construction')
+
     def cancel(self,arena,reason):
         job = self.jobs.pop(arena.result_id,None)
         if job is not None:

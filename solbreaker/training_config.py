@@ -28,6 +28,23 @@ MAX_ALLIES = TEAM_SIZE-1
 _MAP_KEY = re.compile(r'[a-z0-9_]{1,64}')
 
 
+MAX_ROOM_MINUTES = 60
+
+
+@dataclass(frozen=True)
+class RoomBattleSettings:
+    unlimited_lives: bool = False
+    # None uses the mode default; zero has no time limit.
+    minutes: int | None = None
+
+    def __post_init__(self):
+        if type(self.unlimited_lives) is not bool:
+            raise ValueError('Unlimited lives must be boolean')
+        if self.minutes is not None and (type(self.minutes) is not int
+                                         or not 0 <= self.minutes <= MAX_ROOM_MINUTES):
+            raise ValueError(f'Choose 1 to {MAX_ROOM_MINUTES} minutes or an endless battle')
+
+
 @dataclass(frozen=True)
 class TrainingConfig:
     """``target``: stationary targets; ``bots``: driving enemy bots.

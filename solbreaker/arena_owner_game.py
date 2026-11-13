@@ -8,6 +8,7 @@ import struct
 import time
 
 from .arena import Arena
+from .training_config import RoomBattleSettings
 from .arena_commands import apply_input, decode_input
 from .arena_owner import (AddressedPayload, Command, CommandRejected, HandlerOutput,
                           MotionPayload, SettlementData, SettlementRecord, SpawnData)
@@ -272,6 +273,7 @@ class GameArenaFactory:
     map_cache: MapCache | None = None
     sandbox_enabled: bool = False
     room_mode: str = 'encounter'
+    room_settings: RoomBattleSettings | None = None
 
     @staticmethod
     def _configure(scene, settings):
@@ -329,7 +331,8 @@ class GameArenaFactory:
                           bot_roster=self.bot_roster, bot_game=self.game,
                           bot_scene_settings=self.bot_scene_settings,
                           prebattle_seconds=self.prebattle_seconds, parallel_native_build=True,
-                          sandbox_enabled=self.sandbox_enabled, room_mode=self.room_mode)
+                          sandbox_enabled=self.sandbox_enabled, room_mode=self.room_mode,
+                          room_settings=self.room_settings)
             roster_ms = (time.monotonic()-roster_started)*1000
             while arena.building:
                 arena.advance_build()

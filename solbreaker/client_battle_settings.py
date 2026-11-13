@@ -3,8 +3,11 @@ from pathlib import Path
 import struct
 
 from . import dvpl
+from .roster import TEAM_SIZE
+from .training_config import MAX_ROOM_MINUTES
 
 FORM = 'UI/Screens/Lobby/Training/CreateRoom.yaml.dvpl'
+ROOM = 'UI/Screens/Lobby/Training/Room.yaml.dvpl'
 ACTIONS = 'UI/Screens/Lobby/Training/LocalBattleSettings.actions.dvpl'
 TITLE = 'SolbreakerBotSetup'
 PREFIX = 'SolbreakerBots/1/'
@@ -147,8 +150,18 @@ RULES_CAPTION = ('when localRules == 3 -> localize("Local/BattleSettings/Gravity
                  'localRules == 1 -> localize("Local/BattleSettings/Capture"), '
                  'localize("Local/BattleSettings/Elimination")')
 
-ROOM_RULES_CAPTION = (RULES_CAPTION.replace('localRules', 'localRoomRules')
+ROOM_MODE_VALUE = '(when roomModeOverride >= 0 -> roomModeOverride, (when roomInitialMode >= 0 -> roomInitialMode, 1))'
+ROOM_LIVES_VALUE = '(when roomLivesOverride >= 0 -> roomLivesOverride, roomInitialLives)'
+ROOM_MINUTES_VALUE = '(when roomMinutesOverride >= -1 -> roomMinutesOverride, roomInitialMinutes)'
+ROOM_BOT_VALUES = {
+    team: f'(when roomBots{team}Override >= 0 -> roomBots{team}Override, roomInitialBots{team})'
+    for team in (1, 2)
+}
+ROOM_RULES_CAPTION = (RULES_CAPTION.replace('localRules', ROOM_MODE_VALUE)
                      .replace('/Capture"', '/Encounter"'))
+ROOM_SAVE_CAPTION = (
+    'when localBotSetup or roomInitialMode >= 0 -> localize("Local/BattleSettings/Save"), '
+    'localize("Local/BattleSettings/Create")')
 DESCRIPTION_FIELD = 'Container/TextFieldContainer/VerticalBox/Background/TextField'
 
 
@@ -157,12 +170,6 @@ def _room_rules(root):
     fields = {n['name']: n for n in container['children']}
     if 'LocalRoomRules' in fields:
         return False
-    local_vars = root['components']['UIDataLocalVarsComponent']['data']
-    local_vars.extend((['int', 'localRoomRules', '1'], ['string', 'localRoomNotes', '""']))
-    description, = [node for node in fields['Description']['children']
-                    if node.get('path') == DESCRIPTION_FIELD]
-    description.setdefault('components', {})['UIInputEventComponent'] = {
-        'onValueChanged': 'LocalRoomNotesChanged', 'onValueChangedData': '_text'}
     rules = _row('LocalRoomRules', 'Local/BattleSettings/Rules', [
         _button('Choice', ROOM_RULES_CAPTION, 'LocalRoomRulesNext', 360)], conditional=False)
     rules['bindings'] = [['visible', 'not localBotSetup']]
@@ -170,6 +177,95 @@ def _room_rules(root):
     # The native controller looks up Mode/Container/Select and Name on open.
     mode['bindings'] = [['visible', 'false']]
     container['children'].insert(container['children'].index(mode)+1, rules)
+    return True
+
+
+ROOM_TIME_CAPTION = (
+    'when localRoomMinutes < 0 -> localize("Local/BattleSettings/ModeDefault"), '
+    'localRoomMinutes == 0 -> localize("Local/BattleSettings/NoTimer"), '
+    'str(localRoomMinutes) + " " + localize("Local/BattleSettings/Minutes")'
+).replace("localRoomMinutes", ROOM_MINUTES_VALUE)
+
+
+def _room_duration_settings(root):
+    container, = [n for n in _walk(root) if n.get('name') == 'scrollContainerControl']
+    rows = container['children']
+    rows[:] = [row for row in rows if row.get('name') not in
+               ('LocalRoomLives', 'LocalRoomDuration', 'LocalRoomOptions', 'LocalRoomBots1', 'LocalRoomBots2')]
+    room_rules, = [row for row in rows if row.get('name') == 'LocalRoomRules']
+    components = root['components']
+    local_vars = components['UIDataLocalVarsComponent']['data']
+    local_vars[:] = [row for row in local_vars if not row[1].startswith('localRoom') and row[1] not in
+                     ('roomModeOverride', 'roomLivesOverride', 'roomMinutesOverride',
+                      'roomBots1Override', 'roomBots2Override')]
+    room_params = (('roomInitialMode', -1), ('roomInitialLives', 0), ('roomInitialMinutes', -1),
+                   ('roomInitialBots1', 0), ('roomInitialBots2', 0))
+    params = components['UIDataParamsComponent']['params']
+    params[:] = [row for row in params if row[1] not in {name for name, _ in room_params}]
+    params.extend([['int', name, str(value), str(value)] for name, value in room_params])
+    for index in range(2, 5):
+        components.pop(f'UIEventOnDataComponent{index}', None)
+    # Each field inherits its saved value until the player changes that field.
+    local_vars.extend([
+        ['int', 'roomModeOverride', '-1'],
+        ['int', 'roomLivesOverride', '-1'],
+        ['int', 'roomMinutesOverride', '-2'],
+        ['int', 'roomBots1Override', '-1'], ['int', 'roomBots2Override', '-1'],
+    ])
+    footer, = [node for node in _walk(root) if node.get('name') == 'CreateRoomButton']
+    caption, = [node for node in footer['children'] if node.get('path') == 'Caption']
+    caption['bindings'] = [['UITextComponent.text', ROOM_SAVE_CAPTION]]
+    description, = [row for row in rows if row.get('name') == 'Description']
+    for node in description['children']:
+        if node.get('path') == DESCRIPTION_FIELD:
+            node.get('components', {}).pop('UIInputEventComponent', None)
+
+    def label(key):
+        return f'localize("Local/BattleSettings/{key}")'
+
+    lives = _row('LocalRoomLives', 'Local/BattleSettings/Lives', [
+        _button('Single', label('SingleLife'), 'LocalRoomSingleLife', 162),
+        _button('Unlimited', label('Endless'), 'LocalRoomUnlimitedLives', 190)], conditional=False)
+    for button, value in zip(lives['children'][1]['children'][0]['children'], (0, 1)):
+        button['bindings'] = [['classes', f'when {ROOM_LIVES_VALUE} == {value} -> '
+                                '"button button-color-orange", "button button-color-gray"']]
+    duration = _row('LocalRoomDuration', 'Local/BattleSettings/Duration', [
+        _button('Less', '"-"', 'LocalRoomTimeLess', 54),
+        _button('Value', ROOM_TIME_CAPTION, 'LocalRoomTimeDefault', 144),
+        _button('More', '"+"', 'LocalRoomTimeMore', 54),
+        _button('Endless', '"∞"', 'LocalRoomTimeEndless', 84)], conditional=False)
+    bots = [
+        _row(f'LocalRoomBots{team}', f'Local/BattleSettings/RoomBots{team}', [
+            _button('Less', '"-"', f'LocalRoomBots{team}Less', 54),
+            _button('Value', f'str({value})', 'LocalNoop', 236),
+            _button('More', '"+"', f'LocalRoomBots{team}More', 54)], conditional=False)
+        for team, value in ROOM_BOT_VALUES.items()
+    ]
+    for row in (lives, duration, *bots):
+        row['bindings'] = [['visible', 'not localBotSetup']]
+    duration_buttons = duration['children'][1]['children'][0]['children']
+    duration_buttons[-1]['bindings'] = [['classes',
+        f'when {ROOM_MINUTES_VALUE} == 0 -> "button button-color-orange", "button button-color-gray"']]
+    for button in duration_buttons:
+        if button['name'] in ('Less', 'More'):
+            event = button['components']['UIInputEventComponent']['onTouchUpInside']
+            button['components']['UILongTapComponent'] = {
+                'pressTimeout': .35, 'repeatDelay': .12, 'longTapEvent': event}
+    # The native save callback reads this field separately from the notes.
+    mode_tag = ('(when localRoomRules == 3 -> "[mode gravity] ", '
+                'localRoomRules == 2 -> "[mode supremacy] ", '
+                'localRoomRules == 0 -> "[mode elimination] ", "[mode encounter] ")')
+    lives_tag = '(when localRoomLives == 1 -> "[lives unlimited] ", "[lives single] ")'
+    time_tag = ('(when localRoomMinutes < 0 -> "[time default] ", '
+                'localRoomMinutes == 0 -> "[time endless] ", "[time " + str(localRoomMinutes) + "] ")')
+    bots_tag = (f'"[bots " + str({ROOM_BOT_VALUES[1]}) + ":" + str({ROOM_BOT_VALUES[2]})'
+                ' + "] [notes] "')
+    tags = (' + '.join((mode_tag, lives_tag, time_tag, bots_tag)).replace('localRoomRules', ROOM_MODE_VALUE)
+            .replace('localRoomLives', ROOM_LIVES_VALUE).replace('localRoomMinutes', ROOM_MINUTES_VALUE))
+    options = dict(name='LocalRoomOptions', visible=False, input=False, bindings=[['text', tags]])
+    options['class'] = 'UITextField'
+    index = rows.index(room_rules) + 1
+    rows[index:index] = [lives, duration, *bots, options]
     return True
 
 
@@ -219,10 +315,7 @@ def patch_form(document):
         ['int', 'localEnemies', '7'], ['int', 'localDifficulty', '1'],
         ['int', 'localRules', '1']]}
     footer, = [n for n in _walk(root) if n.get('name') == 'CreateRoomButton']
-    caption, = [n for n in footer['children'] if n.get('path') == 'Caption']
     footer['bindings'] = [['input', 'not localBotSetup or (localRecipe >= 0 and not localSaved)']]
-    caption['bindings'] = [['UITextComponent.text',
-        'when localBotSetup -> localize("Local/BattleSettings/Save"), localize("Local/BattleSettings/Create")']]
     for name in ('Title', 'DescriptionSelect', 'Description', 'Mode', 'Password', 'TeamKill',
                  'HideEnemyVehicles'):
         bindings = fields[name].setdefault('bindings', [])
@@ -247,6 +340,7 @@ def patch_form(document):
         _button('Choice', RULES_CAPTION, 'LocalRulesNext', 360)])
     container['children'] = [allies, enemies, difficulty, rules, *container['children']]
     _room_rules(root)
+    _room_duration_settings(root)
 
 
 def extra_resources():
@@ -265,8 +359,6 @@ action LocalSaved()
 }
 action LocalSync()
 {
-    ChangeProperty("**/CreateRoomButton/Caption", "UITextComponent", "text",
-        when localBotSetup -> localize("Local/BattleSettings/Save"), localize("Local/BattleSettings/Create"));
     if (localBotSetup)
     {
         ChangeProperty("**/Title/Container/TextFieldContainer/VerticalBox/Background/TextField", "", "text", "@TITLE@");
@@ -291,20 +383,28 @@ action LocalRulesNext()
     DirectEvent("LocalSync", ".");
 }
 action LocalNoop() {}
-action LocalRoomNotesChanged(string text)
+action LocalRoomRulesNext() { ChangeData(roomModeOverride, (@ROOM_MODE@ + 1) % 4); }
+action LocalRoomSingleLife() { ChangeData(roomLivesOverride, 0); }
+action LocalRoomUnlimitedLives() { ChangeData(roomLivesOverride, 1); }
+action LocalRoomTimeLess()
 {
-    if (not localBotSetup) { ChangeData(localRoomNotes, text); }
+    ChangeData(roomMinutesOverride, when @ROOM_MINUTES@ <= 0 -> 6, max(1, @ROOM_MINUTES@ - 1));
 }
-action LocalRoomRulesNext()
+action LocalRoomTimeMore()
 {
-    ChangeData(localRoomRules, (localRoomRules + 1) % 4);
-    ChangeProperty("**/Description/Container/TextFieldContainer/VerticalBox/Background/TextField",
-        "", "text", (when localRoomRules == 3 -> "[mode gravity] ",
-        localRoomRules == 2 -> "[mode supremacy] ", localRoomRules == 0 -> "[mode elimination] ",
-        "[mode encounter] ") + localRoomNotes);
+    ChangeData(roomMinutesOverride, when @ROOM_MINUTES@ <= 0 -> 8, min(@MAX_ROOM_MINUTES@, @ROOM_MINUTES@ + 1));
 }
+action LocalRoomTimeDefault() { ChangeData(roomMinutesOverride, -1); }
+action LocalRoomTimeEndless() { ChangeData(roomMinutesOverride, 0); }
 '''
-    return {ACTIONS: dvpl.encode(actions.replace('@TITLE@', TITLE).replace('@PREFIX@', PREFIX).encode())}
+    actions = actions.replace('@TITLE@', TITLE).replace('@PREFIX@', PREFIX)
+    actions = actions.replace('@ROOM_MODE@', ROOM_MODE_VALUE).replace('@ROOM_MINUTES@', ROOM_MINUTES_VALUE)
+    for team, value in ROOM_BOT_VALUES.items():
+        actions += f"""
+action LocalRoomBots{team}Less() {{ ChangeData(roomBots{team}Override, max(0, {value} - 1)); }}
+action LocalRoomBots{team}More() {{ ChangeData(roomBots{team}Override, min({TEAM_SIZE}, {value} + 1)); }}
+"""
+    return {ACTIONS: dvpl.encode(actions.replace('@MAX_ROOM_MINUTES@', str(MAX_ROOM_MINUTES)).encode())}
 
 
 STRINGS = {
@@ -314,21 +414,55 @@ STRINGS = {
            'Elimination': 'Elimination', 'Encounter': 'Encounter',
            'Supremacy': 'Supremacy', 'Gravity': 'Gravity Force',
            'Save': 'Save', 'Saved': 'Settings saved', 'Create': 'Create',
-           'RoomBotsCaption': 'Description and bots [bots 2:3]',
-           'RoomBotsHint': 'Start with [bots 2:3] for teams 1 and 2, then add your notes.'},
+           'Lives': 'Lives per tank', 'Duration': 'Battle duration', 'Minutes': 'min', 'ModeDefault': 'Mode default',
+           'SingleLife': 'One life', 'Endless': 'Unlimited', 'NoTimer': 'No limit',
+           'RoomBotsCaption': 'Description',
+           'RoomBotsHint': 'Optional', 'RoomBots1': 'Team 1 bots', 'RoomBots2': 'Team 2 bots',
+           'RoomHeaderBots': 'Bots', 'RoomHeaderTime': 'Time'},
     'ru': {'Settings': 'Настройки боя', 'Kind': 'Тип боя', 'Room': 'Тренировочная комната', 'Allies': 'Союзные боты',
            'Enemies': 'Боты противника', 'Difficulty': 'Сложность ботов', 'Rules': 'Правила боя',
            'Easy': 'Лёгкая', 'Normal': 'Обычная', 'Hard': 'Сложная', 'Capture': 'Захват базы',
            'Elimination': 'Перестрелка', 'Encounter': 'Встречный бой',
            'Supremacy': 'Превосходство', 'Gravity': 'Гравитация',
            'Save': 'Сохранить', 'Saved': 'Настройки сохранены', 'Create': 'Создать',
-           'RoomBotsCaption': 'Описание и боты [bots 2:3]',
-           'RoomBotsHint': 'Начни с [bots 2:3] для команд 1 и 2, затем добавь описание.'}}
+           'Lives': 'Жизни на танк', 'Duration': 'Время боя', 'Minutes': 'мин', 'ModeDefault': 'По режиму',
+           'SingleLife': 'Одна жизнь', 'Endless': 'Без ограничений', 'NoTimer': 'Без лимита',
+           'RoomBotsCaption': 'Описание',
+           'RoomBotsHint': 'Необязательно', 'RoomBots1': 'Боты команды 1', 'RoomBots2': 'Боты команды 2',
+           'RoomHeaderBots': 'Боты', 'RoomHeaderTime': 'Время'}}
+
+
+def patch_room(document):
+    """Keep room metadata in the native map and mode row, outside the notes."""
+    root, = [node for node in document['Prototypes'] if node.get('name') == 'ScreenContainer']
+    params = root['components']['UIDataParamsComponent']['params']
+    params.extend(['int', f'roomHeader{name}', str(default), str(default)] for name, default in
+                  (('Mode', -1), ('Minutes', -1), ('Bots1', 0), ('Bots2', 0)))
+    header, = [node for node in _walk(root) if node.get('name') == 'HorizContainer2']
+    mode, = [node for node in _walk(header) if node.get('name') == 'ModeTxt']
+    mode['bindings'] = [['UITextComponent.text', ROOM_RULES_CAPTION.replace(
+        ROOM_MODE_VALUE, '(when roomHeaderMode < 0 -> 1, roomHeaderMode)')]]
+    summary = {
+        'class': 'UIStaticText', 'name': 'RoomOptionsSummary',
+        'classes': 'text2 text-color-blue', 'input': False,
+        'components': {'UITextComponent': {'colorInheritType': 'COLOR_IGNORE_PARENT'},
+                       'SizePolicy': {'horizontalPolicy': 'PercentOfContent',
+                                      'verticalPolicy': 'PercentOfContent'}},
+        'bindings': [['visible', 'roomHeaderMode >= 0'],
+                     ['UITextComponent.text',
+                      'localize("Local/BattleSettings/RoomHeaderTime") + " " + '
+                      '(when roomHeaderMinutes < 0 -> localize("Local/BattleSettings/ModeDefault"), '
+                      'roomHeaderMinutes == 0 -> localize("Local/BattleSettings/NoTimer"), '
+                      'str(roomHeaderMinutes) + " " + localize("Local/BattleSettings/Minutes")) + '
+                      '"  •  " + localize("Local/BattleSettings/RoomHeaderBots") + " " + '
+                      'str(roomHeaderBots1) + ":" + str(roomHeaderBots2)']]
+    }
+    header['children'].append(summary)
 
 
 def upgrade_form(lab, manifest):
     """Refresh the installed native battle settings form in an idle client."""
-    if manifest.get('battle_settings_ui_version') == 5:
+    if manifest.get('battle_settings_ui_version') == 11:
         return manifest
     from hashlib import sha256
     import json
@@ -341,6 +475,7 @@ def upgrade_form(lab, manifest):
         return manifest
     data = lab/'client/Data'
     staged = {}
+    has_room_form = False
     for relative in (FORM, STRINGS_EN, STRINGS_RU):
         target = data/relative
         if target.resolve(strict=True) != target or not target.is_file():
@@ -365,8 +500,10 @@ def upgrade_form(lab, manifest):
             if caption['bindings'] != [binding]:
                 caption['bindings'] = [binding]
                 changed = True
-            if any(node.get('name') == 'scrollContainerControl' for node in _walk(root)):
+            has_room_form = any(node.get('name') == 'scrollContainerControl' for node in _walk(root))
+            if has_room_form:
                 changed = _room_rules(root) or changed
+                changed = _room_duration_settings(root) or changed
                 room_rules, = [node for node in _walk(root) if node.get('name') == 'LocalRoomRules']
                 room_caption, = [node for node in _walk(room_rules) if node.get('path') == 'Caption']
                 room_binding = [['UITextComponent.text', ROOM_RULES_CAPTION]]
@@ -377,7 +514,9 @@ def upgrade_form(lab, manifest):
             document = yaml.load(raw, Loader=_StringsLoader)
             locale = 'en' if relative == STRINGS_EN else 'ru'
             strings = {f'Local/BattleSettings/{key}': STRINGS[locale][key]
-                       for key in ('RoomBotsCaption', 'RoomBotsHint', 'Gravity', 'Encounter')}
+                       for key in ('RoomBotsCaption', 'RoomBotsHint', 'Gravity', 'Encounter',
+                                   'Lives', 'Duration', 'Minutes', 'ModeDefault', 'SingleLife', 'Endless', 'NoTimer', 'RoomBots1', 'RoomBots2',
+                                   'RoomHeaderBots', 'RoomHeaderTime')}
             changed = any(document.get(key) != value for key, value in strings.items())
             document.update(strings)
         content = (dvpl.encode(yaml.safe_dump(document, sort_keys=False, allow_unicode=True,
@@ -385,6 +524,17 @@ def upgrade_form(lab, manifest):
         if changed:
             staged[target] = content
         overrides[relative] = sha256(content).hexdigest()
+    if has_room_form and ROOM not in overrides:
+        room = data/ROOM
+        if room.parent.resolve(strict=True) != room.parent:
+            raise ValueError('Room header requires a private UI overlay')
+        game = Path(manifest.get('source_game') or manifest['game'])
+        document = yaml.safe_load(dvpl.read(game/'Data'/ROOM))
+        patch_room(document)
+        content = dvpl.encode(yaml.safe_dump(document, sort_keys=False, allow_unicode=True,
+                                             width=1 << 30).encode())
+        staged[room] = content
+        overrides[ROOM] = sha256(content).hexdigest()
     actions = data/ACTIONS
     if actions.resolve(strict=True) != actions or not actions.is_file():
         raise ValueError('Battle settings require a private actions file')
@@ -393,9 +543,9 @@ def upgrade_form(lab, manifest):
         staged[actions] = actions_content
     overrides[ACTIONS] = sha256(actions_content).hexdigest()
     for target, content in staged.items():
-        atomic_write(target, content)
+        atomic_write(target, content, replace_symlink=target == data/ROOM)
     updated = dict(manifest, ui_overrides=overrides, room_bot_hint_version=1,
-                   battle_settings_ui_version=5)
+                   battle_settings_ui_version=11)
     atomic_write(lab/'manifest.json', (json.dumps(updated, indent=2)+'\n').encode())
     return updated
 

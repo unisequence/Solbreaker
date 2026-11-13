@@ -822,7 +822,9 @@ class BaseEndpoint(asyncio.DatagramProtocol):
         held = False
         if arena:
             if arena.building:
-                if getattr(arena, 'owner_backed', False):
+                if arena.room_settings is not None:
+                    self._withdraw_loading_player(arena, client)
+                elif getattr(arena, 'owner_backed', False):
                     self.owner_service.cancel(
                         arena, 'Participant disconnected during owner startup')
                 else:
@@ -1475,7 +1477,7 @@ class BaseEndpoint(asyncio.DatagramProtocol):
         self.send(addr, client, b"\x13" + account_method(24, bytes([reason]) + packed_blob(b"")))
 
     def start_shared(self, account_ids, teams=(1,2), map_id=None, *, bot_counts=(0, 0),
-                     room_mode='encounter'):
+                     room_mode='encounter', room_settings=None):
         """Attach independent sessions to one authoritative world."""
         self.require_arena_capacity()
         from .roster import validate_teams
@@ -1511,7 +1513,8 @@ class BaseEndpoint(asyncio.DatagramProtocol):
         runtime = self.map_runtime(spec.map_id)
         options = dict(terrain=runtime['terrain'], map_spec=spec,
                        collision_scene=runtime['collision_scene'], prebattle_seconds=7.,
-                       room_mode=room_mode, bot_game=self.game if room_mode == 'gravity' else None)
+                       room_mode=room_mode, room_settings=room_settings,
+                       bot_game=self.game if room_mode == 'gravity' else None)
         owners = getattr(self, 'arena_owners_enabled', False)
         definitions = ({account_id: self.definition for account_id in account_ids}
                        if owners and getattr(self, 'progression', None) is None else {})
@@ -1894,6 +1897,10 @@ class BaseEndpoint(asyncio.DatagramProtocol):
                 except ChannelOverflow:
                     self._disconnect_client(addr,'reliable send window exceeded')
 
+    def _withdraw_loading_player(self, arena, client):
+        loader = self.owner_service if getattr(arena, 'owner_backed', False) else self.loading
+        loader.withdraw_loading_player(arena, client)
+
     def return_to_hangar(self, addr, client):
         recon_transport = getattr(self, 'recon_transport', None)
         if recon_transport is not None:
@@ -1902,7 +1909,11 @@ class BaseEndpoint(asyncio.DatagramProtocol):
         if not arena:
             return
         if arena.building:
-            if getattr(arena, 'owner_backed', False):
+            if arena.room_settings is not None:
+                client.arena_id, client.phase = None, 'account'
+                client.load_grace_until = 0.
+                self._withdraw_loading_player(arena, client)
+            elif getattr(arena, 'owner_backed', False):
                 self.owner_service.cancel(arena, 'Return requested during owner startup')
             else:
                 self.loading.cancel(arena,'Return requested during world construction')

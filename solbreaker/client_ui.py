@@ -45,7 +45,7 @@ UI_RESOURCES = (BASE_HEADER, BASE_LOBBY, BASE_LOBBY_ACTIONS, STATS_ITEM, INVENTO
                 SIDEBAR, ACCOUNT_OPTIONS, KEYBOARD_OPTIONS, GAME_TYPES, GAME_TYPE_CARD,
                 AVATAR_RATING, CALIBRATION_POPUP, NOTIFICATION_7X7,
                 LOGIN_ENTRY, SERVER_SELECTION, SERVER_MAP_ELEMENT,
-                client_battle_settings.FORM, *client_recon.MARKER_OPACITY)
+                client_battle_settings.FORM, client_battle_settings.ROOM, *client_recon.MARKER_OPACITY)
 STRINGS_EN = "Strings/en.yaml.dvpl"
 STRINGS_RU = "Strings/ru.yaml.dvpl"
 SANDBOX_BINDINGS_VERSION = 3
@@ -403,6 +403,8 @@ action SolbreakerSettingsSaved(int arg1)
         root['components']['UIOpacityComponent'] = {'opacity': 0.0}
     elif relative == client_battle_settings.FORM and navigation_enabled:
         client_battle_settings.patch_form(document)
+    elif relative == client_battle_settings.ROOM and navigation_enabled:
+        client_battle_settings.patch_room(document)
     return dvpl.encode(yaml.safe_dump(document, sort_keys=False, allow_unicode=True).encode())
 
 

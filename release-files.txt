@@ -1,7 +1,10 @@
 # Reviewed source release inputs; local state and build products are excluded.
+.github/hooks/pre-push
 .github/ISSUE_TEMPLATE/bug_report.yml
 .github/ISSUE_TEMPLATE/config.yml
 .github/ISSUE_TEMPLATE/feature_request.yml
+.github/workflows/ci.yml
+.github/workflows/release.yml
 .gitignore
 CHANGELOG.md
 CONTRIBUTING.md
@@ -513,8 +516,10 @@ tests/test_token_capacity.py
 tests/test_updates.py
 tests/test_windows_bundle.py
 tests/test_windows_python.py
+tools/audit_repository.py
 tools/build_contact_queries.py
 tools/build_native.py
+tools/build_release.py
 tools/build_support_checks.py
 tools/create-shortcut.vbs
 tools/install_dependencies.py

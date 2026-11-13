@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.0-alpha.6 — 2026-11-13
+
+- Set bot counts for both teams in the training room. The room header shows
+  the selected mode, battle time and bot counts.
+- Choose unlimited lives, set a time limit or turn the timer off. Respawned
+  tanks can use consumables again. Players and bots stay on the scoreboard
+  while team kills accumulate. Supremacy still displays capture points.
+- Keep a training battle open while anyone is still playing, even if an
+  entire team leaves.
+- Check Git contents and run Linux tests on PRs and pushes to main. Version
+  tags build both updater archives and test the Windows bundle before release.
+
 ## 0.1.0-alpha.5 — 2026-11-13
 
 - Play Gravity Force in bot battles and training rooms. Eligible tanks get a

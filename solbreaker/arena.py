@@ -81,7 +81,7 @@ class Arena:
                  bot_enabled=False, training=None, step_budget=None, result_id=None,
                  build_world=True, bot_roster=None, bot_game=None, bot_scene_settings=(),
                  prebattle_seconds=0., parallel_native_build=False, sandbox_enabled=False,
-                 room_mode='encounter'):
+                 room_mode='encounter', room_settings=None):
         if (isinstance(prebattle_seconds, bool) or not isinstance(prebattle_seconds, (int, float))
                 or not math.isfinite(prebattle_seconds) or not 0 <= prebattle_seconds <= 60):
             raise ValueError('Invalid prebattle duration')
@@ -97,7 +97,7 @@ class Arena:
             raise ValueError('Invalid recon setting')
         if type(bot_enabled) is not bool or bot_enabled and not solo:
             raise ValueError('Training bot is available only in solo battles')
-        from .training_config import BATTLE_MODES, TrainingConfig
+        from .training_config import BATTLE_MODES, RoomBattleSettings, TrainingConfig
         if training is not None and (not solo or not isinstance(training, TrainingConfig)):
             raise ValueError('Invalid solo training configuration')
         training = training or TrainingConfig(mode='bots' if bot_enabled else 'target')
@@ -105,6 +105,11 @@ class Arena:
         if room_mode not in BATTLE_MODES:
             raise ValueError('Invalid training room mode')
         self.room_mode = room_mode
+        if room_settings is not None and (solo or not isinstance(room_settings, RoomBattleSettings)):
+            raise ValueError('Invalid training room settings')
+        self.room_settings = room_settings
+        self.endless = room_settings is not None and room_settings.minutes == 0
+        self.unlimited_lives = room_settings is not None and room_settings.unlimited_lives
         rules = (training.battle_mode if training.bots_enabled else 'elimination') if solo else room_mode
         self.gravity_mode = rules == 'gravity'
         self._gravity_game = bot_game if self.gravity_mode else None
@@ -112,7 +117,7 @@ class Arena:
         self.practice_slots = set()
         self.practice_spawned = set()
         self.practice_next_spawn = 0.
-        self.practice_respawn_at = 0.
+        self.respawn_at = {}
         self.practice_timer_at = 0.
         if result_id is not None and (type(result_id) is not str or len(result_id) != 32
                                       or any(c not in '0123456789abcdef' for c in result_id)):
@@ -131,6 +136,8 @@ class Arena:
                          if rules == 'supremacy' else None)
         self.client_map_id = self.map_id | (0x10000 if self.supremacy is not None else 0)
         self.battle_seconds = 420 if self.base_capture is not None or self.supremacy is not None else 600
+        if room_settings is not None and room_settings.minutes:
+            self.battle_seconds = room_settings.minutes * 60
         self.epoch = time.monotonic() if now is None else now
         self.last_tick = self.epoch
         self.simulation_time = self.epoch
@@ -1244,6 +1251,14 @@ class Arena:
         if capture.view() != before:
             self._publish_base_capture()
 
+    def _combat_can_finish(self):
+        if self.room_settings is None:
+            return True
+        if self.endless or self.unlimited_lives:
+            return False
+        return ({p.team for p in self.players.values() if p.attached}
+                == {p.team for p in self.players.values()})
+
     def _advance_base_capture(self, now):
         capture = self.base_capture
         if capture is None or self.finished_at or self.solo_victory_team:
@@ -1255,7 +1270,7 @@ class Arena:
         winner = capture.advance(members, self.STEP, now)
         if capture.view() != before:
             self._publish_base_capture()
-        if winner:
+        if winner and self._combat_can_finish():
             for entity, points in capture.points.items():
                 self.vehicles[entity].capture_points += math.floor(points + 1e-8)
             self.emit('base_captured', team=winner, base_id=capture.point.base_id)
@@ -1274,7 +1289,7 @@ class Arena:
         if self.supremacy.state() != before:
             self.emit('supremacy', state=self.supremacy.state(), previous=before)
         winner = self.supremacy.winner()
-        if winner is not None:
+        if winner is not None and self._combat_can_finish():
             self.finish(winner, 'supremacy', now)
 
     def drain_events(self):
@@ -1517,7 +1532,7 @@ class Arena:
                 for vehicle in self.vehicles.values():
                     self._update_recon_camouflage(vehicle, self.started)
             self._record_motion_frame(self.started)
-            self.emit('period',period=3,seconds=self.battle_seconds,winner=0)
+            self.emit('period',period=3,seconds=0 if self.endless else self.battle_seconds,winner=0)
             if self.practice:
                 self.practice_timer_at = self.started+self.battle_seconds
             if self.base_capture is not None:
@@ -1605,17 +1620,22 @@ class Arena:
         if pose is None:
             return
         new = entity not in self.practice_spawned
-        self._restore_practice_vehicle(entity, pose)
+        self._restore_vehicle(entity, pose)
         self.practice_spawned.add(entity)
         self.emit('practice_spawn', entity, first=new, position=pose.position)
 
-    def _restore_practice_vehicle(self, entity, pose):
+    def _restore_vehicle(self, entity, pose):
         previous = self.vehicles[entity]
         restored = Vehicle(entity, previous.account_id, previous.nickname, previous.team,
                            previous.descriptor, pose, loadout_ammo=previous.loadout_ammo,
                            loadout_shells=previous.loadout_shells,
                            consumables=tuple(ConsumableState(slot.spec) if slot else None
                                              for slot in previous.consumables))
+        if self.unlimited_lives:
+            for field in ('shots', 'hits', 'damage', 'blocked_damage', 'assisted_damage',
+                          'kills', 'direct_hits', 'piercings', 'damage_received', 'hits_received',
+                          'piercings_received', 'distance', 'capture_points', 'defense_points'):
+                setattr(restored, field, getattr(previous, field))
         restored.consumable_clock = self.simulation_time
         self._configure_battle_vehicle(restored, self.world.assets_for(entity))
         restored.movable_armor_state = self._movable_armor_snapshot_at(restored, self.simulation_time)
@@ -1636,24 +1656,33 @@ class Arena:
         if self.practice_timer_at and now >= self.practice_timer_at:
             self.practice_timer_at = now+self.battle_seconds
             self.emit('period', period=3, seconds=self.battle_seconds, winner=0)
-        if not self.practice_respawn_at or now < self.practice_respawn_at or self.world is None:
+
+    def _advance_respawns(self, now):
+        if not self.respawn_at or self.world is None:
             return
-        player = next(iter(self.players.values()))
         from .map_catalog import map_team_capacity
-        for slot in range(map_team_capacity(self.map_id)):
-            x,z = training_spawn(self.map_spec, player.team, slot)
-            yaw = training_yaw(self.map_spec, player.team, slot)
-            pose = self.world.training_placement(player.vehicle_id, x, z, yaw)
-            if pose is not None:
-                critical, destroyed = self.module_state(self.vehicles[player.vehicle_id])
-                vehicle = self._restore_practice_vehicle(player.vehicle_id, pose)
-                self.practice_respawn_at = 0.
-                self.emit('practice_spawn', vehicle.entity_id, first=False, position=pose.position,
-                          repaired=critical+destroyed)
-                self.emit('ready', vehicle.entity_id, yaw_rate=vehicle.gun.yaw_rate,
-                          pitch_rate=vehicle.gun.pitch_rate)
-                return
-        self.practice_respawn_at = now+.5
+        for entity, due in tuple(self.respawn_at.items()):
+            if now < due:
+                continue
+            previous = self.vehicles[entity]
+            if not self._player_attached(previous):
+                self.respawn_at.pop(entity)
+                continue
+            for slot in range(map_team_capacity(self.map_id)):
+                x, z = training_spawn(self.map_spec, previous.team, slot)
+                yaw = training_yaw(self.map_spec, previous.team, slot)
+                pose = self.world.training_placement(entity, x, z, yaw)
+                if pose is not None:
+                    critical, destroyed = self.module_state(previous)
+                    vehicle = self._restore_vehicle(entity, pose)
+                    self.respawn_at.pop(entity)
+                    self.emit('practice_spawn', entity, first=False, position=pose.position,
+                              repaired=critical+destroyed)
+                    self.emit('ready', entity, yaw_rate=vehicle.gun.yaw_rate,
+                              pitch_rate=vehicle.gun.pitch_rate, respawn=True)
+                    break
+            else:
+                self.respawn_at[entity] = now+.5
 
     def _active_sandbox_control(self, vehicle, now):
         if not (vehicle.alive and vehicle.account_id is not None and self._player_attached(vehicle)):
@@ -2460,6 +2489,11 @@ class Arena:
         if not self.finished_at:
             if self.solo:
                 self.finish(self.solo_victory_team or 2,reason,now)
+            elif self.room_settings is not None:
+                if any(p.attached for p in self.players.values()):
+                    self._start_if_ready(now)
+                else:
+                    self.finish(0, reason, now)
             else:
                 active = {p.team for p in self.players.values()
                           if p.attached and self.vehicles[p.vehicle_id].alive}
@@ -2658,16 +2692,19 @@ class Arena:
             target.death_at = at
             self._stop_fire(target, at, 'death')
             self._stop_consumables(target)
-            self.emit('killed', source or 0, target.entity_id)
-            if self.practice and target.account_id is not None:
-                self.practice_respawn_at = at+3.
+            respawning = ((self.unlimited_lives or (self.practice and target.account_id is not None))
+                          and self._player_attached(target))
+            if respawning:
+                self.respawn_at[target.entity_id] = at+3.
+            self.emit('killed', source or 0, target.entity_id,
+                      keep_roster=self.unlimited_lives and respawning)
             if (self.supremacy is not None and not self.finished_at
                     and self.supremacy.finished_winner is None):
                 before = self.supremacy.state()
                 self.supremacy.destroyed(target.team, enemy)
                 self.emit('supremacy', state=self.supremacy.state(), previous=before)
                 winner = self.supremacy.winner()
-                if winner is not None:
+                if winner is not None and self._combat_can_finish():
                     self.finish(winner, 'supremacy', at)
             if self.bot_director is not None:
                 self.bot_director.orders.forget_enemy(target.entity_id)
@@ -3663,11 +3700,12 @@ class Arena:
                 self.emit('reload',vehicle.entity_id,delay=0.,total=vehicle.reload_total)
         if self.practice and not self.finished_at:
             self._advance_practice(now)
-        if (not self.practice and not self.finished_at and not self.solo_victory_team
+        if (not self.practice and not self.endless and not self.finished_at and not self.solo_victory_team
                 and now-self.started>=self.battle_seconds):
             self.finish(self.supremacy.timeout_winner() if self.supremacy is not None else 0,
                         'supremacy_timeout' if self.supremacy is not None else 'timeout', now)
         if not self.finished_at:
+            self._advance_respawns(now)
             before = body_states(self.vehicles)
             drive_results = {}
             bot_targets = self.bot_director.step(now) if self.bot_director is not None else {}
@@ -3911,7 +3949,8 @@ class Arena:
             if (not self.practice and self.solo and teams == {1}
                     and self.base_capture is None and self.supremacy is None):
                 self.solo_victory_team = 1
-            if not self.practice and len(teams)<=1 and not pending_burst and not self.solo_victory_team:
+            if (not self.practice and not self.solo_victory_team and len(teams)<=1
+                    and not pending_burst and self._combat_can_finish()):
                 winner = next(iter(teams),0)
                 # Abandoned live hulls remain collidable, but cannot keep a
                 # defeated team in the match. Do not invent a kill for leaving.
@@ -3963,7 +4002,7 @@ class ArenaManager:
     def create(self, accounts, *, solo=True, incremental=False, collision_scene=None, descriptor=None,
                vehicle_scenes=None, terrain=None, map_spec=None, bot_enabled=False, training=None,
                build_world=True, result_id=None, bot_roster=None, bot_game=None, bot_scene_settings=(),
-               prebattle_seconds=0., room_mode='encounter'):
+               prebattle_seconds=0., room_mode='encounter', room_settings=None):
         space = self.next_space
         self.next_space += 1
         terrain = self.terrain if terrain is None else terrain
@@ -3976,7 +4015,7 @@ class ArenaManager:
                       step_budget=self.step_budget, build_world=build_world, result_id=result_id,
                       bot_roster=bot_roster, bot_game=bot_game, bot_scene_settings=bot_scene_settings,
                       prebattle_seconds=prebattle_seconds, sandbox_enabled=self.sandbox_enabled,
-                      room_mode=room_mode)
+                      room_mode=room_mode, room_settings=room_settings)
         if self.recon_point_tolerance is not None:
             arena.enable_recon_point_probe(tolerance=self.recon_point_tolerance)
         self.arenas[arena.result_id] = arena

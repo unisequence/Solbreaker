@@ -308,6 +308,16 @@ def supremacy_messages(arena, player, state=None, previous=None):
     return tuple(messages)
 
 
+def team_kill_score(arena, player):
+    from .mercury import variable8
+    totals = [0, 0]
+    for vehicle in arena.vehicles.values():
+        totals[vehicle.team != player.team] += vehicle.kills
+    # Avatar37 vector sentinel for the Solbreaker HUD. Supremacy retains its
+    # native capture points, which are independent of the kill totals.
+    return b'\x13' + variable8(96, b'\x04TFS1FRAG' + struct.pack('<II', *totals) + b'\0')
+
+
 def battle_hints_message():
     """Refresh the native battle HUD after its visibility bindings are ready.
 
@@ -364,11 +374,14 @@ def spawn_message_parts(arena, player, *, include_owner_state=True):
     participants = participant_ids((v.entity_id,v.account_id) for v in arena.vehicles.values())
     present = tuple(present_vehicles(arena))
     rows = b''.join(pb_blob(1,vehicle_info(v.entity_id,v.nickname,v.team,participants[v.entity_id],v.descriptor,
-                                         alive=v.alive if getattr(arena, 'practice', False) else True))
+                                         alive=v.alive or (getattr(arena, 'unlimited_lives', False)
+                                                           and v.entity_id in arena.respawn_at)))
                     for _,v in present)
     stats = b''.join(pb_blob(1,pb_int(1,v.entity_id)+pb_int(2,v.kills)) for _,v in present)
     parts = [arena_update(1,pb_blob(1,rows)),arena_update(4,pb_blob(4,stats)),
              b'\x13\xa6'+struct.pack('<I',player.vehicle_id)]
+    if getattr(arena, 'unlimited_lives', False) and arena.supremacy is None:
+        parts.append(team_kill_score(arena, player))
     for alias,v in present:
         parts.extend(vehicle_spawn_parts(arena, v, alias))
     parts.append(b'\x14'+struct.pack('<III6f',player.avatar_id,arena.space_id,player.vehicle_id,0,0,0,0,0,0))
@@ -702,6 +715,7 @@ def event_messages(arena, player, events):
             preserved_reload.add(index+2)
     result = bytearray()
     allied_reload = set()
+    update_team_score = False
     for index,event in enumerate(events):
         actor = arena.vehicles.get(event.actor)
         own = event.actor == player.vehicle_id
@@ -711,9 +725,9 @@ def event_messages(arena, player, events):
             allied_reload.add(event.actor)
         if event.kind == 'practice_spawn':
             entity = actor.entity_id
+            participants = participant_ids((v.entity_id,v.account_id) for v in arena.vehicles.values())
+            info = vehicle_info(entity, actor.nickname, actor.team, participants[entity], actor.descriptor)
             if d['first']:
-                participants = participant_ids((v.entity_id,v.account_id) for v in arena.vehicles.values())
-                info = vehicle_info(entity, actor.nickname, actor.team, participants[entity], actor.descriptor)
                 result += arena_update(2, pb_blob(2, pb_blob(1, info)))
                 alias = tuple(arena.vehicles).index(entity)
                 result += b''.join(vehicle_spawn_parts(arena, actor, alias))
@@ -729,19 +743,21 @@ def event_messages(arena, player, events):
                 result += movable_armor_states_message(actor)
                 result += vehicle_property(entity,3,struct.pack('<h',actor.health))
                 result += vehicle_property(entity,1,b'\1')
-                # The pinned ClientArena::OnVehicleResurrect reads the same
-                # victim ID field as OnVehicleKilled (UpdateArena field 6).
+                # Update the roster alive flag as well as the world entity.
+                # Native equipment input consults the arena's player record.
+                result += arena_update(11, pb_blob(10, pb_blob(1, info)))
                 result += arena_update(20, pb_blob(6, pb_int(1, entity)))
         elif event.kind=='ready' and own:
             allied_reload.update(v.entity_id for v in arena.vehicles.values()
                                  if v.team == player.team and v.entity_id != player.vehicle_id)
             result += ammo_message(actor)
-            result += b''.join(provision_messages(actor))
+            if not d.get('respawn'):
+                result += b''.join(provision_messages(actor))
             for state in actor.consumables:
                 if state:
                     view = state.state_at(arena.simulation_time)
                     result += consumable_message(state.spec.compact_id, view.state, view.remaining, view.total)
-                else:
+                elif not d.get('respawn'):
                     # Preserve empty slot positions: CD0 increments the native
                     # consumable slot cursor at AvatarGameLogic+0x5b4.
                     result += consumable_message(0, 0)
@@ -767,7 +783,7 @@ def event_messages(arena, player, events):
                 *d['position'],d['roll'],d['pitch'],d['yaw'])
         elif event.kind=='period':
             result += period_message(d['period'],d['seconds'],d['winner'],
-                                     getattr(arena, 'battle_seconds', 600),
+                                     0 if getattr(arena, 'endless', False) else getattr(arena, 'battle_seconds', 600),
                                      finish_reason=getattr(arena, 'finish_reason', None))
         elif event.kind == 'base_points':
             for team in (1, 2):
@@ -891,9 +907,16 @@ def event_messages(arena, player, events):
             result += health_changed(event.target,d['health'],event.actor)
         elif event.kind=='killed':
             result += vehicle_property(event.target,1,b'\0')
-            result += arena_update(6,pb_blob(6,pb_int(1,event.target)+pb_int(2,event.actor)))
+            # The vehicle still dies in the world. Keep its roster entry active
+            # while it waits for the next life and update kills independently.
+            if not d.get('keep_roster'):
+                result += arena_update(6,pb_blob(6,pb_int(1,event.target)+pb_int(2,event.actor)))
             if actor is not None:
                 result += arena_update(5,pb_blob(5,pb_blob(1,pb_int(1,event.actor)+pb_int(2,actor.kills))))
+                update_team_score = update_team_score or (
+                    getattr(arena, 'unlimited_lives', False) and arena.supremacy is None)
+    if update_team_score:
+        result += team_kill_score(arena, player)
     # Reload and pump edges can share one step. Send one final authoritative
     # readiness per ally so a pump refill cannot overwrite an intershot gate.
     for entity in sorted(allied_reload):
@@ -955,16 +978,21 @@ def reconnect_message_parts(arena, player):
              ammo_message(own), *provision_messages(own), b'\x13\xa8'+struct.pack('<I',own.damage),
              b'\x13\xa9'+struct.pack('<I',own.blocked_damage),
              b'\x13\xaa'+struct.pack('<I',own.assisted_damage)]
+    if getattr(arena, 'unlimited_lives', False) and arena.supremacy is None:
+        parts.append(team_kill_score(arena, player))
+    battle_seconds = 0 if getattr(arena, 'endless', False) else arena.battle_seconds
     if arena.finished_at:
         parts.append(period_message(4, max(0., arena.finished_at+arena.POSTBATTLE_SECONDS-arena.simulation_time),
-                                    arena.winner, arena.battle_seconds, finish_reason=arena.finish_reason))
+                                    arena.winner, battle_seconds, finish_reason=arena.finish_reason))
+    elif arena.started and getattr(arena, 'endless', False):
+        parts.append(period_message(3, 0, battle_seconds=0))
     elif arena.started:
         ends = getattr(arena, 'practice_timer_at', 0.) or arena.started+arena.battle_seconds
         parts.append(period_message(3, max(0., ends-arena.simulation_time),
-                                    battle_seconds=arena.battle_seconds))
+                                    battle_seconds=battle_seconds))
     elif getattr(arena, 'prebattle_end', 0.):
         parts.append(period_message(2, max(0., arena.prebattle_end-arena.simulation_time),
-                                    battle_seconds=arena.battle_seconds))
+                                    battle_seconds=battle_seconds))
     for state in own.consumables:
         if state:
             view = state.state_at(arena.simulation_time)
