@@ -10,6 +10,7 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 
+from solbreaker.arena import Arena
 from solbreaker.collision import CollisionWorld, Destructible, Motion, Pose
 from solbreaker.mesh_files import MeshFiles
 from solbreaker.native_physics import SensorState, StepInput, StepOutput, library_path, load_library
@@ -103,7 +104,7 @@ class NativeLibraryTests(unittest.TestCase):
 
 @unittest.skipUnless(LIBRARY.exists(), 'Build the physics_core library first')
 class NativePhysicsTests(unittest.TestCase):
-    def world(self, assets, enabled=None):
+    def world(self, assets, enabled=None, *, gravity=CollisionWorld.GRAVITY):
         with patch.dict(os.environ):
             if enabled is None:
                 os.environ.pop('SOLBREAKER_NATIVE_PHYSICS', None)
@@ -112,7 +113,7 @@ class NativePhysicsTests(unittest.TestCase):
             result = CollisionWorld(assets, terrain(),
                 vehicles={200:Pose((0.,0.,0.),0.), 201:Pose((15.,0.,10.),0.)},
                 experimental_6dof=True, experimental_ground_impacts=True,
-                sprung_tracks=True, wall_trampoline=False)
+                sprung_tracks=True, wall_trampoline=False, gravity=gravity)
         self.addCleanup(result.close)
         return result
 
@@ -123,6 +124,55 @@ class NativePhysicsTests(unittest.TestCase):
         self.assertIsNone(legacy._native_physics)
         native.move(.05, 0., 200, dt=1/60)
         self.assertEqual(native._native_physics.steps, 1)
+
+    def test_gravity_recoil_slides_on_flat_ground_and_air_control_adds_no_lift(self):
+        assets = self.assets('flat')
+        world = self.world(assets, gravity=2.5)
+        arena = SimpleNamespace(world=world)
+        vehicle = SimpleNamespace(entity_id=200, definition=assets.definition, pose=world.poses[200])
+        shell = SimpleNamespace(caliber=100.)
+
+        Arena._gravity_shell_impulse(arena, vehicle, shell, (0., 0., 1.), recoil=True)
+        self.assertTrue(world.motion[200].grounded)
+        self.assertAlmostEqual(world.ground_motion[200].velocity[1], -4.2)
+
+        self.assertTrue(world.add_flight_velocity(200, (0., 4., 5.)))
+        vehicle.pose = world.poses[200]
+        vx, vy, _ = world.motion[200].velocity
+        Arena._gravity_air_control(arena, vehicle, 1 | 8, 1/60)
+        self.assertGreater(world.motion[200].velocity[0], vx)
+        self.assertAlmostEqual(world.motion[200].velocity[1], vy)
+        pitch_rate, yaw_rate, _ = world.flight_spin(200)
+        self.assertGreater(pitch_rate, 0.)
+        self.assertGreater(yaw_rate, 0.)
+        world.dynamic_commit(1/60)
+        self.assertLess(world.motion[200].velocity[1], vy)
+
+    def test_gravity_damps_takeoff_bank_with_no_input(self):
+        for mass in (10_000., 60_000.):
+            with self.subTest(mass=mass):
+                assets = self.assets('flat')
+                definition = assets.definition
+                for name in ('hull', 'chassis', 'turret', 'gun', 'engine', 'fuel', 'radio'):
+                    getattr(definition, name).mass *= mass / definition.mass
+                definition.mass = mass
+                world = self.world(assets, gravity=2.5)
+                arena = SimpleNamespace(world=world)
+                entity = 200
+                world.relocate_training_body(entity, Pose((0., 2., 0.), 0., 0., .35))
+                self.assertTrue(world.set_flight_velocity(entity, (0., 0., 8.), (0., 0., 1.5)))
+                self.assertAlmostEqual(world.dynamic_bodies[entity].mass, mass)
+                vehicle = SimpleNamespace(entity_id=entity)
+                dt = 1/60
+                for _ in range(48):
+                    vehicle.pose = world.poses[entity]
+                    velocity = world.motion[entity].velocity
+                    Arena._gravity_air_control(arena, vehicle, 0, dt)
+                    self.assertEqual(world.motion[entity].velocity, velocity)
+                    world.dynamic_commit(dt)
+                self.assertFalse(world.motion[entity].grounded)
+                self.assertLess(abs(world.poses[entity].roll), .08)
+                self.assertGreater(world.motion[entity].velocity[2], 7.)
 
     def test_default_does_not_fall_back_when_native_library_is_missing(self):
         with TemporaryDirectory() as temporary:

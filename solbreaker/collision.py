@@ -532,8 +532,12 @@ class CollisionWorld:
     def __init__(self, assets, terrain, player_position=None, target_position=None, *, vehicles=None,
                  incremental=False, vehicle_assets=None, experimental_6dof=None,
                  experimental_ground_impacts=None, wall_trampoline=None,
-                 sprung_tracks=None, visibility=False, parallel_native_build=False):
+                 sprung_tracks=None, visibility=False, parallel_native_build=False, gravity=9.81):
         self.assets, self.terrain = assets, terrain
+        if not math.isfinite(gravity) or gravity <= 0.:
+            raise ValueError('World gravity must be positive and finite')
+        self.GRAVITY = gravity
+        self.GROUND_LATERAL_GRIP = 1.8 * math.sqrt(gravity * CollisionWorld.GRAVITY)
         self.vehicle_assets = dict(vehicle_assets or {})
         available_cpus = (len(os.sched_getaffinity(0)) if hasattr(os, 'sched_getaffinity')
                           else os.cpu_count() or 1)
@@ -576,6 +580,8 @@ class CollisionWorld:
         self._rapier_query_backend = os.environ.get('SOLBREAKER_RAPIER_QUERIES', 'bullet')
         if self._rapier_query_backend not in ('bullet', 'shadow', 'rapier'):
             raise ValueError('SOLBREAKER_RAPIER_QUERIES must be bullet, shadow or rapier')
+        if self.GRAVITY != CollisionWorld.GRAVITY:
+            self._rapier_query_backend = 'bullet'
         self.rapier_query_stats = dict(batches=0, rays=0, hit_mismatch=0, body_mismatch=0,
             max_position_error=0., max_normal_error=0., bullet_seconds=0., rapier_seconds=0., samples=[])
         self._rapier_fixture = None
@@ -737,7 +743,10 @@ class CollisionWorld:
                 self.dynamic_shapes[entity] = cached[1]
                 self.dynamic_bounds[entity] = cached[2]
                 yield
-        rapier = os.environ.get('SOLBREAKER_DYNAMIC_BACKEND', 'bullet') == 'rapier'
+        # The current Rapier dynamics ABI hardcodes 9.81. Low-gravity arenas
+        # use Bullet for airborne motion and keep the regular ground solver.
+        rapier = (self.GRAVITY == CollisionWorld.GRAVITY
+                  and os.environ.get('SOLBREAKER_DYNAMIC_BACKEND', 'bullet') == 'rapier')
         if rapier and self._parallel_native_build and self._native_physics_enabled:
             yield from self._build_native_parallel()
         else:
@@ -1702,7 +1711,7 @@ class CollisionWorld:
                 point, other_point, normal, distance, impulse/dt))
         return grouped
 
-    def _dynamic_commit_rapier(self, dt):
+    def _dynamic_commit_rapier(self, dt, piloted=()):
         moved = False
         final_contacts = {}
         previous_poses = dict(self.poses)
@@ -1759,6 +1768,10 @@ class CollisionWorld:
         # As with Bullet, quiet landing and stuck-time counters advance once
         # per arena fixed step, not once per native integration substep.
         for entity, dynamic in list(self.dynamic_bodies.items()):
+            if entity in piloted:
+                dynamic.settled_steps = 0
+                dynamic.stationary_time = 0.
+                continue
             pose = self.poses[entity]
             previous = previous_poses[entity]
             orientation = self._rapier_orientations[entity]
@@ -1787,7 +1800,57 @@ class CollisionWorld:
                     dynamic.stationary_time = 0.
         return self._activate_pending_dynamics() or moved
 
-    def dynamic_commit(self, dt):
+    @property
+    def supports_flight(self):
+        return self.experimental_6dof and (self._rapier is None or self._rapier.supports_flight)
+
+    def flight_spin(self, entity):
+        dynamic = self.dynamic_bodies.get(entity)
+        if dynamic is None:
+            return (0., 0., 0.)
+        if self._rapier is not None:
+            return self._rapier_angular_states[entity]
+        return bullet.getBaseVelocity(dynamic.body, physicsClientId=self.cid)[1]
+
+    def set_flight_velocity(self, entity, velocity, angular):
+        pose, state = self.poses[entity], self.motion[entity]
+        if entity not in self.dynamic_bodies:
+            active = self._activate_dynamic(entity, pose, state.velocity)
+            if active is None:
+                return False
+            pose = self.poses[entity] = active
+            self.pending_dynamics.pop(entity, None)
+            self.short_flight_spins.pop(entity, None)
+        dynamic = self.dynamic_bodies[entity]
+        offset = matrix(pose.yaw, pose.pitch, pose.roll) @ dynamic.center_of_mass
+        com_velocity = tuple(np.asarray(velocity) + np.cross(angular, offset))
+        if self._rapier is not None:
+            self._rapier.set_velocity(entity, com_velocity, angular)
+            self._rapier_angular_states[entity] = angular
+        else:
+            bullet.resetBaseVelocity(dynamic.body, com_velocity, angular, physicsClientId=self.cid)
+        state.velocity, state.grounded = velocity, False
+        self._synced[entity] = (pose, state)
+        return True
+
+    def add_flight_velocity(self, entity, delta):
+        if not self.supports_flight:
+            return False
+        state = self.motion[entity]
+        velocity = tuple(current+extra for current, extra in zip(state.velocity, delta))
+        return self.set_flight_velocity(entity, velocity, self.flight_spin(entity))
+
+    def add_ground_velocity(self, entity, x, z):
+        if not self.experimental_ground_impacts or not self.motion[entity].grounded:
+            return False
+        state = self.ground_motion[entity]
+        vx, _, vz = self.motion[entity].velocity
+        if state.active and state.velocity is not None:
+            vx, vz = state.velocity
+        self.ground_motion[entity] = GroundMotion((vx+x, vz+z), state.yaw_rate, True)
+        return True
+
+    def dynamic_commit(self, dt, *, piloted=()):
         """Advance live bodies and then start newly released hulls.
 
         Arena calls this exactly once after it has queued every vehicle's
@@ -1798,7 +1861,7 @@ class CollisionWorld:
         if not (math.isfinite(dt) and dt > 0):
             raise ValueError('Invalid dynamic motion interval')
         if self._rapier is not None:
-            return self._dynamic_commit_rapier(dt)
+            return self._dynamic_commit_rapier(dt, piloted)
         moved = False
         if self.dynamic_bodies:
             steps = max(1, math.ceil(dt / self.DYNAMIC_MAX_STEP))
@@ -1877,6 +1940,10 @@ class CollisionWorld:
             self.set_pose(self.bodies[entity], pose)
             self._synced[entity] = (pose, self.motion[entity])
             moved |= math.dist(previous.position, pose.position) > 1e-7
+            if entity in piloted:
+                dynamic.settled_steps = 0
+                dynamic.stationary_time = 0.
+                continue
             handoff = self._dynamic_can_handoff(entity, dynamic, pose, velocity, angular)
             if handoff is not None:
                 # Heading is atan2(forward.x, forward.z). Its derivative
@@ -2135,6 +2202,37 @@ class CollisionWorld:
     def set_pose(self, body, pose):
         bullet.resetBasePositionAndOrientation(body, pose.position,
                     quaternion(pose.yaw, pose.pitch, pose.roll), physicsClientId=self.cid)
+
+    def training_placement(self, entity, x, z, yaw):
+        """Find a supported placement without leaving a speculative sensor pose."""
+        low_x, low_z, high_x, high_z = self.assets.bounds
+        if not (low_x < x < high_x and low_z < z < high_z):
+            return None
+        previous = self.poses[entity]
+        pose = self.ground_pose(x, z, yaw, entity=entity)
+        try:
+            valid, _ = self._valid(pose, previous, entity=entity, climb=False, suspension=True)
+        finally:
+            self.set_pose(self.bodies[entity], previous)
+        return pose if valid else None
+
+    def relocate_training_body(self, entity, pose):
+        """Move an existing body into a fresh grounded contact episode."""
+        self.pending_dynamics.pop(entity, None)
+        self._road_poses[entity] = pose
+        if entity in self.dynamic_bodies:
+            self._deactivate_dynamic(entity, pose, (0., 0., 0.))
+        self.poses[entity] = pose
+        self.motion[entity] = Motion()
+        self.ground_motion[entity] = GroundMotion()
+        self._fall_peaks.pop(entity, None)
+        self._spring_rates.pop(entity, None)
+        self._lean_states.pop(entity, None)
+        self._drive_blocked.pop(entity, None)
+        self._wall_recoil_latches.pop(entity, None)
+        self._seed_support_memory(entity, pose, 0.)
+        self.set_pose(self.bodies[entity], pose)
+        self._synced[entity] = (pose, self.motion[entity])
 
     def set_turret(self, yaw, entity=None, pitch=0.):
         entity = self.primary_id if entity is None else entity

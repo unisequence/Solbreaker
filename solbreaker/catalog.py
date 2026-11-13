@@ -10,6 +10,7 @@ from pathlib import Path
 import xml.etree.ElementTree as ET
 
 from .dvpl import read
+from .loadouts import CONSUMABLE, PROVISION, load_catalog
 from .progression import item_cd
 from .tech_tree import _price, load_tech_tree
 
@@ -18,10 +19,77 @@ SELL_PRICE_FACTOR = 0.5
 # Gold -> credits rate for premium shells bought with credits. Equals the native
 # service default (400) and is also sent as shop exchangeRate; no official value.
 AMMO_EXCHANGE_RATE = 400
+# The native inventory footer shows the old supply's full resale value when
+# replacing it. Publish the same modifiers used by the slot transaction.
+SUPPLY_SELL_PRICE_FACTOR = 1.0
 # Advance whenever the local catalogue gains corrected client-visible entries.
 # Native cache invalidation is revision based: old kind-10 caches fall back to
 # INT_MAX in the ammunition editor when they lack a shell price.
-SHOP_REVISION = 11
+SHOP_REVISION = 12
+
+# Stock ServerConfigurationData category prices, in vehicle tier order.
+# The pinned item XML can override these for a particular provision.
+_SUPPLY_CATEGORY_CREDITS = {
+    CONSUMABLE: {
+        'free':    (0, 0, 0,   0,   0,    0,    0,    0,    0,    0),
+        'radical': (0, 0, 0, 500, 750, 4900, 5600, 6300, 7000, 8400),
+        'common':  (0, 0, 0, 150, 250, 1750, 2000, 2250, 2500, 3000),
+        'potent':  (100, 125, 150, 250, 500, 2800, 3200, 3600, 4000, 5000),
+    },
+    PROVISION: {
+        'radical': (0, 0, 0,   0,   0, 4900, 5600, 6300, 7000, 8400),
+        'common':  (0, 0, 0, 250, 500, 1750, 2000, 2250, 2500, 3000),
+        'potent':  (0, 0, 0,   0, 750, 2800, 3200, 3600, 4000, 5000),
+    },
+}
+_TIER_KEYS = tuple(f'level{tier}' for tier in range(1, 11))
+
+
+def _supply_override(item):
+    fields = [(path.removeprefix('price/'), int(value)) for path, value in item.extras
+              if path.startswith('price/')]
+    if not fields:
+        return {}
+    prices = dict(fields)
+    if (len(fields) != len(_TIER_KEYS) or prices.keys() != set(_TIER_KEYS)
+            or any(not 0 <= value <= 0x7fffffff for value in prices.values())):
+        raise ValueError(f'Invalid supply tier prices: {item.tag}')
+    return prices
+
+
+def supply_credits(item, tier):
+    """Credits for an installed supply, using the same tables as the client."""
+    if item is None:
+        return 0
+    if type(tier) is not int or not 1 <= tier <= len(_TIER_KEYS):
+        raise ValueError('Invalid vehicle tier for supply pricing')
+    override = _supply_override(item)
+    if override:
+        return override[_TIER_KEYS[tier - 1]]
+    try:
+        return _SUPPLY_CATEGORY_CREDITS[item.kind][item.category][tier - 1]
+    except KeyError:
+        raise ValueError(f'Unknown supply price category: {item.tag}') from None
+
+
+def _loadout_prices(loadouts):
+    # Native common-nation items index explicit tier overrides by full compact
+    # descriptor. The default tier tables are separate kind-specific fields.
+    overrides, tables = {}, {}
+    for kind, code in ((CONSUMABLE, 11), (PROVISION, 13)):
+        prices = {}
+        for item in loadouts._items(kind):
+            override = _supply_override(item)
+            if override:
+                prices[(item.ident << 8) | 0xf0 | code] = {
+                    tier: (credits, 0) for tier, credits in override.items()}
+            elif item.category not in _SUPPLY_CATEGORY_CREDITS[kind]:
+                raise ValueError(f'Unknown supply price category: {item.tag}')
+        overrides[code] = (prices,)
+        tables[kind + 'Cost'] = {
+            category: [(price, 0) for price in prices]
+            for category, prices in _SUPPLY_CATEGORY_CREDITS[kind].items()}
+    return overrides, tables
 
 
 def sale_credits(credits):
@@ -135,17 +203,12 @@ def _research_prices(game):
     # for unimplemented crew training instead of inventing official prices.
     mastery = [dict(mastery=level, creditsByLevel=[None]*10, goldByLevel=[])
                for level in (75,100)]
-    from .loadouts import load_catalog
-    loadouts = load_catalog(game)
-    # Common-nation provision/consumable prices use full compact descriptors.
-    # Consumables and provisions are free in this sandbox. Ammunition follows
-    # the shell prices sent above, including paid auto-resupply.
-    items[15] = {kind: ({(item.ident << 8) | 0xf0 | kind: (0, 0)
-                         for item in entries},)
-                 for kind, entries in ((11, loadouts.consumables), (13, loadouts.provisions))}
+    items[15], supply_tables = _loadout_prices(load_catalog(game))
     return {'rev': SHOP_REVISION, 'items': items, 'setMasteryCost': mastery,
-            'sellPriceModifs': {None: SELL_PRICE_FACTOR, 'shell': SELL_PRICE_FACTOR},
+            'sellPriceModifs': {None: SELL_PRICE_FACTOR, 'shell': SELL_PRICE_FACTOR,
+                               11: SUPPLY_SELL_PRICE_FACTOR, 13: SUPPLY_SELL_PRICE_FACTOR},
             'exchangeRate': AMMO_EXCHANGE_RATE,
+            **supply_tables,
             # ExtractOptionalDevicesSlotsConfig (0x1aa9c10), called with
             # optDevSlotsEconomics at 0x1ad45e6. Prices are a local sandbox
             # rule: unlocks are free, not purported official economy values.

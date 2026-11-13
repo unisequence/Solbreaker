@@ -7,7 +7,6 @@ import os
 import re
 from pathlib import Path
 import sys
-from urllib.parse import urlsplit
 
 from PySide6.QtCore import QRectF, Qt, QTimer
 from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPainterPath, QPixmap
@@ -166,26 +165,37 @@ def discovery_interfaces():
 
 
 def prepared_client(settings):
-    root = Path(settings.client)
+    root = Path(settings.client).expanduser()
     return bool(document(root/'manifest.json')) and (root/'client/wotblitz.exe').is_file()
 
 
-def local_profile(settings):
-    return settings.local_connection
+def prepared_server(settings):
+    return (bool(document(settings.local_profile_path.with_name('manifest.json')))
+            and bool(document(settings.local_profile_path).get('server_id')))
+
+
+def remote_profile(settings):
+    path = settings.connection.strip()
+    try:
+        if path and Path(path).expanduser().resolve() != settings.local_profile_path.resolve():
+            return path
+    except (OSError, RuntimeError):
+        pass
+    return ''
 
 
 def connection_matches(settings, local):
-    client = document(Path(settings.client)/'manifest.json')
-    profile_path = Path(settings.state)/'connection.json' if local else Path(settings.connection)
-    from .network import load_network, origin
+    lab = Path(settings.client).expanduser()
+    if not local and settings.server_url.strip():
+        from .management_tasks import connection_url_matches
+        return connection_url_matches(lab, settings.server_url.strip())
+    client = document(lab/'manifest.json')
+    profile_path = settings.local_profile_path if local else Path(settings.connection).expanduser()
+    from .network import load_network
     try:
-        if local or not settings.server_url.strip():
-            profile = document(profile_path)
-            return (bool(profile.get('server_id')) and profile['server_id'] == client.get('server_id')
-                    and load_network(Path(settings.client)).document()['advertise'] == profile.get('advertise'))
-        target = urlsplit(settings.server_url)
-        requested = origin(f'{target.scheme}://{target.netloc}', public=True)
-        return load_network(Path(settings.client)).advertise_http == requested
+        profile = document(profile_path)
+        return (bool(profile.get('server_id')) and profile['server_id'] == client.get('server_id')
+                and load_network(lab).document()['advertise'] == profile.get('advertise'))
     except (OSError, ValueError, KeyError):
         return False
 
@@ -217,16 +227,18 @@ class LauncherBanner(QFrame):
 
 class SetupWizard(QDialog):
     """Three concrete steps ending in a serial, observable preparation plan."""
-    def __init__(self, window, local):
+    def __init__(self, window, local, *, reuse_client=False):
         super().__init__(window)
         self.window = window
         self.local = local
+        self.first_step = 1 if reuse_client else 0
         self.fields = {}
         self.pending = []
         self.job = None
         self.failed = False
         self.complete = False
-        self.setWindowTitle(tr('Настройка игры — Solbreaker'))
+        title = ('Настройка своего сервера' if local else 'Подключение к серверу') if reuse_client else 'Настройка игры'
+        self.setWindowTitle(tr(title)+' — Solbreaker')
         self.setWindowModality(Qt.ApplicationModal)
         self.resize(760, 650)
         self.setMinimumSize(680, 600)
@@ -243,7 +255,8 @@ class SetupWizard(QDialog):
         first.addWidget(label(tr('Укажи установленную копию совместимой сборки. Лаунчер создаст отдельный клиент Solbreaker.'), 'muted'))
         first.addWidget(button(tr('Скачать совместимую сборку через Steam'), self.download_depot))
         form = QFormLayout()
-        self.path_field(form, 'game', tr('Папка игры'), settings.game)
+        client = document(Path(settings.client).expanduser()/'manifest.json') if reuse_client else {}
+        self.path_field(form, 'game', tr('Папка игры'), client.get('game') or settings.game)
         self.path_field(form, 'client', tr('Куда установить Solbreaker'), settings.client)
         first.addLayout(form)
         first.addWidget(label(tr('Для новой копии выбери родительскую папку. Можно также указать уже подготовленный клиент.'), 'muted'))
@@ -285,7 +298,8 @@ class SetupWizard(QDialog):
             second.addWidget(label(tr('Можно также указать адрес или файл от владельца сервера.'), 'muted'))
             self.by_url = QRadioButton(tr('У меня есть адрес сервера'))
             self.by_file = QRadioButton(tr('У меня есть файл подключения'))
-            self.by_url.setChecked(bool(settings.server_url.strip()) or local_profile(settings))
+            saved_profile = remote_profile(settings)
+            self.by_url.setChecked(bool(settings.server_url.strip()) or not saved_profile)
             self.by_file.setChecked(not self.by_url.isChecked())
             second.addWidget(self.by_url)
             self.url = QLineEdit(settings.server_url)
@@ -294,13 +308,13 @@ class SetupWizard(QDialog):
             second.addWidget(self.url)
             second.addWidget(self.by_file)
             profile = QFormLayout()
-            self.path_field(profile, 'connection', tr('Файл подключения'), '' if local_profile(settings) else settings.connection, 'file')
+            self.path_field(profile, 'connection', tr('Файл подключения'), saved_profile, 'file')
             second.addLayout(profile)
             self.by_url.toggled.connect(self.toggle_connection)
             self.toggle_connection()
         second.addStretch()
         third = self.add_page()
-        third.addWidget(label(tr('Подготовка к первому запуску'), 'heading'))
+        third.addWidget(label(tr(title if reuse_client else 'Подготовка к первому запуску'), 'heading'))
         self.plan = label(tr('Проверим файлы, подготовим клиент и сохраним подключение.'))
         third.addWidget(self.plan)
         self.activity = label('', 'ready')
@@ -327,7 +341,7 @@ class SetupWizard(QDialog):
         navigation.addWidget(self.cancel)
         navigation.addWidget(self.next)
         layout.addLayout(navigation)
-        self.show_step(0)
+        self.show_step(self.first_step)
 
     def download_depot(self):
         from .desktop_depot import DepotDialog
@@ -433,15 +447,19 @@ class SetupWizard(QDialog):
 
     def show_step(self, index):
         self.pages.setCurrentIndex(index)
-        self.step_label.setText((tr('Шаг 1 из 3 — файлы игры'), tr('Шаг 2 из 3 — сервер'), tr('Шаг 3 из 3 — подготовка'))[index])
-        self.back.setVisible(index > 0)
-        self.next.setText(tr('Подготовить') if index == 2 else tr('Далее'))
+        steps = ('Шаг 1 из 3 — файлы игры', 'Шаг 2 из 3 — сервер', 'Шаг 3 из 3 — подготовка')
+        if self.first_step:
+            steps = (None, 'Шаг 1 из 2 — сервер', 'Шаг 2 из 2 — настройка')
+        self.step_label.setText(tr(steps[index]))
+        self.back.setVisible(index > self.first_step)
+        action = 'Подключить' if self.first_step and not self.local else 'Подготовить'
+        self.next.setText(tr(action if index == 2 else 'Далее'))
         self.error_label.setVisible(False)
         if index == 1 and not self.local and not self.lan_started:
             self.search_discovery()
 
     def previous(self):
-        self.show_step(max(0, self.pages.currentIndex()-1))
+        self.show_step(max(self.first_step, self.pages.currentIndex()-1))
 
     def advance(self):
         self.error_label.setVisible(False)
@@ -471,8 +489,13 @@ class SetupWizard(QDialog):
             if index < 2:
                 self.show_step(index+1)
                 if index == 1:
-                    self.plan.setText(tr('Подготовим свой сервер и отдельный клиент.') if self.local
-                                      else tr('Подготовим клиент для выбранного сервера. Локальный сервер для этого не требуется.'))
+                    if self.first_step:
+                        plan = ('Подготовим свой сервер для установленного клиента.' if self.local
+                                else 'Сохраним подключение для установленного клиента.')
+                    else:
+                        plan = ('Подготовим свой сервер и отдельный клиент.' if self.local
+                                else 'Подготовим клиент для выбранного сервера. Локальный сервер для этого не требуется.')
+                    self.plan.setText(tr(plan))
             else:
                 self.prepare()
         except (OSError, ValueError) as error:
@@ -483,26 +506,25 @@ class SetupWizard(QDialog):
         for key, field in self.fields.items():
             values[key] = field.text().strip()
         values['play_mode'] = 'local' if self.local else 'remote'
-        if self.local:
-            values['server_url'] = ''
-            values['connection'] = str(Path(values['state'])/'connection.json')
-        elif hasattr(self, 'by_url'):
+        if not self.local:
             values['server_url'] = self.url.text().strip() if self.by_url.isChecked() else ''
         return Settings(**values)
 
     def prepare(self):
         settings = self.settings()
-        client = document(Path(settings.client)/'manifest.json')
+        client = document(Path(settings.client).expanduser()/'manifest.json')
         if client and Path(client.get('game', '')).resolve() != Path(settings.game).expanduser().resolve():
             raise ValueError(tr('Этот клиент создан из другой папки игры. Выбери новую папку для клиента.'))
+        installed = prepared_client(settings)
+        if self.first_step and not installed:
+            raise ValueError(tr('Сначала подготовь клиент Solbreaker.'))
         self.window.manager.update_settings(settings)
         settings.save(self.window.config)
         self.window.sync_fields()
         self.pending = []
-        if self.local and (not document(Path(settings.state)/'manifest.json')
-                           or not (Path(settings.state)/'connection.json').is_file()):
+        if self.local and not prepared_server(settings):
             self.pending.append('prepare-server')
-        if not prepared_client(settings):
+        if not installed:
             self.pending.append('prepare-client')
         elif not connection_matches(settings, self.local):
             self.pending.append('connect')
@@ -559,6 +581,8 @@ class SetupWizard(QDialog):
             self.job = None
             if result == 0:
                 self.start_next()
+            elif self.first_step and not self.local:
+                self.show_error(tr('Не удалось настроить подключение. Причина указана в журнале выше.'))
             else:
                 self.show_error(tr('Подготовка завершилась с ошибкой. Причина указана в подробностях выше. Можно исправить параметры и повторить.'))
 
@@ -570,7 +594,7 @@ class SetupWizard(QDialog):
         self.error_label.setVisible(True)
         self.progress.setVisible(False)
         self.next.setEnabled(True)
-        self.back.setEnabled(self.pages.currentIndex() > 0)
+        self.back.setEnabled(self.pages.currentIndex() > self.first_step)
         self.cancel.setEnabled(True)
 
     def reject(self):
@@ -763,7 +787,7 @@ class Window(QMainWindow):
         column.addWidget(LauncherBanner())
         self.own = QRadioButton(tr('На своём компьютере'))
         self.remote = QRadioButton(tr('На другом сервере'))
-        self.own.setChecked(local_profile(self.manager.settings))
+        self.own.setChecked(self.manager.settings.local_connection)
         self.remote.setChecked(not self.own.isChecked())
         choice = QHBoxLayout()
         choice.addWidget(label(tr('Подключение'), 'muted'))
@@ -849,6 +873,12 @@ class Window(QMainWindow):
         column.addWidget(label(tr('Сначала подготовь сервер. Для смены названия останови его, сохрани имя и запусти снова. Игроки увидят его после переподключения.'), 'muted'))
         self.server_label = label('', 'subheading')
         column.addWidget(self.server_label)
+        self.sandbox = QCheckBox(tr('Песочница во всех боях'))
+        self.sandbox.setToolTip(tr('Num 1 — форсаж, Num 2 — полёт, Num 3 — камера ПТУР. '
+                                   'В полёте используй WASD, пробел для подъёма и Ctrl для снижения. '
+                                   'На Полигоне Num 4 ставит мишень в точке прицеливания.'))
+        self.sandbox.setChecked(self.manager.settings.sandbox)
+        column.addWidget(self.sandbox)
         column.addWidget(label(tr('Кнопка «Играть» сама запускает свой сервер. Здесь можно управлять им вручную.'), 'muted'))
         row = QHBoxLayout()
         self.start_button = button(tr('Запустить сервер'), lambda: self.execute('server'), True)
@@ -889,6 +919,7 @@ class Window(QMainWindow):
         column.addWidget(button(tr('Открыть мастер установки'), self.start_wizard))
         if sys.platform == 'win32':
             column.addWidget(button(tr('Создать ярлык на рабочем столе'), self.create_windows_shortcut))
+        column.addWidget(button(tr('Восстановить текстуры T49 П'), self.restore_t49_textures))
         form = QFormLayout()
         form.setVerticalSpacing(12)
         for key, title in (('game', tr('Оригинальная игра')), ('client', tr('Клиент Solbreaker')), ('state', tr('Данные сервера'))):
@@ -944,6 +975,7 @@ class Window(QMainWindow):
         for key, field in self.fields.items():
             values[key] = field.value() if isinstance(field, QSpinBox) else field.text().strip()
         values['reuse_native'] = self.reuse.isChecked()
+        values['sandbox'] = self.sandbox.isChecked()
         return Settings(**values)
 
     def create_windows_shortcut(self):
@@ -957,6 +989,26 @@ class Window(QMainWindow):
             self.manager.notice = 'Ярлык Solbreaker создан на рабочем столе.'
         self.poll()
 
+    def restore_t49_textures(self):
+        from .client_t49_textures import restore
+
+        if self.manager.busy:
+            return
+        client = self.fields['client'].text().strip()
+        if not client or not (Path(client).expanduser()/'manifest.json').is_file():
+            self.error('Сначала подготовь клиент Solbreaker.')
+            return
+        source = QFileDialog.getExistingDirectory(self, tr('Выбрать папку Steam depot от 15 июня 2022'))
+        if not source:
+            return
+        try:
+            restore(client, source)
+        except (ValueError, OSError) as error:
+            self.error(error)
+        else:
+            self.manager.notice = 'Текстуры T49 П восстановлены.'
+        self.poll()
+
     def sync_fields(self):
         for key, field in self.fields.items():
             value = getattr(self.manager.settings, key)
@@ -965,10 +1017,11 @@ class Window(QMainWindow):
             else:
                 field.setText(value)
         self.reuse.setChecked(self.manager.settings.reuse_native)
+        self.sandbox.setChecked(self.manager.settings.sandbox)
 
-    def save(self):
+    def save(self, **changes):
         try:
-            settings = self.collect_settings()
+            settings = replace(self.collect_settings(), **changes)
             self.manager.update_settings(settings)
             settings.save(self.config)
             self.manager.notice = tr('Параметры сохранены')
@@ -978,20 +1031,20 @@ class Window(QMainWindow):
             self.error(error)
             return False
 
-    def execute(self, action):
-        if self.save():
+    def execute(self, action, **changes):
+        if self.save(**changes):
             try:
                 self.manager.run(action)
             except (OSError, ValueError) as error:
                 self.error(error)
         self.poll()
 
-    def start_wizard(self):
+    def start_wizard(self, *, reuse_client=False):
         if self.manager.busy:
             self.error(tr('Дождись завершения текущей операции.'))
             return
         if self.save():
-            self.wizard = SetupWizard(self, self.own.isChecked())
+            self.wizard = SetupWizard(self, self.own.isChecked(), reuse_client=reuse_client)
             self.wizard.finished.connect(self.wizard_closed)
             self.language_picker.setEnabled(False)
             self.wizard.open()
@@ -1003,13 +1056,14 @@ class Window(QMainWindow):
         self.refresh_status()
 
     def primary_action(self):
-        if self.ready_to_play():
+        game, client, server = self.launch_requirements()
+        if game and client and server:
             self.play()
         else:
-            self.start_wizard()
+            self.start_wizard(reuse_client=game and client)
 
     def play(self):
-        self.execute('play')
+        self.execute('play', play_mode='local' if self.own.isChecked() else 'remote')
 
     def share_lan(self):
         if not self.save():
@@ -1051,12 +1105,13 @@ class Window(QMainWindow):
         except OSError as error:
             self.error(error)
 
-    def ready_to_play(self):
+    def launch_requirements(self):
         settings = self.manager.settings
-        client = document(Path(settings.client)/'manifest.json')
-        game = Path(client.get('game') or settings.game)
-        return (self.own.isChecked() == local_profile(settings) and (game/'wotblitz.exe').is_file()
-                and prepared_client(settings) and connection_matches(settings, self.own.isChecked()))
+        client = document(Path(settings.client).expanduser()/'manifest.json')
+        game = Path(client.get('game') or settings.game).expanduser()
+        server = (prepared_server(settings) if self.own.isChecked() else
+                  bool(settings.server_url.strip() or document(remote_profile(settings)).get('server_id')))
+        return (game/'wotblitz.exe').is_file(), prepared_client(settings), server
 
     def start_update(self):
         if not self.update_kind or self.update_task is not None:
@@ -1113,31 +1168,38 @@ class Window(QMainWindow):
         self.notice.setVisible(self.manager.notice not in ('Выбери действие', 'Готово'))
 
     def refresh_status(self):
-        settings = self.manager.settings
         local = self.own.isChecked()
-        ready = self.ready_to_play()
-        client = document(Path(settings.client)/'manifest.json')
-        game = Path(client.get('game') or settings.game)
-        states = [(game/'wotblitz.exe').is_file(), prepared_client(settings), connection_matches(settings, local)]
+        states = self.launch_requirements()
+        ready = all(states)
         descriptions = (tr('Файлы игры найдены') if states[0] else tr('Нужно выбрать папку совместимой сборки'),
                         tr('Клиент Solbreaker установлен') if states[1] else tr('Нужно установить отдельный клиент Solbreaker'),
-                        (tr('Подключение к своему серверу настроено') if local else tr('Подключение к серверу настроено'))
+                        (tr('Свой сервер подготовлен') if local else tr('Подключение к серверу сохранено'))
                         if states[2] else (tr('Нужно подготовить свой сервер') if local else tr('Нужно указать адрес или файл подключения')))
         for (mark, text), complete, description in zip(self.checks, states, descriptions):
             mark.setText('✓' if complete else '○')
             text.setText(description)
         self.mode_help.setText(tr('Для боёв с ботами свой сервер запускается автоматически вместе с игрой.') if local
                                else tr('Для боёв с ботами используется выбранный сервер. Здесь запускается клиент.'))
-        self.readiness_title.setText(tr('Можно начинать') if ready else tr('Подготовим всё для первого запуска'))
-        self.play_button.setText(tr('Играть') if ready else tr('Настроить игру'))
+        if ready:
+            title, action = 'Можно начинать', 'Играть'
+            help_text = ('Сервер запустится автоматически, затем откроется игра.' if local
+                         else 'Откроется клиент с выбранным подключением.')
+        elif all(states[:2]):
+            title, action = (('Настройка своего сервера', 'Настроить сервер') if local
+                             else ('Подключение к серверу', 'Выбрать сервер'))
+            help_text = ('Подготовим свой сервер для установленного клиента.' if local
+                         else 'Укажи адрес, выбери файл подключения или найди сервер в сети.')
+        else:
+            title, action = 'Подготовим всё для первого запуска', 'Настроить игру'
+            help_text = ('Мастер подготовит сервер для боёв с ботами и отдельный клиент.' if local
+                         else 'Мастер подготовит клиент и подключение к выбранному серверу.')
+        self.readiness_title.setText(tr(title))
+        self.play_button.setText(tr(action))
+        self.launch_help.setText(tr(help_text))
         wizard_open = self.wizard is not None and self.wizard.isVisible()
         self.language_picker.setEnabled(not self.manager.busy and not wizard_open)
         self.play_button.setEnabled(not self.manager.busy)
         self.remember_login.setEnabled(not self.manager.busy)
-        self.launch_help.setText((tr('Сервер запустится автоматически, затем откроется игра.') if local
-                                  else tr('Откроется клиент с выбранным подключением.')) if ready
-                                 else (tr('Мастер подготовит сервер для боёв с ботами и отдельный клиент.') if local
-                                       else tr('Мастер подготовит клиент и подключение к выбранному серверу.')))
         status = self.manager.server_status()
         can_prepare = local and self.manager.can_prepare_maps
         self.prepare_maps_button.setVisible(can_prepare)
@@ -1148,6 +1210,7 @@ class Window(QMainWindow):
         self.map_preparation_status.setVisible(bool(map_status))
         self.server_label.setText(tr(status))
         owned = self.manager.server is not None and self.manager.server.running
+        self.sandbox.setEnabled(not owned and not self.manager.busy)
         self.start_button.setEnabled(not owned and not self.manager.busy and status in ('Сервер остановлен', 'Ошибка запуска сервера'))
         self.stop_button.setEnabled(owned)
         self.share_lan_button.setEnabled(not self.manager.busy and

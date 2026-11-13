@@ -17,7 +17,8 @@ from .motion import game_tick
 from .aiming import GunAim, wrap
 from .roster import TEAMS, validate_teams, training_spawn, training_yaw
 from .orientation import matrix
-from .consumables import ACTIVE, HEAL, RESTORE, ConsumableState
+from .consumables import ACTIVE, HEAL, RESTORE, ConsumableSpec, ConsumableState
+
 from .loadout_effects import ANTI_HE_PROVISION
 from .internal_geometry import GeometryConfiguration, PreparedInternalGeometry
 from .modules import (AmmoRackState, CrewSpec, CrewState, EngineState, FuelTankState, GunState,
@@ -33,6 +34,9 @@ from .recon import ReconState
 from .bot_ai import TrainingBot
 from .base_capture import BaseCapture
 from .supremacy import Supremacy
+from . import sandbox
+
+GRAVITY_JUMP_SPEC = ConsumableSpec('gravityJump', 44, (44 << 8) | 0xfb, 0., 20.)
 
 # Pinned common/vehicle.xml extra indices, confirmed against native registry.
 _TRACK_EXTRAS = {'chassis_track_L': 34, 'chassis_track_R': 35}
@@ -57,6 +61,7 @@ def _step_budget(value):
 class Arena:
     """Shared world; participants and vehicles outlive individual UDP sessions."""
     STEP = 1 / 60
+    MISSILE_UPDATE_STEPS = 6
     MAX_CATCHUP = .25
     POSTBATTLE_SECONDS = 5.
     CONTROL_INPUT_TIMEOUT = 3.
@@ -75,22 +80,40 @@ class Arena:
                  vehicle_scenes=None, map_spec=None, recon_enabled=False, recon_game=None,
                  bot_enabled=False, training=None, step_budget=None, result_id=None,
                  build_world=True, bot_roster=None, bot_game=None, bot_scene_settings=(),
-                 prebattle_seconds=0., parallel_native_build=False):
+                 prebattle_seconds=0., parallel_native_build=False, sandbox_enabled=False,
+                 room_mode='encounter'):
         if (isinstance(prebattle_seconds, bool) or not isinstance(prebattle_seconds, (int, float))
                 or not math.isfinite(prebattle_seconds) or not 0 <= prebattle_seconds <= 60):
             raise ValueError('Invalid prebattle duration')
         self.prebattle_seconds = float(prebattle_seconds)
+        if type(sandbox_enabled) is not bool:
+            raise ValueError('Invalid sandbox setting')
+        self.sandbox_enabled = sandbox_enabled
+        self._sandbox_inputs = {}
+        self._sandbox_flights = {}
         self.prebattle_end = 0.
         self.step_budget = _step_budget(step_budget)
         if type(recon_enabled) is not bool:
             raise ValueError('Invalid recon setting')
         if type(bot_enabled) is not bool or bot_enabled and not solo:
             raise ValueError('Training bot is available only in solo battles')
-        from .training_config import TrainingConfig
+        from .training_config import BATTLE_MODES, TrainingConfig
         if training is not None and (not solo or not isinstance(training, TrainingConfig)):
             raise ValueError('Invalid solo training configuration')
         training = training or TrainingConfig(mode='bots' if bot_enabled else 'target')
-        bot_enabled = training.bots_enabled
+        bot_enabled = training.bots_enabled or bool(bot_roster and not solo)
+        if room_mode not in BATTLE_MODES:
+            raise ValueError('Invalid training room mode')
+        self.room_mode = room_mode
+        rules = (training.battle_mode if training.bots_enabled else 'elimination') if solo else room_mode
+        self.gravity_mode = rules == 'gravity'
+        self._gravity_game = bot_game if self.gravity_mode else None
+        self.practice = sandbox_enabled and solo and not bot_enabled
+        self.practice_slots = set()
+        self.practice_spawned = set()
+        self.practice_next_spawn = 0.
+        self.practice_respawn_at = 0.
+        self.practice_timer_at = 0.
         if result_id is not None and (type(result_id) is not str or len(result_id) != 32
                                       or any(c not in '0123456789abcdef' for c in result_id)):
             raise ValueError('Invalid arena identity')
@@ -102,10 +125,10 @@ class Arena:
         self.map_spec = map_spec
         self.map_id = map_spec.map_id if map_spec is not None else 6
         point = getattr(map_spec, 'capture_point', None)
-        capture_enabled = not solo or training.bots_enabled and training.battle_mode == 'encounter'
+        capture_enabled = rules == 'encounter'
         self.base_capture = BaseCapture(point) if point is not None and capture_enabled else None
         self.supremacy = (Supremacy(getattr(map_spec, 'strategic_points', ()))
-                         if solo and training.bots_enabled and training.battle_mode == 'supremacy' else None)
+                         if rules == 'supremacy' else None)
         self.client_map_id = self.map_id | (0x10000 if self.supremacy is not None else 0)
         self.battle_seconds = 420 if self.base_capture is not None or self.supremacy is not None else 600
         self.epoch = time.monotonic() if now is None else now
@@ -205,7 +228,11 @@ class Arena:
             if len(accounts)!=1 or teams!=[1]:
                 raise ValueError('Solo requires one participant on team 1')
         else:
-            validate_teams(teams)
+            from .bot_roster import BotVehicle
+            bot_roster = tuple(bot_roster or ())
+            if not accounts or any(not isinstance(row, BotVehicle) for row in bot_roster):
+                raise ValueError('Invalid room bot roster')
+            validate_teams(teams + [row.team for row in bot_roster])
         if len({a['id'] for a in accounts}) != len(accounts):
             raise ValueError('Arena participants must have distinct accounts')
         scenes = dict(vehicle_scenes or {})
@@ -241,6 +268,11 @@ class Arena:
             own.loadout_ammo = account.get('ammo')
             own.consumables = tuple(ConsumableState(spec) if spec is not None else None
                                     for spec in account.get('consumables', ()))
+            if self._gravity_game is not None:
+                from .bot_roster import vehicle_class
+                if vehicle_class(self._gravity_game, own.definition) in ('lightTank', 'mediumTank', 'AT-SPG'):
+                    own.consumables += (None,) * max(0, 3-len(own.consumables))
+                    own.consumables += (ConsumableState(GRAVITY_JUMP_SPEC),)
             own.consumable_clock = self.epoch
             raw_shells = account.get('shells')
             if raw_shells is not None:
@@ -250,14 +282,23 @@ class Arena:
             self._configure_ammunition(own)
             if assets is not None:entity_assets[player.vehicle_id] = assets
         try:
-            if solo:
+            if solo or bot_roster:
                 own = self.vehicles[next(iter(self.vehicles))]
-                slots = [(2, i) for i in range(training.enemies)]
-                slots += [(1, i+1) for i in range(training.active_allies)]
-                if bot_roster is None and bot_enabled and bot_game is not None and own.definition is not None:
-                    from .bot_roster import select_bot_roster
-                    bot_roster = select_bot_roster(bot_game, own.definition,
-                        enemies=training.enemies, allies=training.active_allies, seed=self.result_id)
+                if solo:
+                    from .map_catalog import map_team_capacity
+                    capacity = map_team_capacity(self.map_id)
+                    enemies = min(capacity, training.enemies)
+                    allies = min(capacity-1, training.active_allies)
+                    slots = [(2, i) for i in range(capacity if self.practice else enemies)]
+                    slots += [(1, i+1) for i in range(allies)]
+                    if bot_roster is None and bot_enabled and bot_game is not None and own.definition is not None:
+                        from .bot_roster import select_bot_roster
+                        bot_roster = select_bot_roster(bot_game, own.definition,
+                            enemies=enemies, allies=allies, seed=self.result_id)
+                else:
+                    slots = [(team, slot) for team in (2, 1)
+                             for slot in range(slots[team], slots[team] +
+                                               sum(row.team == team for row in bot_roster))]
                 if bot_roster:
                     from .bot_roster import BotVehicle
                     self.bot_roster = tuple(bot_roster)
@@ -267,7 +308,8 @@ class Arena:
                     if not build_world and own.definition is not None:
                         own.health = own.max_health = own.definition.health
                         own.gun = GunAim(own.definition.aiming)
-                asset_cache = [(own.definition, entity_assets.get(own.entity_id))]
+                asset_cache = [(vehicle.definition, entity_assets.get(vehicle.entity_id))
+                               for vehicle in self.vehicles.values()]
                 bot_names = ()
                 if bot_enabled:
                     from .bot_roster import BOT_NICKNAMES
@@ -277,7 +319,7 @@ class Arena:
                     bot_names = random.Random(self.result_id + ':bot-names').sample(
                         [name for name in BOT_NICKNAMES if name.casefold() not in occupied], len(slots))
                 for index, (team, slot) in enumerate(slots):
-                    eid = entity_base+201+index
+                    eid = entity_base+200+len(accounts)+index
                     x,z = training_spawn(map_spec,team,slot)
                     yaw = training_yaw(map_spec,team,slot) if bot_enabled else 0.
                     pose = Pose((x,terrain.height(x,z),z),yaw)
@@ -287,6 +329,9 @@ class Arena:
                     definition = self.bot_roster[index].definition if self.bot_roster else own.definition
                     actual_descriptor = definition.descriptor if definition is not None else own.descriptor
                     target = self.vehicles[eid] = Vehicle(eid,None,name,team,actual_descriptor,pose)
+                    if self.practice:
+                        self.practice_slots.add(eid)
+                        target.health = 0
                     if bot_enabled:
                         ai = self.training_bots[eid] = TrainingBot(eid, training.difficulty)
                         if self.training_bot is None:
@@ -345,7 +390,8 @@ class Arena:
                 self.world = CollisionWorld(collision_scene,terrain,
                         vehicles={e:v.pose for e,v in self.vehicles.items()},incremental=incremental,
                         vehicle_assets=entity_assets, visibility=bool(self.training_bots),
-                        parallel_native_build=parallel_native_build)
+                        parallel_native_build=parallel_native_build,
+                        gravity=2.5 if self.gravity_mode else CollisionWorld.GRAVITY)
                 self.building = True
                 if self.world.build_ready:
                     while not self.advance_build():
@@ -380,17 +426,15 @@ class Arena:
             for entity,vehicle in self.vehicles.items():
                 scene = self.world.assets_for(entity)
                 vehicle.pose = self.world.poses[entity]
-                vehicle.health = vehicle.max_health = scene.armor.health
-                vehicle.definition = scene.definition
-                vehicle.gun = GunAim(vehicle.definition.aiming)
-                self.protected_specs.pop(entity, None)
-                self._configure_tracks(vehicle)
-                self._configure_gun(vehicle)
-                self._configure_engine(vehicle, scene)
-                self._configure_ammo_rack(vehicle, scene)
-                self._configure_fuel_fire(vehicle, scene)
-                self._configure_crew(vehicle, scene)
-                self._configure_ammunition(vehicle)
+                self._configure_battle_vehicle(vehicle, scene)
+                if entity in self.practice_slots:
+                    # Keep stable entity/physics IDs for the owner mirror.
+                    # Dormant slots are outside both play and wire visibility.
+                    low_x, low_z, _, _ = self.world.assets.bounds
+                    slot = entity-self.entity_base-201
+                    vehicle.pose = Pose((low_x-70., vehicle.pose.position[1], low_z-70.-20.*slot), 0.)
+                    self.world.relocate_training_body(entity, vehicle.pose)
+                    vehicle.health = 0
             self._vehicles_configured = True
         if self.training_bots:
             from .bot_ai import BotDirector
@@ -423,6 +467,19 @@ class Arena:
             # runs on the owner until speculative workers become ready.
         self.building = False
         return True
+
+    def _configure_battle_vehicle(self, vehicle, scene):
+        vehicle.health = vehicle.max_health = scene.armor.health
+        vehicle.definition = scene.definition
+        vehicle.gun = GunAim(vehicle.definition.aiming)
+        self.protected_specs.pop(vehicle.entity_id, None)
+        self._configure_tracks(vehicle)
+        self._configure_gun(vehicle)
+        self._configure_engine(vehicle, scene)
+        self._configure_ammo_rack(vehicle, scene)
+        self._configure_fuel_fire(vehicle, scene)
+        self._configure_crew(vehicle, scene)
+        self._configure_ammunition(vehicle)
 
     def _configure_tracks(self, vehicle):
         spec = getattr(vehicle.definition, 'track_spec', None)
@@ -1461,6 +1518,8 @@ class Arena:
                     self._update_recon_camouflage(vehicle, self.started)
             self._record_motion_frame(self.started)
             self.emit('period',period=3,seconds=self.battle_seconds,winner=0)
+            if self.practice:
+                self.practice_timer_at = self.started+self.battle_seconds
             if self.base_capture is not None:
                 self._publish_base_capture()
             if self.supremacy is not None:
@@ -1495,6 +1554,145 @@ class Arena:
                     self._recon_point_probe['points'].pop(account_id, None)
             return accepted
         return False
+
+    def sandbox_control(self, account_id, control):
+        player = self.players.get(account_id)
+        if (not (self.sandbox_enabled or self.gravity_mode) or control.token != sandbox.token(self)
+                or not player or not player.attached or not player.loaded
+                or not self.started or self.finished_at or not self.vehicle_for(account_id).alive):
+            return
+        if self.sandbox_enabled:
+            self._sandbox_inputs[account_id] = (self.simulation_time, control)
+        if self.gravity_mode and control.flags & sandbox.GRAVITY_JUMP:
+            self._gravity_jump(self.vehicle_for(account_id))
+        if self.practice and control.flags & sandbox.SPAWN_TARGET:
+            self._spawn_practice_target(self.vehicle_for(account_id))
+
+    def _gravity_jump(self, vehicle):
+        entity = vehicle.entity_id
+        now = self.simulation_time
+        state = next((s for s in vehicle.consumables if s and s.spec is GRAVITY_JUMP_SPEC), None)
+        if (state is None or now < state.ready_at or self.world is None
+                or not self.world.motion[entity].grounded):
+            return False
+        lightness = max(.65, min(1.4, math.sqrt(25000. / vehicle.definition.mass)))
+        speed = abs(vehicle.speed)
+        lift = (4.4 + min(1.4, speed * .07)) * lightness
+        forward = (2.5 + min(4., speed * .18)) * lightness
+        delta = (forward * math.sin(vehicle.pose.yaw), lift, forward * math.cos(vehicle.pose.yaw))
+        if self.world.add_flight_velocity(entity, delta):
+            state.activate(now)
+            self.emit('gravity_jump', entity, velocity=delta)
+            return True
+        return False
+
+    def _spawn_practice_target(self, player_vehicle):
+        now = self.simulation_time
+        if self.world is None or now < self.practice_next_spawn:
+            return
+        self.practice_next_spawn = now+.4
+        entity = min((ident for ident in self.practice_slots if not self.vehicles[ident].alive),
+                     default=None)
+        if entity is None:
+            return
+        point = player_vehicle.gun.point
+        if point is None:
+            _, point = self.aim_hit(player_vehicle)
+        elif player_vehicle.gun.local:
+            point = tuple(a+b for a,b in zip(point, player_vehicle.pose.position))
+        x, _, z = point
+        pose = self.world.training_placement(entity, x, z, player_vehicle.pose.yaw)
+        if pose is None:
+            return
+        new = entity not in self.practice_spawned
+        self._restore_practice_vehicle(entity, pose)
+        self.practice_spawned.add(entity)
+        self.emit('practice_spawn', entity, first=new, position=pose.position)
+
+    def _restore_practice_vehicle(self, entity, pose):
+        previous = self.vehicles[entity]
+        restored = Vehicle(entity, previous.account_id, previous.nickname, previous.team,
+                           previous.descriptor, pose, loadout_ammo=previous.loadout_ammo,
+                           loadout_shells=previous.loadout_shells,
+                           consumables=tuple(ConsumableState(slot.spec) if slot else None
+                                             for slot in previous.consumables))
+        restored.consumable_clock = self.simulation_time
+        self._configure_battle_vehicle(restored, self.world.assets_for(entity))
+        restored.movable_armor_state = self._movable_armor_snapshot_at(restored, self.simulation_time)
+        self.world.relocate_training_body(entity, pose)
+        self.world.set_turret(0., entity)
+        self.vehicles[entity] = restored
+        self.motion_frame = None
+        self._sandbox_inputs.pop(restored.account_id, None)
+        for state in (self._sandbox_flights, self._landing_airborne_since, self._landing_skids,
+                      self._track_drive_motion, self._track_drive_yaw_rates, self._track_drive_track_rates,
+                      self._track_repair_hud_extra, self.fall_hp_carry):
+            state.pop(entity, None)
+        for track in previous.tracks:
+            self.track_fall_peaks.pop((entity, track), None)
+        return restored
+
+    def _advance_practice(self, now):
+        if self.practice_timer_at and now >= self.practice_timer_at:
+            self.practice_timer_at = now+self.battle_seconds
+            self.emit('period', period=3, seconds=self.battle_seconds, winner=0)
+        if not self.practice_respawn_at or now < self.practice_respawn_at or self.world is None:
+            return
+        player = next(iter(self.players.values()))
+        from .map_catalog import map_team_capacity
+        for slot in range(map_team_capacity(self.map_id)):
+            x,z = training_spawn(self.map_spec, player.team, slot)
+            yaw = training_yaw(self.map_spec, player.team, slot)
+            pose = self.world.training_placement(player.vehicle_id, x, z, yaw)
+            if pose is not None:
+                critical, destroyed = self.module_state(self.vehicles[player.vehicle_id])
+                vehicle = self._restore_practice_vehicle(player.vehicle_id, pose)
+                self.practice_respawn_at = 0.
+                self.emit('practice_spawn', vehicle.entity_id, first=False, position=pose.position,
+                          repaired=critical+destroyed)
+                self.emit('ready', vehicle.entity_id, yaw_rate=vehicle.gun.yaw_rate,
+                          pitch_rate=vehicle.gun.pitch_rate)
+                return
+        self.practice_respawn_at = now+.5
+
+    def _active_sandbox_control(self, vehicle, now):
+        if not (vehicle.alive and vehicle.account_id is not None and self._player_attached(vehicle)):
+            return None
+        entry = self._sandbox_inputs.get(vehicle.account_id)
+        return entry[1] if entry and now-entry[0] <= sandbox.INPUT_LEASE else None
+
+    def _sandbox_frame(self, now, dt):
+        flying, piloted = set(), set()
+        for vehicle in self.vehicles.values():
+            if vehicle.account_id is None:
+                continue
+            control = self._active_sandbox_control(vehicle, now)
+            flags = control.flags if control else 0
+            vehicle.sandbox_boost = bool(flags & sandbox.BOOST)
+            entity = vehicle.entity_id
+            if not (self.world and self.world.supports_flight
+                    and vehicle.alive and self._player_attached(vehicle)):
+                self._sandbox_flights.pop(entity, None)
+                continue
+            state = self.world.motion[entity]
+            flight = self._sandbox_flights.get(entity)
+            if flags & sandbox.FLIGHT:
+                if flight is None:
+                    flight = self._sandbox_flights[entity] = sandbox.Flight(
+                        vehicle.pose.position[1] + (4. if state.grounded else 0.))
+                piloted.add(entity)
+            elif flight is None or state.grounded:
+                self._sandbox_flights.pop(entity, None)
+                continue
+            x, _, z = vehicle.pose.position
+            drive = self._active_control_flags(vehicle, now)
+            velocity, spin = sandbox.flight_velocity(flight, vehicle.pose, state.velocity,
+                self.world.flight_spin(entity), self.terrain.height(x,z), drive, flags,
+                self.world.GRAVITY, dt, bounds=self.world.assets.bounds)
+            if self.world.set_flight_velocity(entity, velocity, spin):
+                flying.add(entity)
+                vehicle.engine_mode = (3, drive & 15) if drive else (1, 0)
+        return flying, piloted
 
     def autoaim(self, account_id, target_id, point=None):
         if self._recon_point_probe is not None:
@@ -1680,7 +1878,7 @@ class Arena:
         if boost is not None:
             shell = dataclasses.replace(shell,
                 damage_factors=shell.damage_factors if boost.damage_factors is None else boost.damage_factors)
-            if boost.shot_effect is not None:
+            if boost.shot_effect is not None and shell.missile is None:
                 shot_effect = boost.shot_effect
         origin,velocity = self._launch(vehicle,shell,now)
         weapon = vehicle.definition.weapon if vehicle.definition else None
@@ -1701,10 +1899,7 @@ class Arena:
             vehicle.reload_total = delay
             # Native own-vehicle FX accepts the whole group on its first
             # confirmation. Snapshot the actual size before later shots/switches.
-            self.emit('shot',vehicle.entity_id,shot=self.next_shot,origin=origin,
-                      velocity=velocity,gravity=shell.gravity,at=now,
-                      shell_id=shell.compact_id,effect_index=shot_effect,
-                      ammo_after=vehicle.ammo,shooting_count=following+1)
+            self._emit_shot(vehicle,shell,origin,velocity,now,shot_effect,following+1)
             self.emit('ammo',vehicle.entity_id)
             self.emit('reload',vehicle.entity_id,delay=delay)
             return
@@ -1717,10 +1912,7 @@ class Arena:
             delay *= vehicle.interval_factor
         vehicle.reload_at = now+delay
         vehicle.reload_total = delay
-        self.emit('shot',vehicle.entity_id,shot=self.next_shot,origin=origin,
-                  velocity=velocity,gravity=shell.gravity,at=now,
-                  shell_id=shell.compact_id,effect_index=shot_effect,
-                  ammo_after=vehicle.ammo)
+        self._emit_shot(vehicle,shell,origin,velocity,now,shot_effect)
         self.emit('ammo',vehicle.entity_id)
         self.emit('reload',vehicle.entity_id,delay=delay)
 
@@ -1777,7 +1969,8 @@ class Arena:
     def _launch(self, vehicle, shell, now):
         """Spend one round and spawn its projectile from the live pose."""
         vehicle.shots += 1
-        vehicle.ammo -= 1
+        if not self.practice or vehicle.account_id is None:
+            vehicle.ammo -= 1
         vehicle.ammo_by_shell[vehicle.shell_id] = vehicle.ammo
         vehicle.clip -= 1
         self.next_shot += 1
@@ -1785,7 +1978,95 @@ class Arena:
         velocity = tuple(v*shell.speed for v in direction)
         self.projectiles[self.next_shot] = Projectile(self.next_shot,vehicle.entity_id,
             shell,origin,velocity,now,recon_tracking=self.recon is not None)
+        if self.gravity_mode:
+            self._gravity_shell_impulse(vehicle, shell, direction, recoil=True)
         return origin,velocity
+
+    def _gravity_shell_impulse(self, vehicle, shell, direction, *, recoil=False):
+        if self.world is None:
+            return
+        mass = vehicle.definition.mass
+        caliber = shell.caliber / 100.
+        impulse = (42000. if recoil else 72000.) * caliber**1.2
+        if not recoil and shell.missile is not None:
+            impulse *= 1.7
+        speed = min(9., impulse / mass)
+        sign = -1. if recoil else 1.
+        x, y, z = (sign * speed * axis for axis in direction)
+        if self.world.motion[vehicle.entity_id].grounded:
+            # Flat shots should shove the tracks across the ground. An upward
+            # component can still release a tank, especially a light target.
+            if y < 1.2 and self.world.add_ground_velocity(vehicle.entity_id, x, z):
+                return
+        self.world.add_flight_velocity(vehicle.entity_id, (x, y, z))
+
+    def _gravity_air_control(self, vehicle, flags, dt):
+        """Damp bank after takeoff while preserving ballistic movement."""
+        entity = vehicle.entity_id
+        if entity not in self.world.dynamic_bodies:
+            return
+        yaw, pitch, roll = vehicle.pose.yaw, vehicle.pose.pitch, vehicle.pose.roll
+        pitch, roll = math.remainder(pitch, math.tau), math.remainder(roll, math.tau)
+        # Give true rollovers to the contact solver.
+        if max(abs(pitch), abs(roll)) >= math.pi/2:
+            return
+        steer = 0
+        vx, vy, vz = self.world.motion[entity].velocity
+        spin = self.world.flight_spin(entity)
+        fx, fz = math.sin(yaw), math.cos(yaw)
+        if flags and max(abs(pitch), abs(roll)) <= .9:
+            steer = int(bool(flags & 8))-int(bool(flags & 4))
+            tilt = int(bool(flags & 1))-int(bool(flags & 2))
+            # Pitch and yaw input retain their existing response.
+            wx, wy, wz = spin
+            blend = min(1., dt * 3.)
+            pitch_rate = tilt*.38
+            spin = (wx + blend*(pitch_rate*fz-wx), wy + blend*(steer*.65-wy),
+                    wz + blend*(-pitch_rate*fx-wz))
+        # Euler roll is about the pitched forward axis. Correcting along that
+        # axis keeps the nose pointed where the player aimed during the fall.
+        cp = math.cos(pitch)
+        axis = (fx*cp, -math.sin(pitch), fz*cp)
+        roll_rate = sum(rate*component for rate, component in zip(spin, axis))
+        target = max(-1.25, min(1.25, -3.5*roll))
+        correction = (roll_rate-target)*math.expm1(-9.*dt)
+        spin = tuple(rate+correction*component for rate, component in zip(spin, axis))
+        drift = steer * min(1.5, math.hypot(vx, vz)*.2) * dt
+        self.world.set_flight_velocity(entity, (vx+fz*drift, vy, vz-fx*drift), spin)
+
+    def _emit_shot(self, vehicle, shell, origin, velocity, now, shot_effect, shooting_count=1):
+        self.emit('shot',vehicle.entity_id,shot=self.next_shot,origin=origin,
+                  velocity=velocity,gravity=shell.gravity,at=now,
+                  shell_id=shell.compact_id,effect_index=shot_effect,
+                  ammo_after=vehicle.ammo,
+                  **({'shooting_count':shooting_count} if shooting_count != 1 else {}),
+                  **({'guided':True} if shell.missile is not None else {}))
+
+    def _missile_target(self, projectile):
+        shooter = self.vehicles[projectile.shooter]
+        player = self.players.get(shooter.account_id)
+        if not (player and player.attached and shooter.alive):
+            return None
+        if self.sandbox_enabled:
+            control = self._active_sandbox_control(shooter, self.simulation_time)
+            if control and control.flags & sandbox.MISSILE_VIEW and control.shot == projectile.shot:
+                return tuple(p + d*projectile.shell.max_distance
+                             for p,d in zip(projectile.position,control.direction()))
+        # _aim has already refreshed the gun's world point from the current
+        # target pose when the player has an active lock.
+        point = shooter.gun.point
+        if point is None:
+            origin,direction = self.shot_ray(shooter)
+            return tuple(p + d*projectile.shell.max_distance for p,d in zip(origin,direction))
+        if shooter.gun.local:
+            point = tuple(p + offset for p,offset in zip(shooter.pose.position,point))
+        if shooter.autoaim_target or sum((p-q)*v for p,q,v in
+                                         zip(point,projectile.position,projectile.velocity)) > 0:
+            return point
+        # The reticle can land on a nearby wall while the missile is already
+        # beyond it. Use that sight bearing to keep steering from its position.
+        origin,_ = self.shot_ray(shooter)
+        return tuple(q + p - o for q,p,o in zip(projectile.position,point,origin))
 
     def _fire_burst_next(self, vehicle, now):
         shell,shot_effect = vehicle.burst_shell,vehicle.burst_effect
@@ -1823,10 +2104,7 @@ class Arena:
             vehicle.reload_total = delay
         # The initial event already started this group's muzzle/audio sequence.
         # Its remaining physical projectiles still each need their own tracer.
-        self.emit('shot',vehicle.entity_id,shot=self.next_shot,origin=origin,
-                  velocity=velocity,gravity=shell.gravity,at=now,
-                  shell_id=shell.compact_id,effect_index=shot_effect,
-                  ammo_after=vehicle.ammo,shooting_count=0)
+        self._emit_shot(vehicle,shell,origin,velocity,now,shot_effect,0)
         if not vehicle.burst_pending:
             pending = vehicle.burst_switch_shell
             vehicle.burst_switch_shell = 0
@@ -1861,10 +2139,7 @@ class Arena:
             vehicle.next_shell = 0
             vehicle.reload_at = 0.
             self._pump_segment(vehicle,now)
-        self.emit('shot',vehicle.entity_id,shot=self.next_shot,origin=origin,
-                  velocity=velocity,gravity=shell.gravity,at=now,
-                  shell_id=shell.compact_id,effect_index=shot_effect,
-                  ammo_after=vehicle.ammo)
+        self._emit_shot(vehicle,shell,origin,velocity,now,shot_effect)
         if switched:
             self.emit('shell_selected',vehicle.entity_id,shell=switched)
         self.emit('ammo',vehicle.entity_id)
@@ -1910,6 +2185,8 @@ class Arena:
         if reason:
             self.emit('consumable_rejected', vehicle.entity_id, ident=ident, reason=reason, at=now)
             return False
+        if state.spec is GRAVITY_JUMP_SPEC:
+            return self._gravity_jump(vehicle)
         if not self._activate_consumable(vehicle, state, now):
             self.emit('consumable_rejected', vehicle.entity_id, ident=ident,
                       reason='Consumable is cooling down or has no live target', at=now)
@@ -2115,7 +2392,8 @@ class Arena:
         now = self.simulation_time if now is None else now
         return tuple((s.spec.ident, s.state_at(now).state, s.activated_at,
                       s.active_until-s.activated_at) for s in vehicle.consumables
-                     if s and s.spec.action == 'boost' and s.state_at(now).state in (2, 3))
+                     if s and s.spec is not GRAVITY_JUMP_SPEC and s.spec.action == 'boost'
+                     and s.state_at(now).state in (2, 3))
 
     def _stop_consumables(self, vehicle):
         # A dead or finished vehicle has no future weapon state.  In
@@ -2150,7 +2428,8 @@ class Arena:
             self._stop_fire(vehicle, at, 'battle_end')
             self._stop_consumables(vehicle)
         for projectile in self.projectiles.values():
-            self.emit('shot_end',projectile.shooter,shot=projectile.shot,point=projectile.position)
+            self.emit('shot_end',projectile.shooter,shot=projectile.shot,point=projectile.position,
+                      **({'guided':True} if projectile.shell.missile is not None else {}))
         self.projectiles.clear()
         self._recon_point_probe = None
         if self.recon is not None:
@@ -2195,7 +2474,7 @@ class Arena:
                     self.simulation_time >= self.finished_at + self.POSTBATTLE_SECONDS)
 
     def results(self):
-        if not self.started or not self.finished_at:
+        if self.practice or not self.started or not self.finished_at:
             return []
         return [BattleResult(self.result_id,p.account_id,self.winner==p.team,
                 self.vehicles[p.vehicle_id].shots,self.vehicles[p.vehicle_id].hits,
@@ -2217,6 +2496,11 @@ class Arena:
             shell = event.shell or self.shell_for(shooter)
             self.world.destroy(event.obstacle,event.direction[::2],damage=shell.damage)
         shell = event.shell or self.shell_for(shooter)
+        if (shell and shell.missile is not None and shell.kind!='HIGH_EXPLOSIVE'
+                and event.collision and event.result.hit is None):
+            self.emit('explosion',event.shooter,shot=event.shot,effect_index=shell.effect_index,
+                      shell_id=shell.compact_id,material=0,point=event.point,
+                      direction=event.direction,at=event.at)
         if shell and shell.kind=='HIGH_EXPLOSIVE' and (event.collision or event.result.hit is not None):
             self.emit('explosion',event.shooter,shot=event.shot,effect_index=shell.effect_index,
                       shell_id=shell.compact_id,material=3 if event.result.hit else 0,
@@ -2308,13 +2592,16 @@ class Arena:
         self.emit('impact' if direct else 'splash',event.shooter,target_id or 0,shot=event.shot,point=event.point,
                   result=result,applied_damage=damage,at=event.at,**({'raw_damage':raw} if mitigated else {}),
                   **({'blocked_damage':blocked} if blocked else {}),
-                  **({'hit_effect':hit_effect} if hit_effect is not None else {}))
+                  **({'hit_effect':hit_effect} if hit_effect is not None else {}),
+                  **({'guided':True} if direct and shell and shell.missile is not None else {}))
         if mitigated and damage and he and anti_he_factor != 1:
             # Semantic FX only: no timer or invulnerability; wire framing is root-owned.
             self.emit('provision_effect',target.entity_id,event.shooter,shot=event.shot,ident=ANTI_HE_PROVISION,
                       compact_id=(ANTI_HE_PROVISION<<8)|0xfd,duration=target.definition.he_effect_duration,
                       at=event.at)
         if result.hit is not None and target and target.alive and enemy:
+            if self.gravity_mode and direct and shell is not None:
+                self._gravity_shell_impulse(target, shell, event.contact_direction or event.direction)
             if direct:
                 shooter.direct_hits += 1
                 target.hits_received += 1
@@ -2372,6 +2659,8 @@ class Arena:
             self._stop_fire(target, at, 'death')
             self._stop_consumables(target)
             self.emit('killed', source or 0, target.entity_id)
+            if self.practice and target.account_id is not None:
+                self.practice_respawn_at = at+3.
             if (self.supremacy is not None and not self.finished_at
                     and self.supremacy.finished_winner is None):
                 before = self.supremacy.state()
@@ -2391,7 +2680,7 @@ class Arena:
             vehicle = self.vehicles[impact['entity']]
             if not vehicle.alive:
                 continue
-            raw = (vehicle.max_health*impact['fraction']
+            raw = (vehicle.max_health*impact['fraction']*(.25 if self.gravity_mode else 1.)
                    + self.fall_hp_carry.get(vehicle.entity_id,0.))
             damage = math.floor(raw+.5)
             self.fall_hp_carry[vehicle.entity_id] = raw-damage
@@ -2412,6 +2701,8 @@ class Arena:
             if track is None:
                 continue
             fraction = evaluate_track_fall(impact['speed'],impact['height'])
+            if self.gravity_mode:
+                fraction *= .25
             episode = impact.get('episode')
             key = vehicle.entity_id,part
             previous_episode,peak = self.track_fall_peaks.get(key,(None,0.))
@@ -2506,7 +2797,7 @@ class Arena:
                     if s and s.activated_at<=at), default=1.)
 
     @staticmethod
-    def _powered_acceleration(vehicle, forward, *, speed=None, resistance=1.):
+    def _powered_acceleration(vehicle, forward, *, speed=None, resistance=1., mode_power=1.):
         """Return the grounded drive acceleration for a complete vehicle definition.
 
         XML exposes vehicle mass and engine horsepower, but not the native
@@ -2534,7 +2825,8 @@ class Arena:
         # Timed boosts multiply the currently installed engine only.  Permanent
         # fuel/oil modifications are already baked into ``engine_power_hp`` by
         # apply_definition(), so they must not be applied twice here.
-        factor = vehicle.engine_factor
+        factor = vehicle.engine_factor * (sandbox.BOOST_POWER if getattr(vehicle,'sandbox_boost',False) else 1.)
+        factor *= mode_power
         if (isinstance(factor, bool) or not isinstance(factor, (int, float))
                 or not math.isfinite(factor) or factor <= 0):
             return None
@@ -2708,6 +3000,10 @@ class Arena:
         active_forward = int(bool(active_flags & 1)) - int(bool(active_flags & 2))
         assets = self.world.assets_for(vehicle.entity_id) if self.world else None
         driver_factor = self._crew_role_factor(vehicle, 'driver')
+        if self.gravity_mode:
+            driver_factor *= 1.35
+        if getattr(vehicle, 'sandbox_boost', False):
+            driver_factor *= sandbox.BOOST_SPEED
         top_forward = ((assets.forward_speed if assets else 11.5)
                        + vehicle.forward_speed_bias) * driver_factor
         top_reverse = ((assets.reverse_speed if assets else 5.)
@@ -2721,7 +3017,8 @@ class Arena:
                 and math.isfinite(gravity) and gravity > 0):
             slope = gravity * math.sin(pitch) * math.cos(pitch)
         powered = self._powered_acceleration(vehicle,forward,
-            speed=vehicle.speed/surface_cos,resistance=mobility.resistance) if forward else None
+            speed=vehicle.speed/surface_cos,resistance=mobility.resistance,
+            mode_power=1.5 if self.gravity_mode else 1.) if forward else None
         surface_code = None
         sampler = getattr(self.terrain, 'surface_code', None)
         if callable(sampler):
@@ -2774,6 +3071,8 @@ class Arena:
                        getattr(self.world, 'experimental_ground_impacts', False))
         flags = (self._active_control_flags(vehicle, now)
                  if controlled or not ground_mode else 0)
+        if self.gravity_mode and airborne and vehicle.alive:
+            self._gravity_air_control(vehicle, flags, dt)
         turn = int(bool(flags&8))-int(bool(flags&4))
         forward = int(bool(flags&1))-int(bool(flags&2))
         if forward<0:
@@ -2848,6 +3147,11 @@ class Arena:
         # per-vehicle CrewState on every fixed step, so a medkit restores the
         # current drive without mutating shared assets.
         driver_factor = self._crew_role_factor(vehicle, 'driver')
+        if self.gravity_mode:
+            driver_factor *= 1.35
+        boost = getattr(vehicle, 'sandbox_boost', False)
+        if boost:
+            driver_factor *= sandbox.BOOST_SPEED
         top_forward = ((assets.forward_speed if assets else 11.5) + vehicle.forward_speed_bias) * driver_factor
         top_reverse = ((assets.reverse_speed if assets else 5.) + vehicle.reverse_speed_bias) * driver_factor
         target = forward*(top_forward if forward>0 else top_reverse)*surface_cos
@@ -2862,9 +3166,11 @@ class Arena:
         acceleration = (self._braking_acceleration(vehicle)
                         if not forward or vehicle.speed*forward<0 else None)
         if acceleration is None:
+            mode_power = 1.5 if self.gravity_mode else 1.
             powered = self._powered_acceleration(vehicle,forward,
-                speed=vehicle.speed/surface_cos,resistance=mobility.resistance)
-            acceleration = abs(powered) if powered is not None else 5*fuel*vehicle.engine_factor
+                speed=vehicle.speed/surface_cos,resistance=mobility.resistance,mode_power=mode_power)
+            acceleration = (abs(powered) if powered is not None else
+                            5*fuel*vehicle.engine_factor*mode_power*(sandbox.BOOST_POWER if boost else 1.))
         if broken:
             # An input lease expiring is not a brake impulse. The broken
             # belts supply their passive contact drag below, including when
@@ -3355,7 +3661,10 @@ class Arena:
                     vehicle.clip = self._loaded_clip(vehicle)
                 self.emit('ammo',vehicle.entity_id)
                 self.emit('reload',vehicle.entity_id,delay=0.,total=vehicle.reload_total)
-        if not self.finished_at and not self.solo_victory_team and now-self.started>=self.battle_seconds:
+        if self.practice and not self.finished_at:
+            self._advance_practice(now)
+        if (not self.practice and not self.finished_at and not self.solo_victory_team
+                and now-self.started>=self.battle_seconds):
             self.finish(self.supremacy.timeout_winner() if self.supremacy is not None else 0,
                         'supremacy_timeout' if self.supremacy is not None else 'timeout', now)
         if not self.finished_at:
@@ -3365,8 +3674,11 @@ class Arena:
             if (self.world is not None and
                     getattr(self.world, 'experimental_ground_impacts', False)):
                 self.world.begin_ground_step()
+            flying, piloted = self._sandbox_frame(now, dt) if self.sandbox_enabled else ((), ())
             driving = []
             for vehicle in self.vehicles.values():
+                if vehicle.entity_id in flying:
+                    continue
                 attached = self._player_attached(vehicle)
                 airborne = self.world is not None and not self.world.motion[vehicle.entity_id].grounded
                 skidding = (self.world is not None and
@@ -3386,7 +3698,10 @@ class Arena:
                 # tank again for each later participant in the same arena.
                 was_airborne = {entity:not state.grounded
                                 for entity,state in self.world.motion.items()}
-                self.world.dynamic_commit(dt)
+                if piloted:
+                    self.world.dynamic_commit(dt, piloted=piloted)
+                else:
+                    self.world.dynamic_commit(dt)
                 for entity, recovery_start, recovery_end in self.world.dynamic_recoveries:
                     # A recovery placement is not a touchdown to skid from.
                     self._landing_airborne_since.pop(entity,None)
@@ -3507,6 +3822,8 @@ class Arena:
             share_sweeps = len(self.projectiles) > 1
             for shot,projectile in list(self.projectiles.items()):
                 impact = None
+                guided = projectile.shell.missile is not None
+                target = self._missile_target(projectile) if guided else None
                 for left,right in armor_segments:
                     segment_start = frame_start+dt*left
                     segment_end = frame_start+dt*right
@@ -3526,7 +3843,8 @@ class Arena:
                     if share_sweeps and key not in armor_sweeps:
                         armor_sweeps[key] = SweepCache(segment_before,segment_after)
                     impact = advance(projectile,self.world,segment_before,segment_after,
-                                     segment_end-segment_start,self.rng,sweep_cache=armor_sweeps.get(key))
+                                     segment_end-segment_start,self.rng,sweep_cache=armor_sweeps.get(key),
+                                     missile_target=target)
                     if impact:
                         break
                 contacts.extend((event.at,event.shot,0,event) for event in projectile.drain_track_contacts())
@@ -3535,6 +3853,9 @@ class Arena:
                 if impact:
                     contacts.append((impact.at,impact.shot,1,impact))
                     del self.projectiles[shot]
+                elif guided and self.step_count % self.MISSILE_UPDATE_STEPS == 0:
+                    self.emit('missile_move',projectile.shooter,shot=shot,origin=projectile.position,
+                              velocity=projectile.velocity,effect_index=projectile.shell.effect_index,at=now)
             # All shells from this interval resolve before selecting a winner.
             # A shooter killed in this step still owns its already-fired shell.
             for _,_,_,impact in sorted(contacts,key=lambda event:event[:3]):
@@ -3587,9 +3908,10 @@ class Arena:
             pending_burst = any(v.alive and v.burst_pending and
                                 (v.account_id is None or self.players[v.account_id].attached)
                                 for v in self.vehicles.values())
-            if self.solo and teams == {1} and self.base_capture is None and self.supremacy is None:
+            if (not self.practice and self.solo and teams == {1}
+                    and self.base_capture is None and self.supremacy is None):
                 self.solo_victory_team = 1
-            if len(teams)<=1 and not pending_burst and not self.solo_victory_team:
+            if not self.practice and len(teams)<=1 and not pending_burst and not self.solo_victory_team:
                 winner = next(iter(teams),0)
                 # Abandoned live hulls remain collidable, but cannot keep a
                 # defeated team in the match. Do not invent a kill for leaving.
@@ -3619,8 +3941,9 @@ class Arena:
 class ArenaManager:
     def __init__(self, terrain, collision_scene, descriptor, *, retire=None, can_retire=None,
                  map_spec=None, recon_enabled=False, recon_game=None, recon_point_tolerance=None,
-                 step_budget=None):
+                 step_budget=None, sandbox_enabled=False):
         self.step_budget = _step_budget(step_budget)
+        self.sandbox_enabled = sandbox_enabled
         if type(recon_enabled) is not bool:
             raise ValueError('Invalid recon mode')
         if recon_point_tolerance is not None and (not recon_enabled or
@@ -3640,7 +3963,7 @@ class ArenaManager:
     def create(self, accounts, *, solo=True, incremental=False, collision_scene=None, descriptor=None,
                vehicle_scenes=None, terrain=None, map_spec=None, bot_enabled=False, training=None,
                build_world=True, result_id=None, bot_roster=None, bot_game=None, bot_scene_settings=(),
-               prebattle_seconds=0.):
+               prebattle_seconds=0., room_mode='encounter'):
         space = self.next_space
         self.next_space += 1
         terrain = self.terrain if terrain is None else terrain
@@ -3652,7 +3975,8 @@ class ArenaManager:
                       recon_enabled=self.recon_enabled, recon_game=self.recon_game,
                       step_budget=self.step_budget, build_world=build_world, result_id=result_id,
                       bot_roster=bot_roster, bot_game=bot_game, bot_scene_settings=bot_scene_settings,
-                      prebattle_seconds=prebattle_seconds)
+                      prebattle_seconds=prebattle_seconds, sandbox_enabled=self.sandbox_enabled,
+                      room_mode=room_mode)
         if self.recon_point_tolerance is not None:
             arena.enable_recon_point_probe(tolerance=self.recon_point_tolerance)
         self.arenas[arena.result_id] = arena

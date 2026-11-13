@@ -14,7 +14,7 @@ import re
 import xml.etree.ElementTree as ET
 
 from .dvpl import read
-from .roster import TEAM_SIZE
+from .roster import TEAMS, TEAM_SIZE, validate_teams
 from .vehicle_data import VehicleDefinition, load_vehicle
 
 
@@ -149,6 +149,27 @@ def _counterpart(player, definition):
             and .65 <= penetration <= 1.5)
 
 
+def vehicle_class(game, definition):
+    if game is None or definition is None:
+        return None
+    try:
+        classes = _vehicle_classes(Path(game), definition.nation)
+    except (OSError, ValueError, ET.ParseError):
+        return None
+    return classes.get(definition.name)
+
+
+@lru_cache(maxsize=32)
+def _vehicle_classes(game, nation):
+    path = game/'Data/XML/item_defs/vehicles'/nation/'list.xml.dvpl'
+    result = {}
+    for item in ET.fromstring(read(path)):
+        classes = set((item.findtext('tags') or '').split()).intersection(_CLASSES)
+        if len(classes) == 1:
+            result[item.tag], = classes
+    return result
+
+
 def select_bot_roster(game, player_definition, *, enemies, allies, seed):
     """Return enemies first (slots0..), followed by allies (slots1..).
 
@@ -238,3 +259,22 @@ def select_bot_roster(game, player_definition, *, enemies, allies, seed):
     for slot in range(1, allies+1):
         result.append(BotVehicle(1, slot, *choices[(slot-1) % len(choices)]))
     return tuple(result)
+
+
+def select_room_bot_roster(game, player_definition, *, teams, bot_counts, seed):
+    """Fill slots after the human participants, using the same tank pool on both teams."""
+    if (not isinstance(bot_counts, (tuple, list)) or len(bot_counts) != len(TEAMS)
+            or any(type(count) is not int or not 0 <= count <= TEAM_SIZE for count in bot_counts)):
+        raise ValueError('Invalid room bot counts')
+    if not teams:
+        raise ValueError('A room battle requires a human participant')
+    validate_teams([*teams, *([1]*bot_counts[0]), *([2]*bot_counts[1])])
+    if not any(bot_counts):
+        return ()
+    choices = select_bot_roster(game, player_definition, enemies=max(bot_counts), allies=0, seed=seed)
+    roster = []
+    for team, count in ((2, bot_counts[1]), (1, bot_counts[0])):
+        first_slot = teams.count(team)
+        roster.extend(BotVehicle(team, first_slot+index, item.definition, item.vehicle_class)
+                      for index, item in enumerate(choices[:count]))
+    return tuple(roster)

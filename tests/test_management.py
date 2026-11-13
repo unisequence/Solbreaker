@@ -35,10 +35,20 @@ class ManagementTests(unittest.TestCase):
 
     def test_url_profile_is_shared_by_preparation_and_import(self):
         settings = Settings(game='/tmp/game', server_url='https://example.test', proton='/tmp/proton')
-        for action in ('prepare-client', 'connect'):
+        for action in ('prepare-client', 'connect', 'play'):
             args = command(action, settings, windows=False)
             self.assertEqual(args[args.index('--url')+1], settings.server_url)
             self.assertNotIn('--connection', args)
+
+    def test_local_mode_uses_state_profile_with_remote_server_still_saved(self):
+        settings = Settings(state='/tmp/local state', game='/tmp/game', proton='/tmp/proton',
+                            play_mode='local', connection='/tmp/friend.json', server_url='https://friend.test')
+        for action in ('prepare-client', 'connect', 'play'):
+            args = command(action, settings, windows=False)
+            self.assertEqual(args[args.index('--connection')+1], str(settings.local_profile_path.absolute()))
+            self.assertNotIn('--url', args)
+        args = command('play', replace(settings, play_mode='remote', server_url=''), windows=False)
+        self.assertEqual(args[args.index('--connection')+1], str(Path(settings.connection).absolute()))
 
     def test_settings_validation_and_round_trip(self):
         for value in (True, 1023, 65536, 'abc'):

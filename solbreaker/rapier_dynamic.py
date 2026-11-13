@@ -36,6 +36,11 @@ class RapierDynamic:
             C.POINTER(C.c_double), C.POINTER(C.c_double),
             C.POINTER(C.c_double), C.POINTER(C.c_double)]
         self.library.tfs_rapier_activate.restype = C.c_int32
+        self._set_velocity = getattr(self.library, 'tfs_rapier_set_velocity', None)
+        if self._set_velocity is not None:
+            self._set_velocity.argtypes = [C.c_void_p, C.c_uint32,
+                                            C.POINTER(C.c_double), C.POINTER(C.c_double)]
+            self._set_velocity.restype = C.c_int32
         self.library.tfs_rapier_set_mass.argtypes = [C.c_void_p, C.c_uint32, C.POINTER(C.c_double)]
         self.library.tfs_rapier_set_mass.restype = C.c_int32
         self.library.tfs_rapier_sync.argtypes = [C.c_void_p, C.c_char_p]
@@ -103,6 +108,19 @@ class RapierDynamic:
         result = self.library.tfs_rapier_set_mass(self.handle, entity, values)
         if result != 0:
             raise RuntimeError(f'Rapier mass update failed: {result}')
+
+    @property
+    def supports_flight(self):
+        return self._set_velocity is not None
+
+    @_serialized
+    def set_velocity(self, entity, velocity, angular):
+        self._require_open()
+        if not self.supports_flight:
+            raise RuntimeError('Rapier library lacks sandbox flight support')
+        result = self._set_velocity(self.handle, entity, self._array(velocity), self._array(angular))
+        if result:
+            raise RuntimeError(f'Rapier velocity update failed: {result}')
 
     @_serialized
     def sync(self, rows):

@@ -37,10 +37,11 @@ LOG = logging.getLogger("solbreaker")
 
 
 class LocalServer:
-    def __init__(self, lab: Path):
+    def __init__(self, lab: Path, *, sandbox=False):
         from .diagnostics import install
         self.diagnostics = install()
         self.lab = lab
+        self.sandbox = sandbox
         self.developer_mode = os.environ.get("SOLBREAKER_DEVELOPER_MODE") == "1"
         self.manifest = json.loads((lab / "manifest.json").read_text())
         from .server_identity import server_name
@@ -186,6 +187,7 @@ class LocalServer:
                     "simulation_backend": getattr(self,"simulation_backend",None),
                     "simulation_workers": getattr(self, "simulation_workers", None),
                     "arena_owners": getattr(self, "arena_owners", None),
+                    "sandbox": getattr(self, "sandbox", False),
                     "owner_ipc": getattr(self, "owner_ipc", 'queue'),
                     "dynamic_backend": getattr(self, "dynamic_backend", None),
                     "rapier_parallel_drive": getattr(self, "rapier_parallel_drive", False),
@@ -362,8 +364,8 @@ class LoginEndpoint(asyncio.DatagramProtocol):
             self.transport.sendto(encode_reply(packet, request_id, reply), addr)
 
 
-async def serve(lab: Path):
-    server = LocalServer(lab)
+async def serve(lab: Path, *, sandbox=False):
+    server = LocalServer(lab, sandbox=sandbox)
     transports = []
     try:
         udp, _ = await open_datagram(lambda: LoginEndpoint(server),
@@ -404,7 +406,7 @@ async def serve(lab: Path):
             server.event('stopped')
 
 
-async def serve_cli(lab: Path, *, stop_on_stdin=False):
+async def serve_cli(lab: Path, *, stop_on_stdin=False, sandbox=False):
     """Drain owned server state on SIGTERM or an optional private stdin pipe.
 
     A daemon reader avoids platform-specific asyncio pipe/signal APIs. It is
@@ -476,7 +478,7 @@ async def serve_cli(lab: Path, *, stop_on_stdin=False):
     try:
         from .storage import account_access
         with account_access(lab / 'private'):
-            await serve(lab)
+            await serve(lab, sandbox=sandbox)
     except asyncio.CancelledError:
         if not requested:
             raise

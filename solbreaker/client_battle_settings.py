@@ -1,4 +1,5 @@
-"""Bot battle controls hosted by the pinned native CreateRoom controller."""
+"""Battle controls hosted by the pinned native CreateRoom controller."""
+from pathlib import Path
 import struct
 
 from . import dvpl
@@ -141,6 +142,55 @@ def _row(name, caption, buttons, *, conditional=True):
     return row
 
 
+RULES_CAPTION = ('when localRules == 3 -> localize("Local/BattleSettings/Gravity"), '
+                 'localRules == 2 -> localize("Local/BattleSettings/Supremacy"), '
+                 'localRules == 1 -> localize("Local/BattleSettings/Capture"), '
+                 'localize("Local/BattleSettings/Elimination")')
+
+ROOM_RULES_CAPTION = (RULES_CAPTION.replace('localRules', 'localRoomRules')
+                     .replace('/Capture"', '/Encounter"'))
+DESCRIPTION_FIELD = 'Container/TextFieldContainer/VerticalBox/Background/TextField'
+
+
+def _room_rules(root):
+    container, = [n for n in _walk(root) if n.get('name') == 'scrollContainerControl']
+    fields = {n['name']: n for n in container['children']}
+    if 'LocalRoomRules' in fields:
+        return False
+    local_vars = root['components']['UIDataLocalVarsComponent']['data']
+    local_vars.extend((['int', 'localRoomRules', '1'], ['string', 'localRoomNotes', '""']))
+    description, = [node for node in fields['Description']['children']
+                    if node.get('path') == DESCRIPTION_FIELD]
+    description.setdefault('components', {})['UIInputEventComponent'] = {
+        'onValueChanged': 'LocalRoomNotesChanged', 'onValueChangedData': '_text'}
+    rules = _row('LocalRoomRules', 'Local/BattleSettings/Rules', [
+        _button('Choice', ROOM_RULES_CAPTION, 'LocalRoomRulesNext', 360)], conditional=False)
+    rules['bindings'] = [['visible', 'not localBotSetup']]
+    mode = fields['Mode']
+    # The native controller looks up Mode/Container/Select and Name on open.
+    mode['bindings'] = [['visible', 'false']]
+    container['children'].insert(container['children'].index(mode)+1, rules)
+    return True
+
+
+def _room_bot_hint(description):
+    paths = {
+        'Container/Caption': 'Local/BattleSettings/RoomBotsCaption',
+        'Container/TextFieldContainer/VerticalBox/Background/TextField/Hint':
+            'Local/BattleSettings/RoomBotsHint',
+    }
+    changed = False
+    for child in description['children']:
+        key = paths.get(child.get('path'))
+        if key is None:
+            continue
+        text = child['components']['UITextComponent']
+        if text.get('text') != key:
+            text['text'] = key
+            changed = True
+    return changed
+
+
 def patch_form(document):
     root, = [n for n in document['Prototypes'] if n.get('name') == 'Content']
     container, = [n for n in _walk(root) if n.get('name') == 'scrollContainerControl']
@@ -148,6 +198,7 @@ def patch_form(document):
     if set(fields) != {'Title', 'DescriptionSelect', 'Description', 'Map', 'Mode',
                        'Password', 'TeamKill', 'HideEnemyVehicles'}:
         raise ValueError('Unsupported native battle settings form')
+    _room_bot_hint(fields['Description'])
     components = root['components']
     if 'UIActionComponent' in components or 'UIDataLocalVarsComponent' in components:
         raise ValueError('Native battle settings already have actions or local state')
@@ -193,10 +244,9 @@ def patch_form(document):
             'localDifficulty == 1 -> localize("Local/BattleSettings/Normal"), '
             'localize("Local/BattleSettings/Hard")', 'LocalDifficultyNext', 360)])
     rules = _row('LocalRules', 'Local/BattleSettings/Rules', [
-        _button('Choice', 'when localRules == 2 -> localize("Local/BattleSettings/Supremacy"), '
-                'localRules == 1 -> localize("Local/BattleSettings/Capture"), '
-                'localize("Local/BattleSettings/Elimination")', 'LocalRulesNext', 360)])
+        _button('Choice', RULES_CAPTION, 'LocalRulesNext', 360)])
     container['children'] = [allies, enemies, difficulty, rules, *container['children']]
+    _room_rules(root)
 
 
 def extra_resources():
@@ -236,11 +286,23 @@ action LocalDifficultyNext()
 }
 action LocalRulesNext()
 {
-    if (localRules == 2) { ChangeData(localRules, 0); }
+    if (localRules == 3) { ChangeData(localRules, 0); }
     else { ChangeData(localRules, localRules + 1); }
     DirectEvent("LocalSync", ".");
 }
 action LocalNoop() {}
+action LocalRoomNotesChanged(string text)
+{
+    if (not localBotSetup) { ChangeData(localRoomNotes, text); }
+}
+action LocalRoomRulesNext()
+{
+    ChangeData(localRoomRules, (localRoomRules + 1) % 4);
+    ChangeProperty("**/Description/Container/TextFieldContainer/VerticalBox/Background/TextField",
+        "", "text", (when localRoomRules == 3 -> "[mode gravity] ",
+        localRoomRules == 2 -> "[mode supremacy] ", localRoomRules == 0 -> "[mode elimination] ",
+        "[mode encounter] ") + localRoomNotes);
+}
 '''
     return {ACTIONS: dvpl.encode(actions.replace('@TITLE@', TITLE).replace('@PREFIX@', PREFIX).encode())}
 
@@ -249,11 +311,93 @@ STRINGS = {
     'en': {'Settings': 'Battle settings', 'Kind': 'Battle type', 'Room': 'Training room', 'Allies': 'Allied bots',
            'Enemies': 'Enemy bots', 'Difficulty': 'Bot difficulty', 'Rules': 'Battle rules',
            'Easy': 'Easy', 'Normal': 'Normal', 'Hard': 'Hard', 'Capture': 'Base capture',
-           'Elimination': 'Elimination', 'Supremacy': 'Supremacy', 'Save': 'Save', 'Saved': 'Settings saved', 'Create': 'Create'},
+           'Elimination': 'Elimination', 'Encounter': 'Encounter',
+           'Supremacy': 'Supremacy', 'Gravity': 'Gravity Force',
+           'Save': 'Save', 'Saved': 'Settings saved', 'Create': 'Create',
+           'RoomBotsCaption': 'Description and bots [bots 2:3]',
+           'RoomBotsHint': 'Start with [bots 2:3] for teams 1 and 2, then add your notes.'},
     'ru': {'Settings': 'Настройки боя', 'Kind': 'Тип боя', 'Room': 'Тренировочная комната', 'Allies': 'Союзные боты',
            'Enemies': 'Боты противника', 'Difficulty': 'Сложность ботов', 'Rules': 'Правила боя',
            'Easy': 'Лёгкая', 'Normal': 'Обычная', 'Hard': 'Сложная', 'Capture': 'Захват базы',
-           'Elimination': 'Перестрелка', 'Supremacy': 'Превосходство', 'Save': 'Сохранить', 'Saved': 'Настройки сохранены', 'Create': 'Создать'}}
+           'Elimination': 'Перестрелка', 'Encounter': 'Встречный бой',
+           'Supremacy': 'Превосходство', 'Gravity': 'Гравитация',
+           'Save': 'Сохранить', 'Saved': 'Настройки сохранены', 'Create': 'Создать',
+           'RoomBotsCaption': 'Описание и боты [bots 2:3]',
+           'RoomBotsHint': 'Начни с [bots 2:3] для команд 1 и 2, затем добавь описание.'}}
+
+
+def upgrade_form(lab, manifest):
+    """Refresh the installed native battle settings form in an idle client."""
+    if manifest.get('battle_settings_ui_version') == 5:
+        return manifest
+    from hashlib import sha256
+    import json
+    import yaml
+    from .client_ui import STRINGS_EN, STRINGS_RU, _StringsLoader
+    from .connection import atomic_write
+
+    overrides = dict(manifest.get('ui_overrides', {}))
+    if not all(relative in overrides for relative in (FORM, ACTIONS, STRINGS_EN, STRINGS_RU)):
+        return manifest
+    data = lab/'client/Data'
+    staged = {}
+    for relative in (FORM, STRINGS_EN, STRINGS_RU):
+        target = data/relative
+        if target.resolve(strict=True) != target or not target.is_file():
+            raise ValueError('Room bot settings require a private UI overlay')
+        original = target.read_bytes()
+        raw = dvpl.decode(original)
+        if relative == FORM:
+            if manifest.get('battle_settings_ui_version') == 3:
+                source = Path(manifest.get('source_game', manifest['game']))/'Data'/FORM
+                document = yaml.safe_load(dvpl.read(source))
+                patch_form(document)
+                changed = True
+            else:
+                document = yaml.safe_load(raw)
+                changed = False
+            root, = [node for node in document['Prototypes'] if node.get('name') == 'Content']
+            description, = [node for node in _walk(root) if node.get('name') == 'Description']
+            changed = _room_bot_hint(description) or changed
+            rules, = [node for node in _walk(root) if node.get('name') == 'LocalRules']
+            caption, = [node for node in _walk(rules) if node.get('path') == 'Caption']
+            binding = ['UITextComponent.text', RULES_CAPTION]
+            if caption['bindings'] != [binding]:
+                caption['bindings'] = [binding]
+                changed = True
+            if any(node.get('name') == 'scrollContainerControl' for node in _walk(root)):
+                changed = _room_rules(root) or changed
+                room_rules, = [node for node in _walk(root) if node.get('name') == 'LocalRoomRules']
+                room_caption, = [node for node in _walk(room_rules) if node.get('path') == 'Caption']
+                room_binding = [['UITextComponent.text', ROOM_RULES_CAPTION]]
+                if room_caption['bindings'] != room_binding:
+                    room_caption['bindings'] = room_binding
+                    changed = True
+        else:
+            document = yaml.load(raw, Loader=_StringsLoader)
+            locale = 'en' if relative == STRINGS_EN else 'ru'
+            strings = {f'Local/BattleSettings/{key}': STRINGS[locale][key]
+                       for key in ('RoomBotsCaption', 'RoomBotsHint', 'Gravity', 'Encounter')}
+            changed = any(document.get(key) != value for key, value in strings.items())
+            document.update(strings)
+        content = (dvpl.encode(yaml.safe_dump(document, sort_keys=False, allow_unicode=True,
+                                              width=1 << 30).encode()) if changed else original)
+        if changed:
+            staged[target] = content
+        overrides[relative] = sha256(content).hexdigest()
+    actions = data/ACTIONS
+    if actions.resolve(strict=True) != actions or not actions.is_file():
+        raise ValueError('Battle settings require a private actions file')
+    actions_content = extra_resources()[ACTIONS]
+    if actions.read_bytes() != actions_content:
+        staged[actions] = actions_content
+    overrides[ACTIONS] = sha256(actions_content).hexdigest()
+    for target, content in staged.items():
+        atomic_write(target, content)
+    updated = dict(manifest, ui_overrides=overrides, room_bot_hint_version=1,
+                   battle_settings_ui_version=5)
+    atomic_write(lab/'manifest.json', (json.dumps(updated, indent=2)+'\n').encode())
+    return updated
 
 # native/battle_settings_client.S, linked at EXTENSION_VA.
 EXTENSION = bytes.fromhex(

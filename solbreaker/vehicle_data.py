@@ -1,8 +1,7 @@
 """Immutable stock definitions from pinned XML, without battle or wire state.
 
-Single turret, AP, simple clips and pump autoreloaders only. Other layouts
-fail explicitly.
-Loading a definition is not a claim of native gameplay support.
+Models single-turret layouts, shell and missile metadata, simple clips and
+pump autoreloaders.
 """
 from copy import deepcopy
 from dataclasses import dataclass, fields
@@ -57,6 +56,22 @@ class VehicleConfiguration:
 
 
 @dataclass(frozen=True)
+class MissileFlight:
+    """Propulsion and steering limits for a guided shot."""
+    max_speed: float
+    acceleration: float
+    turn_speed: float
+    rotational_deceleration: float
+
+    def __post_init__(self):
+        if (not all(math.isfinite(value) for value in (self.max_speed, self.acceleration,
+                    self.turn_speed, self.rotational_deceleration))
+                or self.max_speed <= 0 or self.turn_speed <= 0
+                or self.acceleration < 0 or self.rotational_deceleration < 0):
+            raise ValueError('Invalid missile flight parameters')
+
+
+@dataclass(frozen=True)
 class Shell:
     compact_id: int
     caliber: float
@@ -76,6 +91,7 @@ class Shell:
     # Uniform HP damage roll bounds, drawn at impact. Tungsten Rounds replaces
     # them on the shells it fires; nominal damage/devices stay unchanged.
     damage_factors: tuple = (.75, 1.25)
+    missile: MissileFlight | None = None
 
     def __post_init__(self):
         factors = self.damage_factors
@@ -83,6 +99,11 @@ class Shell:
                 or any(isinstance(f,bool) or not isinstance(f,(int,float)) or not math.isfinite(f) for f in factors)
                 or not 0<factors[0]<=factors[1]):
             raise ValueError('Invalid shell damage factors')
+        if self.missile is not None and (
+                not 0 < self.speed <= self.missile.max_speed
+                or not math.isfinite(self.max_distance) or self.max_distance <= 0
+                or not math.isfinite(self.gravity) or self.gravity < 0):
+            raise ValueError('Invalid missile speed, range or gravity')
 
     def power(self, distance):
         if self.kind=='HIGH_EXPLOSIVE':
@@ -289,7 +310,7 @@ class VehicleDefinition:
     configuration: VehicleConfiguration
     health_bonus: int = 0
     optional_devices: tuple[int, ...] = ()
-    provisions: tuple[int, ...] = ()  # server metadata; no public wire field established
+    provisions: tuple[int | None, ...] = ()  # ordered raw XML IDs for the owner's battle HUD
     crew_mastery: int | None = None  # None marks raw XML values, before battle calibration
     track_spec: TrackSpec | None = None  # installed chassis metadata; None if any field is absent
     # Selected gun HP and merged materialKinds chance; None without maxRegenHealth
@@ -625,13 +646,23 @@ def _shot_effects(game):
     return effects
 
 
-def _shell_effect(game, name):
+def _missile_flight(shot):
+    if shot.findtext('isATGM', '').strip().lower() != 'true':
+        return None
+    return MissileFlight(float(shot.findtext('maxSpeed', '')),
+                         float(shot.findtext('acceleration', '')),
+                         float(shot.findtext('turnSpeed', '')),
+                         float(shot.findtext('rotationalDeceleration', '')))
+
+
+def _shell_effect(game, name, missile=None):
     for index,(tag,tracer) in enumerate(_shot_effects(game)):
         if tag==name:
             # Native NativeShotEffectDict 0x7f3bb8 zeroes type+8 (enum 0x427705
             # shell=0); parser 0x7f2320 only overrides an explicit tracerType.
             # A projectile-only record (dangerousTracer) is therefore a shell.
-            if tracer is not None and tracer!='shell':
+            expected = ('atgm',) if missile is not None else (None, 'shell')
+            if tracer not in expected:
                 raise ValueError(f'Unsupported projectile tracer: {tracer}')
             return index
     raise ValueError(f'Unknown shell effect: {name}')
@@ -810,6 +841,7 @@ def _load_vehicle(game: Path, nation, name, configuration, allow_movable=False):
         kind = source.findtext('kind')
         if kind not in ('ARMOR_PIERCING','ARMOR_PIERCING_CR','HOLLOW_CHARGE','HIGH_EXPLOSIVE'):
             raise ValueError('Unsupported shell kind')
+        missile = _missile_flight(shot)
         shells.append(Shell((int(source.findtext('id'))<<8)|(nation_id<<4)|10,
             scalar(source,'caliber'),scalar(source,'damage/armor'),numbers(shot,'piercingPower',2),
             math.radians(scalar(source,'normalizationAngle')) if kind in ('ARMOR_PIERCING','ARMOR_PIERCING_CR') else None,
@@ -818,8 +850,8 @@ def _load_vehicle(game: Path, nation, name, configuration, allow_movable=False):
             kind,local_shot.tag,
             scalar(source,'piercingPowerLossFactorByDistance') if kind=='HOLLOW_CHARGE' else None,
             scalar(source,'explosionRadius') if kind=='HIGH_EXPLOSIVE' else None,
-            _shell_effect(game,source.findtext('effects')),
-            device_damage(scalar(source,'damage/devices'))))
+            _shell_effect(game,source.findtext('effects'),missile),
+            device_damage(scalar(source,'damage/devices')),missile=missile))
     if not shells:
         raise ValueError('Missing ammunition')
     ammunition = load_ammunition(game,nation,name,configuration)
@@ -831,7 +863,8 @@ def _load_vehicle(game: Path, nation, name, configuration, allow_movable=False):
             shells.append(Shell(spec.compact_id,spec.caliber,spec.damage_armor,spec.penetration,
                 spec.normalization,spec.ricochet,spec.speed,spec.gravity,spec.max_distance,
                 spec.kind,spec.tag,spec.penetration_loss_by_distance,spec.explosion_radius,
-                _shell_effect(game,spec.effect_name),device_damage(spec.damage_devices)))
+                _shell_effect(game,spec.effect_name,spec.missile),device_damage(spec.damage_devices),
+                missile=spec.missile))
     if any(s.kind=='HOLLOW_CHARGE' and (s.penetration_loss_by_distance is None or
            not math.isfinite(s.penetration_loss_by_distance) or s.penetration_loss_by_distance<0)
            for s in shells):
@@ -969,6 +1002,7 @@ class AmmunitionSpec:
     price_gold: int
     effect_name: str | None = None
     default_portion: float | None = None  # resolved shared gun/shots weight
+    missile: MissileFlight | None = None
 
 
 def load_ammunition(game: Path, nation='usa', name='M2_lt', configuration=None):
@@ -1051,7 +1085,7 @@ def _load_ammunition(game: Path, nation, name, configuration):
             angle('normalizationAngle'),angle('ricochetAngle'),
             optional(source,'explosionRadius'),optional(source,'piercingPowerLossFactorByDistance'),
             0 if gold else amount,amount if gold else 0,source.findtext('effects'),
-            optional(shot,'defaultPortion')))
+            optional(shot,'defaultPortion'),_missile_flight(shot)))
     return tuple(result)
 
 

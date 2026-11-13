@@ -92,6 +92,32 @@ PyBullet понадобятся MSVC Build Tools с компонентами C++
 1 GiB. При первом запуске системы брандмауэр может запросить доступ сервера
 к сети. Для локальной игры используются адреса loopback.
 
+## Как восстановить текстуры T49 П
+
+Скачайте три файла из Windows-депо Steam от 15 июня 2022 года. Вместе они
+занимают около 2 МБ. Сохраните этот список как `t49-textures.txt`.
+
+```text
+Data/3d/Tanks/USA/images/A100_T49.dx11.dds.dvpl
+Data/3d/Tanks/USA/images/A100_T49_NM.dx11.dds.dvpl
+Data/3d/Tanks/USA/CamouflageMasks/A100_T49_CM.dx11.pvr.dvpl
+```
+
+Запустите [DepotDownloader](https://github.com/SteamRE/DepotDownloader#parameters)
+и подтвердите вход в своём приложении Steam.
+
+```sh
+DepotDownloader -app 444200 -depot 444202 -manifest 8449057217499595862 -qr -filelist t49-textures.txt -dir t49-depot
+```
+
+Закройте игру. В настройках лаунчера нажмите **Восстановить текстуры T49 П**
+и выберите папку `t49-depot`. Лаунчер проверит SHA-256 файлов и установит
+их в уже подготовленный клиент. При ошибке SHA-256 скачайте файлы по команде
+выше и повторите импорт. После полной подготовки нового клиента повторите
+импорт из той же папки.
+
+Из терминала выполните `python -m solbreaker restore-t49-textures --lab /path/to/SolbreakerClient --source t49-depot`.
+
 ## Дополнительный запуск через WSL2
 
 Сервер работает внутри WSL2, клиент запускается обычным Windows EXE.

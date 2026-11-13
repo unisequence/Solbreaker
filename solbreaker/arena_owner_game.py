@@ -11,7 +11,8 @@ from .arena import Arena
 from .arena_commands import apply_input, decode_input
 from .arena_owner import (AddressedPayload, Command, CommandRejected, HandlerOutput,
                           MotionPayload, SettlementData, SettlementRecord, SpawnData)
-from .battle import event_messages, initial_messages, motion_messages, spawn_batches, reconnect_batches
+from .battle import (event_messages, initial_messages, motion_messages, present_vehicles,
+                     spawn_batches, reconnect_batches)
 from .collision import CollisionScene
 from .map_catalog import load_map_spec
 from .map_cache import MapCache
@@ -59,6 +60,8 @@ def snapshot(arena: Arena, events=(), *, account_id=None) -> bytes:
         # mirror as a full snapshot at this boundary.
         state['flags'] = tuple((eid, v.flags) for eid, v in sorted(arena.vehicles.items()))
     else:
+        if getattr(arena, 'practice', False):
+            state['practice_spawned'] = tuple(sorted(arena.practice_spawned))
         capture = getattr(arena, 'base_capture', None)
         state['base_capture'] = capture.view() if capture is not None else None
         supremacy = getattr(arena, 'supremacy', None)
@@ -81,7 +84,7 @@ class GameArenaHandler:
 
     def _observation(self, command, events=()):
         compact = (self.compact_inputs and command.op in ('control','aim','aim_entity',
-                   'aim_entity_local','recon_aim','recon_clear') and not events and not self.arena.events
+                   'aim_entity_local','recon_aim','recon_clear','sandbox') and not events and not self.arena.events
                    and self.arena.started and not self.arena.finished_at)
         return snapshot(self.arena,events,account_id=command.account_id if compact else None)
 
@@ -133,7 +136,7 @@ class GameArenaHandler:
             data = SpawnData(self.arena.result_id, command.account_id, self.arena.epoch,
                              initial_messages(self.arena, player), batches)
             return HandlerOutput(self.arena.result_id, snapshot(self.arena), (), spawn=data)
-        if command.account_id in self._reconnecting and command.op in _KINDS:
+        if command.account_id in self._reconnecting and (command.op in _KINDS or command.op == 'sandbox'):
             if command.op == 'ready':
                 # Native GunRotator/GameContext is bound only after world ready.
                 # Sample the live timers here, after the loading interval.
@@ -166,7 +169,7 @@ class GameArenaHandler:
             from .recon_wire import encode
             sequence = struct.unpack('<I', command.payload)[0]
             roster = tuple(RosterVehicle(vehicle.entity_id, vehicle.team, vehicle.alive)
-                           for vehicle in self.arena.vehicles.values())
+                           for _, vehicle in present_vehicles(self.arena))
             observer = self.arena.players[command.account_id].vehicle_id
             payload = encode(build_recon_snapshot(
                 self.arena.recon, roster, observer,
@@ -180,6 +183,9 @@ class GameArenaHandler:
         elif command.op in ('leave', 'disconnect'):
             self.arena.leave(command.account_id, now=command.at,
                              reason='leave' if command.op == 'leave' else 'disconnect')
+        elif command.op == 'sandbox':
+            from .sandbox import Control
+            self.arena.sandbox_control(command.account_id, Control.decode(command.payload))
         elif command.op in _KINDS:
             input_at = command.at if command.op == 'ready' else self.arena.last_tick
             decoded = decode_input(command.account_id, _KINDS[command.op], command.payload, input_at)
@@ -264,6 +270,8 @@ class GameArenaFactory:
     bot_scene_settings: tuple = ()
     prebattle_seconds: float = 0.
     map_cache: MapCache | None = None
+    sandbox_enabled: bool = False
+    room_mode: str = 'encounter'
 
     @staticmethod
     def _configure(scene, settings):
@@ -320,7 +328,8 @@ class GameArenaFactory:
                           recon_game=self.game if self.recon_enabled else None,
                           bot_roster=self.bot_roster, bot_game=self.game,
                           bot_scene_settings=self.bot_scene_settings,
-                          prebattle_seconds=self.prebattle_seconds, parallel_native_build=True)
+                          prebattle_seconds=self.prebattle_seconds, parallel_native_build=True,
+                          sandbox_enabled=self.sandbox_enabled, room_mode=self.room_mode)
             roster_ms = (time.monotonic()-roster_started)*1000
             while arena.building:
                 arena.advance_build()

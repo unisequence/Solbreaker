@@ -35,7 +35,7 @@ def prepare(game, destination, profile, *, windows=False, proton=None, steam=Non
     source_facts = resource_tree_facts(game) if windows else None
     if windows and shutil.disk_usage(destination.parent).free < source_facts['allocated_bytes'] + (1 << 30):
         raise ValueError('Client copy requires the full game size plus 1 GiB of free space')
-    from . import client_patch, client_recon, client_tls, windows_profile_patch
+    from . import client_atgm_aim, client_patch, client_recon, client_sandbox, client_tls, windows_profile_patch
     from . import replay_patch, stats_patch, client_ui, replay_ui, scene_quality
     from .client_registration import install as install_registration
     with tempfile.TemporaryDirectory(prefix='.solbreaker-client-', dir=destination.parent) as temporary:
@@ -86,7 +86,11 @@ def prepare(game, destination, profile, *, windows=False, proton=None, steam=Non
                         windows_profile=windows_profile_patch.METADATA)
         atomic_write(manifest_path, (json.dumps(manifest, indent=2)+'\n').encode())
         client_tls.upgrade(stage)
+        manifest = json.loads(manifest_path.read_text())
+        manifest = client_atgm_aim.upgrade(stage, manifest, manifest['client_exe_sha256'])
+        client_sandbox.upgrade(stage, manifest, manifest['client_exe_sha256'])
         client_ui.install_ui_guards(stage)
+        client_ui.install_training_maps(stage, manifest)
         replay_ui.install(stage)
         scene_quality.install(stage)
         install_registration(stage)

@@ -64,9 +64,10 @@ def regions_config(regions,network):
     return regions
 
 
-def atomic_write(path,data):
+def atomic_write(path,data,*,replace_symlink=False):
     path=Path(path)
-    if path.is_symlink():raise ValueError(f'Refusing to overwrite a resource symlink: {path}')
+    if path.is_symlink() and not replace_symlink:
+        raise ValueError(f'Refusing to overwrite a resource symlink: {path}')
     fd,name=tempfile.mkstemp(prefix='.'+path.name+'.',dir=path.parent)
     try:
         with os.fdopen(fd,'wb') as stream:stream.write(data)

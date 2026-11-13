@@ -62,8 +62,11 @@ MARKER_METADATA = {
 def _is_recon_client(current, recorded):
     """Recognize the exact final image and its one recoverable predecessor."""
     from solbreaker import client_recon
+    from solbreaker.client_atgm_aim import recognizes as recognizes_atgm_aim
+    from solbreaker.client_sandbox import recognizes as recognizes_sandbox
     from solbreaker.client_tls import recognizes as recognizes_tls
-    if recognizes_tls(current, recorded):
+    if (recognizes_sandbox(current, recorded) or recognizes_atgm_aim(current, recorded)
+            or recognizes_tls(current, recorded)):
         return True
     from solbreaker.windows_profile_patch import recognizes
     if recognizes(current, recorded):
