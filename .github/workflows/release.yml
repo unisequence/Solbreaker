@@ -69,17 +69,26 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ github.ref }}
+          persist-credentials: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: solbreaker-release
+          path: ${{ runner.temp }}/solbreaker-release
       - name: Publish verified assets
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
+          notes="$RUNNER_TEMP/release-notes.md"
+          git tag -l --format='%(contents)' "$GITHUB_REF_NAME" > "$notes"
+          test -s "$notes"
+          cd "$RUNNER_TEMP/solbreaker-release"
           sha256sum --check SHA256SUMS
           version="${GITHUB_REF_NAME#v}"
-          options=(--verify-tag --title "Solbreaker $version" --notes-from-tag)
+          options=(--verify-tag --title "Solbreaker $version" --notes-file "$notes")
           if [[ "$version" == *-* ]]; then
             options+=(--prerelease)
           fi
