@@ -38,8 +38,8 @@ class TrainingRoomBotsTests(unittest.TestCase):
         self.native.create(self.endpoint.clients[1], payload)
         return self.endpoint.rooms.current(1)
 
-    def edit(self, description, client=1):
-        payload = (struct.pack('<HHB4qB', 300, 406, 4, 7, 0, 0, 0, 2)
+    def edit(self, description, client=1, *, map_selector=7):
+        payload = (struct.pack('<HHB4qB', 300, 406, 4, map_selector, 0, 0, 0, 2)
                    + packed_blob(b'Training') + packed_blob(description))
         self.assertTrue(self.native.command(self.endpoint.clients[client], 149, payload, 300, 406))
 
@@ -69,6 +69,17 @@ class TrainingRoomBotsTests(unittest.TestCase):
         self.assertEqual((room.map_id, room.bot_counts, room.description), (7, (2, 3), 'New notes'))
         self.edit(b'Human players only')
         self.assertEqual((room.bot_counts, room.description), ((0, 0), 'Human players only'))
+
+    def test_map_change_accepts_the_native_tagged_selector(self):
+        self.endpoint.map_catalog[101] = 'rudniki_evening'
+        room = self.create(b'[bots 7:7] Practice')
+        self.edit(b'[room-form] [lives unlimited] [ammo unlimited] [time endless] '
+                  b'[bots 7:7] [notes] Practice', map_selector=0xffff0065)
+        self.assertEqual(room.map_id, 101)
+        self.assertEqual(room.bot_counts, (7, 7))
+        self.assertEqual(room.battle_settings, RoomBattleSettings(True, 0, True))
+        self.edit(b'[room-options] [time 12]', map_selector=0xffffffff)
+        self.assertEqual(room.map_id, 101)
 
     def test_room_rules_reach_the_shared_arena_and_are_saved_on_edit(self):
         room = self.create(b'[mode gravity] [bots 0:1] Wasteland')
@@ -104,6 +115,15 @@ class TrainingRoomBotsTests(unittest.TestCase):
         self.assertEqual((room.description, room.bot_counts), ('', (0, 0)))
         self.assertEqual(room.battle_mode, 'gravity')
         self.assertEqual(room.battle_settings, RoomBattleSettings(True, 12))
+
+    def test_unlimited_ammo_round_trips_and_can_be_disabled(self):
+        room = self.create(b'[room-form] [ammo unlimited] [bots 0:1] [notes] Practice')
+        self.assertTrue(room.battle_settings.unlimited_ammo)
+        self.assertIn('[ammo unlimited]', self.native.settings(room)['comment'])
+        self.edit(b'[room-form] [bots 0:1] [notes] Edited with an older client')
+        self.assertTrue(room.battle_settings.unlimited_ammo)
+        self.edit(b'[room-form] [ammo limited] [bots 0:1] [notes] Practice')
+        self.assertFalse(room.battle_settings.unlimited_ammo)
 
     def test_room_form_counts_are_independent_of_notes(self):
         room = self.create(b'[room-form] [mode gravity] [time endless] [bots 2:3] [notes] [bots 7:7] Notes')

@@ -28,7 +28,7 @@ from .battle import (initial_messages, spawn_batches, reconnect_batches, motion_
 from .arena import ArenaManager
 from .vehicle_data import VehicleConfiguration
 from .terrain import MapTerrain
-from .map_catalog import load_map_spec, training_map_catalog
+from .map_catalog import WEATHER_MAPS, load_map_spec, training_map_catalog
 from .dev_map import dev_map_specs_for_lab
 from .motion import UPDATE_HZ, SIMULATION_INTERVAL, game_tick, tick_sync
 
@@ -1031,7 +1031,8 @@ class BaseEndpoint(asyncio.DatagramProtocol):
                                   entity_id=event.actor,**event.data)
             elif event.kind == 'destruction':
                 self.server.event('training_destructibles',destroyed=sorted(arena.destructions))
-            elif event.kind in ('airborne','landed','auto_recovered','practice_spawn','gravity_jump'):
+            elif event.kind in ('airborne','landed','auto_recovered','practice_spawn',
+                                'sandbox_teleport','gravity_jump'):
                 self.server.event('training_'+event.kind,entity_id=event.actor,**event.data)
             elif event.kind == 'ground_impact':
                 self.server.event('training_ground_impact', arena_id=arena.result_id,
@@ -1385,9 +1386,9 @@ class BaseEndpoint(asyncio.DatagramProtocol):
             if training is not None and map_id in (None, -1, 0):
                 if training.bots_enabled and training.map is None:
                     from secrets import choice
-                    available = tuple(ident for ident in self.map_catalog
-                        if training.battle_mode != 'supremacy'
-                        or self.resolve_map_spec(ident).strategic_points)
+                    available = tuple(ident for ident, key in self.map_catalog.items()
+                        if key not in WEATHER_MAPS and (training.battle_mode != 'supremacy'
+                            or self.resolve_map_spec(ident).strategic_points))
                     if not available:
                         raise ValueError('No available maps support this battle mode')
                     map_id = choice(available)

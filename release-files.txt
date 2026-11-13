@@ -330,11 +330,13 @@ solbreaker/catalog.py
 solbreaker/certificate_authorities.py
 solbreaker/cipher.py
 solbreaker/cli.py
+solbreaker/client_atmosphere.py
 solbreaker/client_atgm_aim.py
 solbreaker/client_battle_settings.py
 solbreaker/client_bot_mode.py
 solbreaker/client_branding.py
 solbreaker/client_lock.py
+solbreaker/client_motion_blur.py
 solbreaker/client_patch.py
 solbreaker/client_provisions.py
 solbreaker/client_recon.py
@@ -528,5 +530,6 @@ tools/package_source.py
 tools/refresh_wsl_network.py
 tools/setup.py
 tools/setup_state.py
+tools/sync_release_readmes.py
 tools/windows_bundle.py
 tools/windows_python.ps1

@@ -5,7 +5,11 @@
 A self-hosted multiplayer tank server with a desktop launcher and terminal interface.
 **Compatible with build 11.21.0.1235_7376187.**
 
-[Download the alpha](https://github.com/unisequence/Solbreaker/releases/tag/v0.1.0-alpha.5) ·
+<!-- release-download:start -->
+[Download 0.1.0-alpha.6](https://github.com/unisequence/Solbreaker/releases/tag/v0.1.0-alpha.6)
+<!-- release-download:end -->
+
+[All releases](https://github.com/unisequence/Solbreaker/releases) ·
 [Report a bug](https://github.com/unisequence/Solbreaker/issues/new/choose) ·
 [Руководство на русском](README.ru.md)
 
@@ -24,7 +28,7 @@ adapters. Their scope and validation are described in [Client patches](docs/CLIE
 
 ### Windows x64
 
-1. Download `Solbreaker-0.1.0-alpha.5-windows-x64.zip` from the release page.
+1. Download `Solbreaker-<version>-windows-x64.zip` from the release page.
 2. Extract it into a writable folder and open **`launch-gui.vbs`**.
 3. Click **Set up game**. Select your compatible game folder and a separate
    destination for the Solbreaker client.

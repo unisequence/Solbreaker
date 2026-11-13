@@ -5,7 +5,7 @@ Only maps whose scene and terrain metadata and first-wave spawn records match
 the loader's required structure are admitted here. Physical spawn clearance
 and native driving are tracked separately in the map validation notes.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import lru_cache
 import math
 from pathlib import Path, PurePosixPath
@@ -43,6 +43,15 @@ _SUPPORTED = {
 }
 MAP_CATALOG_RESOURCE = "maps.yaml.dvpl"
 _HIDDEN_MAPS = frozenset(key for key, ident in _SUPPORTED.items() if 44 <= ident <= 72)
+# Stable IDs also identify the variant in native replay recordings.
+WEATHER_MAPS = {
+    'rudniki_evening': (101, 'rudniki', 'evening'),
+    'rudniki_fog': (102, 'rudniki', 'fog'),
+    'amigosville_evening': (103, 'amigosville', 'evening'),
+    'amigosville_fog': (104, 'amigosville', 'fog'),
+    'italy_evening': (105, 'italy', 'evening'),
+    'italy_fog': (106, 'italy', 'fog'),
+}
 
 
 def map_team_capacity(map_id):
@@ -104,7 +113,7 @@ def supported_maps(game=None):
     overlay, so it naturally stays out of the pinned game view.
     """
     if game is None:
-        return tuple(_SUPPORTED)
+        return (*_SUPPORTED, *WEATHER_MAPS)
     return tuple(training_map_catalog(game).values())
 
 
@@ -118,6 +127,12 @@ def expose_training_maps(document):
             row["avaliableInTrainingRoom"] = True
             changed = True
     return changed
+
+
+def weather_map_row(row, key):
+    ident, _, _ = WEATHER_MAPS[key]
+    scene = PurePosixPath(row['localName']).with_name(key + '.sc2')
+    return dict(row, id=ident, localName=str(scene), avaliableInTrainingRoom=True)
 
 
 def training_map_catalog(game):
@@ -140,13 +155,22 @@ def training_map_catalog(game):
         if row["id"] in result:
             raise ValueError("Training map catalog contains a duplicate map ID")
         result[row["id"]] = key
+    for key, (ident, original, _) in WEATHER_MAPS.items():
+        if _SUPPORTED[original] in result:
+            if ident in result or any(isinstance(row, dict) and row.get('id') == ident
+                                      for name, row in maps.items() if name != key):
+                raise ValueError(f'Weather map ID {ident} is already assigned')
+            result[ident] = key
     return result
 
 
 def load_map_spec(game, key="rudniki"):
     game = Path(game).resolve()
+    if isinstance(key, str) and key in WEATHER_MAPS:
+        ident, original, _ = WEATHER_MAPS[key]
+        return replace(_load_map_spec(str(game), original), key=key, map_id=ident)
     if not isinstance(key, str) or key not in _SUPPORTED:
-        raise ValueError("training_map must be one of: " + ", ".join(_SUPPORTED))
+        raise ValueError("training_map must be one of: " + ", ".join(supported_maps()))
     return _load_map_spec(str(game), key)
 
 

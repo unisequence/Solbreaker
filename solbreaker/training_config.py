@@ -36,10 +36,13 @@ class RoomBattleSettings:
     unlimited_lives: bool = False
     # None uses the mode default; zero has no time limit.
     minutes: int | None = None
+    unlimited_ammo: bool = False
 
     def __post_init__(self):
         if type(self.unlimited_lives) is not bool:
             raise ValueError('Unlimited lives must be boolean')
+        if type(self.unlimited_ammo) is not bool:
+            raise ValueError('Unlimited ammunition must be boolean')
         if self.minutes is not None and (type(self.minutes) is not int
                                          or not 0 <= self.minutes <= MAX_ROOM_MINUTES):
             raise ValueError(f'Choose 1 to {MAX_ROOM_MINUTES} minutes or an endless battle')
@@ -59,8 +62,12 @@ class TrainingConfig:
     difficulty: str = DEFAULT_DIFFICULTY
     map: str | None = None
     battle_mode: str = 'encounter'
+    unlimited_lives: bool = False
+    minutes: int | None = None
+    unlimited_ammo: bool = False
 
     def __post_init__(self):
+        RoomBattleSettings(self.unlimited_lives, self.minutes, self.unlimited_ammo)
         if type(self.battle_mode) is not str or self.battle_mode not in BATTLE_MODES:
             raise ValueError('Battle mode must be one of ' + ', '.join(BATTLE_MODES))
         if type(self.mode) is not str or self.mode not in MODES:
@@ -74,6 +81,10 @@ class TrainingConfig:
         if self.map is not None and (type(self.map) is not str
                                      or not _MAP_KEY.fullmatch(self.map)):
             raise ValueError('Invalid training map key')
+
+    @property
+    def battle_settings(self):
+        return RoomBattleSettings(self.unlimited_lives, self.minutes, self.unlimited_ammo)
 
     @property
     def bots_enabled(self):

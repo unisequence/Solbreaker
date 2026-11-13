@@ -7,6 +7,7 @@ from .account import pickle_document, variable16
 from .mercury import packed_blob, read_blob, variable8
 from .motion import vehicle_snapshot
 from .destructibles import DestructibleState
+from .sandbox import FAST_RELOAD_SECONDS, TARGET_PLACED, TELEPORTED, advertisement as sandbox_advertisement
 
 
 AVATAR_ID = 101
@@ -318,6 +319,15 @@ def team_kill_score(arena, player):
     return b'\x13' + variable8(96, b'\x04TFS1FRAG' + struct.pack('<II', *totals) + b'\0')
 
 
+VOICE_ENEMY_KILLED = 0x22
+VOICE_TRACK_DESTROYED = 0x4f
+
+
+def crew_voice_message(cue):
+    # Avatar37 routes the event to the pinned client's existing sound queue.
+    return b'\x13' + variable8(96, b'\x03TFS1VOIC' + struct.pack('<I', cue) + b'\0')
+
+
 def battle_hints_message():
     """Refresh the native battle HUD after its visibility bindings are ready.
 
@@ -479,6 +489,8 @@ def gun_reload_configuration(vehicle, *, full_reload_factor=None):
     # stays on its existing boost/NewAutoloader timing path.
     values = (weapon.reload/full_reload_factor, weapon.interval/factor*vehicle.interval_factor,
               *(t/full_reload_factor for t in times))
+    if vehicle.sandbox_fast_reload:
+        values = (FAST_RELOAD_SECONDS,) * len(values)
     if len(times) > 254 or not all(math.isfinite(v) and v > 0 for v in values):
         raise ValueError('Invalid pump reload configuration')
     return avatar_method(35, struct.pack('<I2fB', vehicle.entity_id, *values[:2], len(times))
@@ -743,10 +755,14 @@ def event_messages(arena, player, events):
                 result += movable_armor_states_message(actor)
                 result += vehicle_property(entity,3,struct.pack('<h',actor.health))
                 result += vehicle_property(entity,1,b'\1')
+                # Refresh observers' health/appearance listeners after reviving the model.
+                result += health_changed(entity, actor.health, 0)
                 # Update the roster alive flag as well as the world entity.
                 # Native equipment input consults the arena's player record.
                 result += arena_update(11, pb_blob(10, pb_blob(1, info)))
                 result += arena_update(20, pb_blob(6, pb_int(1, entity)))
+            if d.get('placed_by') == player.vehicle_id:
+                result += sandbox_advertisement(arena, notice=TARGET_PLACED)
         elif event.kind=='ready' and own:
             allied_reload.update(v.entity_id for v in arena.vehicles.values()
                                  if v.team == player.team and v.entity_id != player.vehicle_id)
@@ -774,13 +790,12 @@ def event_messages(arena, player, events):
         elif event.kind=='autoaim_lost' and own:
             # Avatar client method 0, decoder 0x177dcec: one bool byte.
             result += avatar_method(0,b'\0')
-        elif event.kind in ('auto_recovered','orientation_rebased') and actor is not None:
-            # Recovery already replaces the authoritative pose in one step.
-            # Ordinary volatile updates interpolate that roll through terrain;
-            # A handoff can also relabel an identical rotation by a full turn.
-            # forcedPosition marks either numerical discontinuity for viewers.
+        elif event.kind in ('auto_recovered','orientation_rebased','sandbox_teleport') and actor is not None:
+            # forcedPosition snaps viewers to an instantaneous pose change.
             result += b'\x14'+struct.pack('<III6f',event.actor,arena.space_id,0,
                 *d['position'],d['roll'],d['pitch'],d['yaw'])
+            if own and event.kind == 'sandbox_teleport':
+                result += sandbox_advertisement(arena, notice=TELEPORTED)
         elif event.kind=='period':
             result += period_message(d['period'],d['seconds'],d['winner'],
                                      0 if getattr(arena, 'endless', False) else getattr(arena, 'battle_seconds', 600),
@@ -818,6 +833,7 @@ def event_messages(arena, player, events):
                 # Native 6->4 does not clear the pump flag or partial progress;
                 # a known 0->4 does. Send state0 (nominal interval B) first.
                 result += avatar_method(13,struct.pack('<IBf',event.actor,0,
+                    FAST_RELOAD_SECONDS if actor.sandbox_fast_reload else
                     actor.definition.weapon.interval/actor.reload_speed_factor*actor.interval_factor))
             result += avatar_method(13,struct.pack('<IBf',event.actor,4 if d['delay'] else 0,
                                                 d['delay'] or d.get('total',0.)))
@@ -835,12 +851,13 @@ def event_messages(arena, player, events):
                 continue
             if d['remaining'] > 0:
                 state,value,nominal = 6,d['remaining'],d['remaining']
-                result += config  # Refresh live consumable factors first.
             elif d['readyGun']:
                 state,value = 0,0.
-                nominal = actor.definition.weapon.interval/actor.reload_speed_factor*actor.interval_factor
+                nominal = (FAST_RELOAD_SECONDS if actor.sandbox_fast_reload else
+                           actor.definition.weapon.interval/actor.reload_speed_factor*actor.interval_factor)
             else:
                 continue
+            result += config
             result += avatar_method(13,struct.pack('<IBf',event.actor,state,nominal))
             result += arena_update(15,pb_blob(14,pb_blob(1,pb_int(1,event.actor)+pb_int(2,state)
                 +varint((3<<3)|5)+struct.pack('<f',value)+pb_int(4,d['clip']))))
@@ -853,6 +870,8 @@ def event_messages(arena, player, events):
             result += module_state_messages(event.actor, d['critical'], d['destroyed'])
             if own:
                 result += module_damage_message(event.actor, d['reason'], d['extra'])
+                if d.get('track_just_broke'):
+                    result += crew_voice_message(VOICE_TRACK_DESTROYED)
         elif event.kind=='module_repair' and own:
             result += module_repair_message(event.actor, d['extra'], d['progress'], d['duration'])
         elif event.kind=='state_modifiers':
@@ -906,6 +925,9 @@ def event_messages(arena, player, events):
             result += vehicle_property(event.target,3,struct.pack('<h',d['health']))
             result += health_changed(event.target,d['health'],event.actor)
         elif event.kind=='killed':
+            victim = arena.vehicles.get(event.target)
+            if own and actor is not None and victim is not None and victim.team != actor.team:
+                result += crew_voice_message(VOICE_ENEMY_KILLED)
             result += vehicle_property(event.target,1,b'\0')
             # The vehicle still dies in the world. Keep its roster entry active
             # while it waits for the next life and update kills independently.
@@ -946,6 +968,8 @@ def _reconnect_reload_parts(arena, vehicle):
     config = gun_reload_configuration(vehicle, full_reload_factor=full_factor)
     remaining = max(0., vehicle.reload_at-now) if vehicle.reload_at else 0.
     if vehicle.pump_times:
+        nominal = (FAST_RELOAD_SECONDS if vehicle.sandbox_fast_reload else
+                   vehicle.definition.weapon.interval / vehicle.reload_speed_factor * vehicle.interval_factor)
         if vehicle.pump_at:
             refill = max(0., vehicle.pump_at-now)
             return (config,
@@ -954,11 +978,9 @@ def _reconnect_reload_parts(arena, vehicle):
                         + pb_int(2, 6) + varint((3 << 3) | 5) + struct.pack('<f', refill)
                         + pb_int(4, vehicle.clip)))))
         if remaining:
-            nominal = vehicle.definition.weapon.interval / vehicle.reload_speed_factor * vehicle.interval_factor
             return (config,
                     avatar_method(13, struct.pack('<IBf', vehicle.entity_id, 0, nominal)),
                     avatar_method(13, struct.pack('<IBf', vehicle.entity_id, 4, remaining)))
-        nominal = vehicle.definition.weapon.interval / vehicle.reload_speed_factor * vehicle.interval_factor
         return (config, avatar_method(13, struct.pack('<IBf', vehicle.entity_id, 0, nominal)))
     # A normal ready gun deliberately receives state0 plus its nominal next
     # reload value, matching the existing ready/reload path.

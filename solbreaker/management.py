@@ -10,6 +10,7 @@ import sys
 import threading
 
 from .connection import atomic_write
+from .client_atmosphere import PRESETS
 
 PROJECT = Path(__file__).resolve().parents[1]
 
@@ -36,6 +37,7 @@ class Settings:
     remember_login: bool = True
     server_name: str = 'Solbreaker'
     sandbox: bool = False
+    map_lighting: str = 'original'
 
     def __post_init__(self):
         for name, value in vars(self).items():
@@ -55,6 +57,9 @@ class Settings:
             elif name == 'play_mode':
                 if value not in ('auto', 'local', 'remote'):
                     raise ValueError('Выбери свой или внешний сервер')
+            elif name == 'map_lighting':
+                if value not in PRESETS:
+                    raise ValueError('Выбери освещение карт')
             elif name == 'server_name':
                 from .server_identity import validate_name
                 validate_name(value)
@@ -82,6 +87,8 @@ class Settings:
             if path.stat().st_size > 65536:
                 raise ValueError('Файл настроек слишком большой')
             values = json.loads(path.read_text())
+            if isinstance(values, dict):
+                values.pop('sunset_intensity', None)
             if not isinstance(values, dict) or set(values)-set(cls.__dataclass_fields__):
                 raise ValueError('Неизвестные поля в файле настроек')
             return cls(**values)
@@ -171,6 +178,7 @@ def command(action, settings, *, windows=None, interface=None):
     if action == 'play':
         args = cli + ['launch-client', '--lab', client]
         args.append('--auto-login' if settings.remember_login else '--no-auto-login')
+        args += ['--lighting', settings.map_lighting]
         if server_url:
             args += ['--url', server_url]
         elif connection:

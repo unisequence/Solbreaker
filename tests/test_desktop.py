@@ -240,6 +240,8 @@ class DesktopTests(unittest.TestCase):
         server = Mock(running=True, started=True)
         manager.server = server
         self.window.fields['server_name'].setText('My test server')
+        lighting = self.window.fields['map_lighting']
+        lighting.setCurrentIndex(lighting.findData('evening'))
         self.window.log.setPlainText('raw diagnostic log')
         self.window.select(1)
         self.window.resize(1000, 680)
@@ -252,11 +254,13 @@ class DesktopTests(unittest.TestCase):
         self.assertEqual(self.window.heading.text(), 'My server')
         self.assertEqual(self.window.log.toPlainText(), 'raw diagnostic log')
         self.assertEqual(self.window.fields['server_name'].text(), 'My test server')
+        self.assertEqual(self.window.fields['map_lighting'].currentText(), 'Sunset')
         self.assertEqual(self.window.server_label.text(), 'Server running')
         self.assertEqual(self.window.size().width(), 1000)
         saved = Settings.load(self.config)
         self.assertEqual(saved.gui_language, 'en')
         self.assertEqual(saved.server_name, 'My test server')
+        self.assertEqual(saved.map_lighting, 'evening')
         manager.server = None
         self.window.language_picker.setCurrentIndex(0)
         self.app.processEvents()

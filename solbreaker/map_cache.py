@@ -60,13 +60,17 @@ def _digest(path):
 
 
 def _fingerprint(spec, terrain):
+    from .map_catalog import WEATHER_MAPS, _SUPPORTED
+
     source_files = (spec.scene_path, spec.geometry_path, spec.lka_path, spec.heightmap_path,
                     spec.mkm_path, spec.effects_path)
     # The caller may have decoded terrain before a local asset edit. Include
     # the actual samples used to export its collision mesh as well as the
     # source files that were present at the time of this lookup.
     heights = np.asarray(terrain.heights, dtype='<u2')
-    identity = (FORMAT, spec.map_id, spec.key, spec.state_tag, spec.allow_empty_obstacles,
+    key = WEATHER_MAPS[spec.key][1] if spec.key in WEATHER_MAPS else spec.key
+    map_id = _SUPPORTED[key] if key != spec.key else spec.map_id
+    identity = (FORMAT, map_id, key, spec.state_tag, spec.allow_empty_obstacles,
                 hashlib.sha256(heights.tobytes()).hexdigest(),
                 spec.bounds, spec.landscape_bbox, [_digest(Path(path)) for path in source_files])
     return hashlib.sha256(json.dumps(identity, separators=(',', ':')).encode()).hexdigest()

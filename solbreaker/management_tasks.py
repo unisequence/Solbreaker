@@ -19,7 +19,7 @@ from .platform_runtime import require_executable_idle
 from .storage import account_access
 
 
-def launch_client(lab, *, auto_login=None, profile=None, url=None):
+def launch_client(lab, *, auto_login=None, profile=None, url=None, lighting=None):
     with client_configuration_access(lab):
         lab, manifest = ensure_lab(lab)
         executable = lab/'client/wotblitz.exe'
@@ -41,7 +41,21 @@ def launch_client(lab, *, auto_login=None, profile=None, url=None):
         from .client_ui import install_sandbox_bindings, install_server_name, install_training_maps
         manifest = install_sandbox_bindings(lab, manifest)
         install_training_maps(lab, manifest)
+        from .client_atmosphere import apply_preset, install_weather_maps
+        manifest = install_weather_maps(lab, manifest)
         install_server_name(lab)
+        legacy_lighting = os.environ.get('SOLBREAKER_MINES_LIGHTING', 'day') if lighting is None else 'day'
+        if legacy_lighting not in ('day', 'evening'):
+            raise ValueError('SOLBREAKER_MINES_LIGHTING must be day or evening')
+        lighting = lighting or ('evening' if legacy_lighting == 'evening' else 'original')
+        if (lighting != 'original' or manifest.get('mines_evening_overlay')
+                or manifest.get('map_lighting_overlays')):
+            _, manifest = ensure_lab(lab)
+            apply_preset(lab, manifest, lighting, mines_only=legacy_lighting == 'evening')
+        if manifest.get('client_exe_sha256') == client_sandbox.OUTPUT_SHA256:
+            from .client_motion_blur import install_motion_blur
+            _, manifest = ensure_lab(lab)
+            install_motion_blur(lab, manifest)
         if auto_login is not None:
             from .login_preferences import configure_automatic_login
             configure_automatic_login(manifest['documents'], auto_login)
