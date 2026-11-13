@@ -8,9 +8,11 @@ from solbreaker.arena import Arena, GRAVITY_JUMP_SPEC
 from solbreaker.consumables import COOLDOWN, ConsumableState
 from solbreaker.arena_owner import Command
 from solbreaker.arena_owner_game import GameArenaHandler
-from solbreaker.battle import present_vehicles, reconnect_message_parts, vehicle_property
+from solbreaker.battle import (arena_update, event_messages, pb_blob, pb_int,
+                               present_vehicles, reconnect_message_parts, team_kill_score,
+                               vehicle_info, vehicle_property)
 from solbreaker.collision import Pose
-from solbreaker.training_config import TrainingConfig
+from solbreaker.training_config import RoomBattleSettings, TrainingConfig
 
 
 def report(token, sequence=1, flags=0, shot=0, direction=(0., 0., 0.)):
@@ -58,6 +60,72 @@ class SandboxTests(TestCase):
         arena.leave(1, reason='leave')
         self.assertTrue(arena.finished_at)
         self.assertEqual(arena.results(), [])
+
+    def test_training_room_waits_for_last_player_even_if_one_team_leaves(self):
+        terrain = SimpleNamespace(height=lambda x, z: 0.)
+        arena = Arena([dict(id=1, nickname='One'), dict(id=2, nickname='Two')],
+                      b'', terrain, now=1., solo=False, room_settings=RoomBattleSettings())
+        self.addCleanup(arena.close)
+        owner = GameArenaHandler(arena, None)
+        owner.apply(Command('ready', 1., 1))
+        owner.apply(Command('ready', 1., 2))
+        owner.apply(Command('leave', 2., 1))
+        arena._fixed_step(2.)
+        self.assertFalse(arena.finished_at)
+        owner.apply(Command('leave', 3., 2))
+        self.assertEqual((arena.finished_at, arena.winner, arena.finish_reason), (3., 0, 'leave'))
+
+    def test_training_room_lives_and_clock_are_independent(self):
+        terrain = SimpleNamespace(height=lambda x, z: 0.)
+        for minutes in (0, 1):
+            with self.subTest(minutes=minutes):
+                arena = Arena([dict(id=1, nickname='One'), dict(id=2, nickname='Two')],
+                              b'', terrain, now=1., solo=False,
+                              room_settings=RoomBattleSettings(True, minutes))
+                self.addCleanup(arena.close)
+                arena.ready(1, 1.)
+                arena.ready(2, 1.)
+                self.assertEqual(next(e.data['seconds'] for e in arena.events if e.kind == 'period'),
+                                 60 * minutes)
+                vehicle = arena.vehicle_for(1)
+                arena._damage_health(vehicle, vehicle.health, None, 2., shell_hit=False)
+                arena._fixed_step(2.)
+                self.assertEqual(arena.respawn_at, {vehicle.entity_id: 5.})
+                self.assertFalse(arena.finished_at)
+                arena._fixed_step(700.)
+                self.assertEqual(arena.finish_reason, 'timeout' if minutes else '')
+
+    def test_respawn_restores_the_native_roster_before_notifying_the_avatar(self):
+        terrain = SimpleNamespace(height=lambda x, z: 0.)
+        arena = Arena([dict(id=1, nickname='Pilot')], b'', terrain, now=1., sandbox_enabled=True)
+        self.addCleanup(arena.close)
+        player = arena.players[1]
+        vehicle = arena.vehicle_for(1)
+        arena.emit('practice_spawn', vehicle.entity_id, first=False, repaired=[])
+        data = event_messages(arena, player, arena.drain_events())
+        info = vehicle_info(vehicle.entity_id, 'Pilot', 1, 1, b'')
+        roster_update = arena_update(11, pb_blob(10, pb_blob(1, info)))
+        resurrection = arena_update(20, pb_blob(6, pb_int(1, vehicle.entity_id)))
+        self.assertIn(roster_update + resurrection, data)
+
+    def test_unlimited_lives_keep_roster_active_and_send_kill_statistics(self):
+        terrain = SimpleNamespace(height=lambda x, z: 0.)
+        for unlimited in (False, True):
+            with self.subTest(unlimited=unlimited):
+                arena = Arena([dict(id=1, nickname='One'), dict(id=2, nickname='Two')],
+                              b'', terrain, now=1., solo=False,
+                              room_settings=RoomBattleSettings(unlimited))
+                self.addCleanup(arena.close)
+                killer, target = arena.vehicle_for(1), arena.vehicle_for(2)
+                arena._damage_health(target, target.health, killer.entity_id, 2., shell_hit=False)
+                data = event_messages(arena, arena.players[1], arena.drain_events())
+                victim, source = pb_int(1, target.entity_id), pb_int(2, killer.entity_id)
+                roster_death = arena_update(6, pb_blob(6, victim + source))
+                kills = arena_update(5, pb_blob(5, pb_blob(1, pb_int(1, killer.entity_id) + pb_int(2, 1))))
+                self.assertIn(vehicle_property(target.entity_id, 1, b'\0'), data)
+                self.assertIn(kills, data)
+                self.assertEqual(roster_death in data, not unlimited)
+                self.assertEqual(team_kill_score(arena, arena.players[1]) in data, unlimited)
 
     def test_negotiation_uses_current_arena_and_rejects_replayed_input(self):
         arena = Mock(unique_id=123, sandbox_enabled=False, owner_backed=True)

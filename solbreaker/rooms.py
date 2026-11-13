@@ -6,7 +6,7 @@ import secrets
 import time
 from .roster import TEAMS, TEAM_SIZE, ROOM_CAPACITY, WAITING
 from .map_catalog import map_team_capacity
-from .training_config import BATTLE_MODES
+from .training_config import BATTLE_MODES, RoomBattleSettings
 
 
 @dataclass
@@ -33,6 +33,7 @@ class Room:
     wins: dict[int,int] = field(default_factory=lambda: {team:0 for team in TEAMS})
     bot_counts: tuple[int, int] = (0, 0)
     battle_mode: str = 'encounter'
+    battle_settings: RoomBattleSettings = field(default_factory=RoomBattleSettings)
     # Only result IDs are retained, never worlds or departed player objects.
     _counted_results: set[str] = field(default_factory=set,repr=False)
 
@@ -100,7 +101,8 @@ class RoomManager:
         if type(value) is not int or value not in (1,2):raise ValueError('Team must be 1 or 2')
         return value
 
-    def create(self,account,team=1,map_id=None,*,bot_counts=(0,0),battle_mode='encounter'):
+    def create(self,account,team=1,map_id=None,*,bot_counts=(0,0),battle_mode='encounter',
+               battle_settings=RoomBattleSettings()):
         team=self.team(team);self.hangar(account)
         if self.current(account):raise ValueError('Already in a room')
         if len(self.rooms)>=32:raise ValueError('Room limit reached')
@@ -114,7 +116,7 @@ class RoomManager:
             # Native prebattleID 0 means no room.
             if ident!='000000' and ident not in self.rooms:break
         room=Room(ident,account,{account:Member(account,team)},map_id=map_id,bot_counts=bot_counts,
-                  battle_mode=battle_mode)
+                  battle_mode=battle_mode,battle_settings=battle_settings)
         self.rooms[ident]=room;self.memberships[account]=ident
         return room
 
@@ -205,7 +207,8 @@ class RoomManager:
         room=self.owned(account)
         for target in list(room.members):self.leave(target)
 
-    def rename(self,account,title,description,*,map_id=None,bot_counts=None,battle_mode=None):
+    def rename(self,account,title,description,*,map_id=None,bot_counts=None,battle_mode=None,
+               battle_settings=None):
         room=self.owned(account)
         if map_id is not None:
             map_id=self.validate_map_id(map_id)
@@ -219,6 +222,8 @@ class RoomManager:
             room.bot_counts=bot_counts
         if battle_mode is not None:
             room.battle_mode=battle_mode
+        if battle_settings is not None:
+            room.battle_settings=battle_settings
         room.title,room.description=title,description
         self.reset_ready(room)
         return room
@@ -244,7 +249,9 @@ class RoomManager:
         if not all(m.ready for m in members):
             raise ValueError('Every participant on both teams must be ready')
         # Endpoint validates both sessions before creating or attaching anything.
-        options={'bot_counts':bot_counts} if any(bot_counts) else {}
+        options={'room_settings':room.battle_settings}
+        if any(bot_counts):
+            options['bot_counts']=bot_counts
         if room.battle_mode != 'encounter':
             options['room_mode'] = room.battle_mode
         arena=self.endpoint.start_shared([m.account_id for m in members],teams,map_id=room.map_id,**options)
@@ -272,6 +279,8 @@ class RoomManager:
         return {'id':room.id,'owner':room.owner,'arena_id':room.arena_id,
                 'map_id':room.map_id,'map_key':self.endpoint.map_catalog[room.map_id],
                 'battle_mode':room.battle_mode,
+                'unlimited_lives':room.battle_settings.unlimited_lives,
+                'battle_minutes':room.battle_settings.minutes,
                 'bot_counts':list(room.bot_counts),'active_bot_counts':list(room.active_bot_counts),
                 'state':'battle' if room.arena_id else 'waiting',
                 'members':[{'account_id':m.account_id,
@@ -296,7 +305,8 @@ class RoomManager:
             data=json.loads(body or b'{}')
             if not isinstance(data,dict):raise ValueError('Expected a JSON object')
             if path=='/rooms/create':room=self.create(account,data.get('team',1),data.get('map_id'),
-                bot_counts=data.get('bot_counts',(0,0)), battle_mode=data.get('battle_mode','encounter'))
+                bot_counts=data.get('bot_counts',(0,0)), battle_mode=data.get('battle_mode','encounter'),
+                battle_settings=RoomBattleSettings(data.get('unlimited_lives',False),data.get('battle_minutes')))
             elif path=='/rooms/join':room=self.join(account,data.get('id'),data.get('team'))
             elif path=='/rooms/map':room=self.set_map(account,data.get('map_id'))
             elif path=='/rooms/bots':room=self.set_bots(account,data.get('bot_counts'))

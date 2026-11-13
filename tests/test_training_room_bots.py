@@ -16,6 +16,7 @@ from solbreaker.client_ui import STRINGS_EN, STRINGS_RU
 from solbreaker.mercury import packed_blob
 from solbreaker.native_rooms import NativeRooms
 from solbreaker.rooms import RoomManager
+from solbreaker.training_config import RoomBattleSettings
 
 
 class TrainingRoomBotsTests(unittest.TestCase):
@@ -46,14 +47,15 @@ class TrainingRoomBotsTests(unittest.TestCase):
         room = self.create(b'[bots 7:2] Friends')
         self.assertEqual(room.bot_counts, (7, 2))
         self.assertEqual(room.active_bot_counts, (6, 2))
-        self.assertEqual(self.native.settings(room)['comment'], '[bots 7:2] Friends')
+        self.assertEqual(self.native.settings(room)['comment'], '[bots 7:2] [notes] Friends')
         self.assertEqual(self.native.settings(room)['limits'][2]['minCount'], 0)
         self.assertEqual(self.native.listing(room)[1][9], '[bots 7:2] Friends')
         with self.assertRaisesRegex(ValueError, 'ready'):
             self.endpoint.rooms.start(1)
         self.endpoint.rooms.ready(1, True)
         self.endpoint.rooms.start(1)
-        self.endpoint.start_shared.assert_called_once_with([1], [1], map_id=6, bot_counts=(6, 2))
+        self.endpoint.start_shared.assert_called_once_with([1], [1], map_id=6, bot_counts=(6, 2),
+                                                         room_settings=RoomBattleSettings())
 
     def test_edit_and_join_keep_humans_ahead_of_bots(self):
         room = self.create(b'[bots 7:7] Room')
@@ -71,13 +73,45 @@ class TrainingRoomBotsTests(unittest.TestCase):
     def test_room_rules_reach_the_shared_arena_and_are_saved_on_edit(self):
         room = self.create(b'[mode gravity] [bots 0:1] Wasteland')
         self.assertEqual((room.battle_mode, room.description), ('gravity', 'Wasteland'))
-        self.assertEqual(self.native.settings(room)['comment'], '[mode gravity] [bots 0:1] Wasteland')
+        self.assertEqual(self.native.settings(room)['comment'], '[mode gravity] [bots 0:1] [notes] Wasteland')
         self.edit(b'[mode elimination] [mode gravity] [bots 0:1] New rules')
         self.assertEqual((room.battle_mode, room.description), ('elimination', 'New rules'))
         self.endpoint.rooms.ready(1, True)
         self.endpoint.rooms.start(1)
         self.endpoint.start_shared.assert_called_once_with(
-            [1], [1], map_id=7, bot_counts=(0, 1), room_mode='elimination')
+            [1], [1], map_id=7, bot_counts=(0, 1), room_mode='elimination',
+            room_settings=RoomBattleSettings())
+
+    def test_native_room_lives_and_time_survive_edits_and_reach_the_arena(self):
+        room = self.create(b'[lives unlimited] [time 12] [bots 0:1] Practice')
+        self.assertEqual(room.battle_settings, RoomBattleSettings(True, 12))
+        self.assertEqual(self.native.settings(room)['comment'],
+                         '[lives unlimited] [time 12] [bots 0:1] [notes] Practice')
+        self.assertEqual(self.native.listing(room)[1][9], '[bots 0:1] Practice')
+        self.edit(b'[time 61] [lives unlimited]')
+        self.assertEqual(room.battle_settings, RoomBattleSettings(True, 12))
+        self.edit(b'[room-options] [time endless]')
+        self.assertEqual(room.battle_settings, RoomBattleSettings(True, 0))
+        self.assertEqual((room.description, room.bot_counts), ('Practice', (0, 1)))
+        self.endpoint.rooms.ready(1, True)
+        self.endpoint.rooms.start(1)
+        self.endpoint.start_shared.assert_called_once_with(
+            [1], [1], map_id=7, bot_counts=(0, 1), room_settings=RoomBattleSettings(True, 0))
+
+    def test_full_room_form_can_clear_notes_without_resetting_rules(self):
+        room = self.create(b'[mode gravity] [lives unlimited] [time 12] [bots 0:1] Practice')
+        self.edit(b'[room-form] [mode gravity] [lives unlimited] [time 12]')
+        self.assertEqual((room.description, room.bot_counts), ('', (0, 0)))
+        self.assertEqual(room.battle_mode, 'gravity')
+        self.assertEqual(room.battle_settings, RoomBattleSettings(True, 12))
+
+    def test_room_form_counts_are_independent_of_notes(self):
+        room = self.create(b'[room-form] [mode gravity] [time endless] [bots 2:3] [notes] [bots 7:7] Notes')
+        self.assertEqual((room.bot_counts, room.description), ((2, 3), '[bots 7:7] Notes'))
+        self.edit(b'[room-form] [mode gravity] [time endless] [bots 0:1] [notes] [mode gravity] Notes')
+        self.assertEqual((room.bot_counts, room.description), ((0, 1), '[mode gravity] Notes'))
+        self.edit(b'[room-form] [mode gravity] [time endless] [bots 0:0] [notes]')
+        self.assertEqual((room.bot_counts, room.description), ((0, 0), ''))
 
     def test_small_map_limits_the_combined_team_size(self):
         self.endpoint.map_catalog[60] = 'rudniki_01'

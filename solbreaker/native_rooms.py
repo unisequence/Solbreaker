@@ -10,17 +10,19 @@ import struct
 import time
 
 from .account import account_method, command_response, pickle_document, resource_response
+from .battle_settings_wire import ROOM_FORM_PREFIX, ROOM_OPTIONS_PREFIX
 from .mercury import packed_blob
 from .map_catalog import map_team_capacity
 from .roster import TEAMS
-from .training_config import BATTLE_MODES
+from .training_config import BATTLE_MODES, RoomBattleSettings
 
 # ClientPrebattle::IsTrainingCreator (0x171cd40) checks the entire mask.
 OWNER_ROLE = 0x27e7f
 NO_RESPONSE = 202
 COMMANDS = {400,401,402,403,404,406,411,414,415,523,524}
 BOT_PREFIX = re.compile(r'^\[bots\s+([0-7])\s*:\s*([0-7])\]', re.IGNORECASE)
-MODE_PREFIX = re.compile(r'^\[mode\s+([a-z]+)\]', re.IGNORECASE)
+SETTING_PREFIX = re.compile(r'^\[(mode|lives|time)\b', re.IGNORECASE)
+SETTING_VALUE = re.compile(r'^\[(?:mode|lives|time)\s+([a-z]+|[0-9]{1,2})\]', re.IGNORECASE)
 
 
 def varint(value):
@@ -73,28 +75,70 @@ def room_bot_options(description):
     return text[match.end():].lstrip(), tuple(map(int, match.groups()))
 
 
-def room_comment(room):
+def room_comment(room, *, include_rules=True):
     first, second = room.bot_counts
     options = []
-    if room.battle_mode != 'encounter':
+    if include_rules and room.battle_mode != 'encounter':
         options.append(f'[mode {room.battle_mode}]')
-    if first or second:
+    if include_rules and room.battle_settings.unlimited_lives:
+        options.append('[lives unlimited]')
+    minutes = room.battle_settings.minutes
+    if include_rules and minutes is not None:
+        options.append(f'[time {minutes or "endless"}]')
+    if include_rules or first or second:
         options.append(f'[bots {first}:{second}]')
+    if include_rules:
+        options.append('[notes]')
     return ' '.join(filter(None, (*options, room.description)))
 
 
-def room_options(description):
-    mode = None
+def room_options(description, previous=None):
+    values = {}
     text = description.lstrip()
-    while re.match(r'^\[mode\b', text, re.IGNORECASE):
-        match = MODE_PREFIX.match(text)
-        if match is None or match[1].lower() not in BATTLE_MODES:
-            raise ValueError('Choose a supported room battle mode')
-        if mode is None:
-            mode = match[1].lower()
+    controls = text.startswith(ROOM_OPTIONS_PREFIX)
+    full_form = text.startswith(ROOM_FORM_PREFIX)
+    for marker in (ROOM_OPTIONS_PREFIX, ROOM_FORM_PREFIX):
+        if text.startswith(marker):
+            text = description = text.removeprefix(marker).lstrip()
+            break
+    existing = previous if controls else None
+    while prefix := SETTING_PREFIX.match(text):
+        match = SETTING_VALUE.match(text)
+        key = prefix[1].lower()
+        if match is None:
+            raise ValueError(f'Invalid room setting: {key}')
+        values.setdefault(key, match[1].lower())
         text = description = text[match.end():].lstrip()
-    description, bots = room_bot_options(description)
-    return description, bots, mode
+    mode = values.get('mode', existing.battle_mode if existing else None)
+    if mode is not None and mode not in BATTLE_MODES:
+        raise ValueError('Choose a supported room battle mode')
+    lives = values.get('lives', 'unlimited' if existing and existing.battle_settings.unlimited_lives
+                       else 'single')
+    if lives not in ('single', 'unlimited'):
+        raise ValueError('Choose single or unlimited lives')
+    duration = values.get('time')
+    if duration is None:
+        minutes = existing.battle_settings.minutes if existing else None
+    elif duration == 'default':
+        minutes = None
+    elif duration == 'endless':
+        minutes = 0
+    elif duration.isdecimal() and int(duration) > 0:
+        minutes = int(duration)
+    else:
+        raise ValueError('Choose a duration in minutes or an endless battle')
+    # The current form submits the roster before an explicit notes boundary.
+    # Older clients can still supply the bot prefix in their description.
+    bot_prefix = BOT_PREFIX.match(text)
+    if full_form and bot_prefix and text[bot_prefix.end():].lstrip().startswith('[notes]'):
+        description = text[bot_prefix.end():].lstrip().removeprefix('[notes]').removeprefix(' ')
+        bots = tuple(map(int, bot_prefix.groups()))
+        return description, bots, mode, RoomBattleSettings(lives == 'unlimited', minutes)
+    if existing and not description:
+        description, bots = existing.description, existing.bot_counts
+    else:
+        description, bots = room_bot_options(description)
+    return description, bots, mode, RoomBattleSettings(lives == 'unlimited', minutes)
 
 
 def create_request(body,*,with_vehicle=False,with_map=False,with_mode=False,configured_map_id=6,
@@ -187,9 +231,11 @@ class NativeRooms:
         limits = {team: dict(minCount=0 if bots and team not in occupied else 1,
                              maxCount=(map_team_capacity(map_id),)*3, level=(1,10))
                   for team, bots in zip(TEAMS, room.active_bot_counts)}
+        minutes = room.battle_settings.minutes
+        seconds = 600 if minutes is None else minutes * 60
         return dict(type=2,startType=1,defaultRoster=0,comment=room_comment(room),
             creator=owner.nickname,creatorDBID=owner.id,creatorClanDBID=0,creatorClanTag='',
-            isOpened=True,arenaTypeID=map_id,roundLength=600,lifeTime=3600,gameModeID=2,
+            isOpened=True,arenaTypeID=map_id,roundLength=seconds,lifeTime=3600,gameModeID=2,
             title=room.title,isTeamKill=False,password='',startTime=0,matchID='',
             teamRoles={1:0,2:0},limits=limits,
             roles=roles,spectatorsMaxScope=0,extraData=None,extraDataQuick=None)
@@ -256,7 +302,7 @@ class NativeRooms:
         statistics = self.statistics(room)
         arena = self.endpoint.arenas.get(room.arena_id) if room.arena_id else None
         return (room.id,room.owner,room.title,room.description,room.map_id,room.arena_id,room.bot_counts,
-                room.battle_mode,
+                room.battle_mode,room.battle_settings,
                 statistics['createTime'],statistics['battlesCount'],
                 tuple(statistics['wins'][team] for team in (1,2)),statistics['waitPrepareClients'],
                 tuple((m.account_id,m.team,m.ready,m.inventory_id,m.descriptor) for m in room.members.values()),
@@ -327,10 +373,11 @@ class NativeRooms:
                 self.endpoint.server.event('native_bot_settings_saved', account_id=account,
                                            settings=config.to_dict())
                 return
-            description,bot_counts,override=room_options(description)
+            description,bot_counts,override,settings=room_options(description)
             room=self.manager.create(account,map_id=self.map_id if map_id==0 else map_id,
                                      bot_counts=bot_counts,
-                                     battle_mode=override or ('supremacy' if mode==1 else 'encounter'))
+                                     battle_mode=override or ('supremacy' if mode==1 else 'encounter'),
+                                     battle_settings=settings)
             room.title,room.description=title,description
             if vehicle is not None:
                 try:self.refresh_vehicle(account,vehicle)
@@ -347,9 +394,11 @@ class NativeRooms:
     def listing(self,room):
         # PrebattleInfo integer-key dictionary, parsed at 0x17284c0.
         map_id=room.map_id
+        minutes = room.battle_settings.minutes
+        seconds = 600 if minutes is None else minutes * 60
         return (int(room.id,16),{1:2,2:bool(room.arena_id),3:0,4:True,5:len(room.members),
             6:self.endpoint.server.accounts.get(room.owner).nickname,7:room.owner,8:0,
-            9:room_comment(room),11:map_id,12:600,14:2,15:'',16:room.title,
+            9:room_comment(room, include_rules=False),11:map_id,12:seconds,14:2,15:'',16:room.title,
             17:(0,0,0),18:0x3ff,21:False,22:False,24:0})
 
     def command(self,client,kind,body,request,command):
@@ -381,10 +430,12 @@ class NativeRooms:
                 if strings[0] == TITLE.encode():
                     raise ValueError('Leave the training room before starting a bot battle')
                 title,description=room_text(*strings)
-                description,bot_counts,mode=room_options(description)
+                room = self.manager.owned(client.account_id)
+                description,bot_counts,mode,settings=room_options(description, room)
                 changed=self.manager.rename(client.account_id,title,description,
                     map_id=numbers[0] or None,bot_counts=bot_counts,
-                    battle_mode=mode or ('supremacy' if numbers[1]==1 else 'encounter'))
+                    battle_mode=mode or ('supremacy' if numbers[1]==1 else 'encounter'),
+                    battle_settings=settings)
                 if numbers[0]:
                     self.endpoint.server.event('native_room_map_changed',account_id=client.account_id,
                         room_id=changed.id,map_id=changed.map_id,

@@ -1,2 +1,2 @@
 """Solbreaker multiplayer tank server."""
-__version__ = "0.1.0a5"
+__version__ = "0.1.0a6"

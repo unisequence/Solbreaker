@@ -51,6 +51,8 @@ typedef struct {
     int32_t mouse_x, mouse_y;
     Vector position, velocity, view, heading;
     uint32_t pending_actions, allowed_keys;
+    uint32_t score_active, ally_kills, enemy_kills;
+    void *score_panel;
     void *bindings_layout;
 } Sandbox;
 
@@ -330,10 +332,51 @@ static int send_control(uint32_t delta, Sandbox *s, uint32_t flags, Vector direc
     return 1;
 }
 
+/* Native battle HUD refresh, with an override scoped to the current arena. */
+static void apply_kill_score(uint32_t delta, Sandbox *s) {
+    typedef void (*Format)(NativeString *, uint32_t);
+    typedef void (THISCALL *SetText)(void *, const NativeString *);
+    typedef void (THISCALL *Destroy)(NativeString *);
+    if (!s->score_active || !s->score_panel) return;
+    const uint32_t scores[] = {s->ally_kills, s->enemy_kills};
+    for (unsigned i = 0; i < 2; ++i) {
+        void *text = (void *)FIELD(s->score_panel, 0x154 + 4*i);
+        if (!text) continue;
+        NativeString label;
+        ((Format)(0x815b80u + delta))(&label, scores[i]);
+        ((SetText)(0xd01d70u + delta))(text, &label);
+        ((Destroy)(0x69a720u + delta))(&label);
+    }
+}
+
+void THISCALL sandbox_refresh_score(void *panel) {
+    typedef void (THISCALL *Refresh)(void *);
+    uint32_t delta = sandbox_delta();
+    ((Refresh)(0x1dd0190u + delta))(panel);
+    Sandbox *s = state(delta, 1);
+    if (s && s->thread == thread_id()) {
+        if (FIELD(panel, 0x150))
+            s->score_panel = panel;
+        else if (s->score_panel == panel)
+            s->score_panel = 0;
+        apply_kill_score(delta, s);
+    }
+}
+
 int sandbox_message(uint32_t delta, const uint32_t *first, const uint32_t *end,
                     const uint32_t *second, const uint32_t *second_end) {
     typedef int (*Original)(uint32_t, const uint32_t *, const uint32_t *,
                             const uint32_t *, const uint32_t *);
+    if (first && end == first+4 && first[0] == 0x31534654u && first[1] == 0x47415246u) {
+        Sandbox *s = state(delta, 1);
+        if (s && s->thread == thread_id()) {
+            s->score_active = 1;
+            s->ally_kills = first[2];
+            s->enemy_kills = first[3];
+            apply_kill_score(delta, s);
+        }
+        return 1;
+    }
     if (first && end >= first+2 && first[0] == 0x31534654u && first[1] == 0x584f4253u) {
         Sandbox *s = state(delta, 0);
         if (s && s->thread == thread_id() && s->owner && end == first+3
@@ -351,7 +394,11 @@ void sandbox_reset(uint32_t delta, uint32_t *layer) {
     typedef void (*Original)(uint32_t, uint32_t *);
     ((Original)(0x04b1ce1du + delta))(delta, layer);
     Sandbox *s = state(delta, 0);
-    if (s && s->thread == thread_id()) reset(s);
+    if (s && s->thread == thread_id()) {
+        s->score_active = 0;
+        s->score_panel = 0;
+        reset(s);
+    }
 }
 
 void sandbox_frame(uint32_t delta, uint32_t *rotator) {
@@ -543,3 +590,128 @@ __asm__(
     "pop ecx\n"
     "jmp 0xaba090\n"
     ".att_syntax prefix\n");
+
+/* Keep the wire options outside the editable description. The view's stock
+ * setter receives the canonical room comment before it fills the text field. */
+static int room_prefix(const char *value, const char *prefix) {
+    while (*prefix && *value == *prefix) { ++value; ++prefix; }
+    return !*prefix;
+}
+
+static const char *room_text(const NativeString *value) {
+    return value->capacity < 16 ? value->text : *(const char * const *)value->text;
+}
+
+static void room_parameter(void *view, const char *name, int value) {
+    /* The battle settings adapter takes ECX=view, EDX=name, EAX=value,
+     * and EBX=the relocated image base. */
+    uint32_t base = 0x400000u + sandbox_delta();
+    __asm__ volatile ("push %%ebx; mov %[base], %%ebx; call *%[entry]; pop %%ebx"
+        : "+c"(view), "+d"(name), "+a"(value)
+        : [base]"r"(base), [entry]"S"(base + 0x471df24u)
+        : "memory", "cc");
+}
+
+typedef struct { int mode, lives, minutes, bots1, bots2; } RoomOptions;
+
+static const char *room_parse_options(const NativeString *value, RoomOptions *settings) {
+    const char *text = room_text(value);
+    int mode = *text ? 1 : -1, lives = 0, minutes = -1;
+    while (room_prefix(text, "[mode ") || room_prefix(text, "[lives ") ||
+           room_prefix(text, "[time ")) {
+        if (room_prefix(text, "[mode ")) {
+            if (room_prefix(text + 6, "elimination]")) mode = 0;
+            if (room_prefix(text + 6, "supremacy]")) mode = 2;
+            if (room_prefix(text + 6, "gravity]")) mode = 3;
+        } else if (room_prefix(text, "[lives ")) {
+            lives = room_prefix(text + 7, "unlimited]");
+        } else {
+            const char *digits = text + 6;
+            minutes = room_prefix(digits, "default]") ? -1 : 0;
+            while (*digits >= '0' && *digits <= '9' && minutes <= 60)
+                minutes = minutes * 10 + *digits++ - '0';
+        }
+        while (*text && *text != ']') ++text;
+        if (*text) ++text;
+        while (*text == ' ') ++text;
+    }
+    *settings = (RoomOptions){mode, lives, minutes, 0, 0};
+    if (room_prefix(text, "[bots ") && text[6] >= '0' && text[6] <= '7' &&
+        text[7] == ':' && text[8] >= '0' && text[8] <= '7' && text[9] == ']') {
+        settings->bots1 = text[6] - '0';
+        settings->bots2 = text[8] - '0';
+        text += 10;
+        while (*text == ' ') ++text;
+    }
+    if (room_prefix(text, "[notes]")) {
+        text += 7;
+        if (*text == ' ') ++text;
+    }
+    return text;
+}
+
+void THISCALL room_load_description(void *view, const NativeString *value) {
+    typedef void (THISCALL *Set)(void *, const NativeString *);
+    typedef void (THISCALL *String)(NativeString *, const char *);
+    typedef void (THISCALL *Destroy)(NativeString *);
+    uint32_t delta = sandbox_delta();
+    RoomOptions options;
+    const char *text = room_parse_options(value, &options);
+    room_parameter(view, "roomInitialMode", options.mode);
+    room_parameter(view, "roomInitialLives", options.lives);
+    room_parameter(view, "roomInitialMinutes", options.minutes);
+    room_parameter(view, "roomInitialBots1", options.bots1);
+    room_parameter(view, "roomInitialBots2", options.bots2);
+    NativeString clean;
+    ((String)(0x69a7d0u + delta))(&clean, text);
+    ((Set)(0x1e98000u + delta))(view, &clean);
+    ((Destroy)(0x69a720u + delta))(&clean);
+}
+
+void THISCALL room_header_description(void *view, const NativeString *value) {
+    typedef void (THISCALL *Set)(void *, const NativeString *);
+    typedef void (THISCALL *String)(NativeString *, const char *);
+    typedef void (THISCALL *Destroy)(NativeString *);
+    uint32_t delta = sandbox_delta();
+    RoomOptions options;
+    const char *text = room_parse_options(value, &options);
+    room_parameter(view, "roomHeaderMode", options.mode);
+    room_parameter(view, "roomHeaderMinutes", options.minutes);
+    room_parameter(view, "roomHeaderBots1", options.bots1);
+    room_parameter(view, "roomHeaderBots2", options.bots2);
+    NativeString clean;
+    ((String)(0x69a7d0u + delta))(&clean, text);
+    ((Set)(0x1e98010u + delta))(view, &clean);
+    ((Destroy)(0x69a720u + delta))(&clean);
+}
+
+NativeString *THISCALL room_get_description(void *view, NativeString *result) {
+    typedef NativeString *(THISCALL *Get)(void *, NativeString *);
+    typedef void *(THISCALL *Find)(void *, const NativeString *);
+    typedef void (THISCALL *String)(NativeString *, const char *);
+    typedef void (THISCALL *Destroy)(NativeString *);
+    typedef void (THISCALL *Assign)(NativeString *, const char *, uint32_t);
+    uint32_t delta = sandbox_delta();
+    ((Get)(0x1e8a240u + delta))(view, result);
+    NativeString path;
+    ((String)(0x69a7d0u + delta))(&path, "Settings/**/LocalRoomOptions");
+    void *field = ((Find)(0xcde480u + delta))((void *)FIELD(view, 4), &path);
+    ((Destroy)(0x69a720u + delta))(&path);
+    if (!field || result->size > 4096) return result;
+    NativeString options;
+    ((Get)(0xb7b0f0u + delta))(field, &options);
+    const char *tags = room_text(&options);
+    const char *description = room_text(result);
+    /* The same stock view also submits the solo bot recipe. */
+    if (!room_prefix(description, "SolbreakerBots/") && options.size > 0 && options.size < 128) {
+        static const char marker[] = "[room-form] ";
+        char combined[4096 + 128 + sizeof(marker)];
+        uint32_t length = 0;
+        for (uint32_t i = 0; i < sizeof(marker)-1; ++i) combined[length++] = marker[i];
+        for (uint32_t i = 0; i < options.size; ++i) combined[length++] = tags[i];
+        for (uint32_t i = 0; i < result->size; ++i) combined[length++] = description[i];
+        ((Assign)(0x6a4ef0u + delta))(result, combined, length);
+    }
+    ((Destroy)(0x69a720u + delta))(&options);
+    return result;
+}

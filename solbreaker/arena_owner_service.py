@@ -89,7 +89,7 @@ class ArenaOwnerService:
             bot_roster=arena.bot_roster, bot_scene_settings=arena.bot_scene_settings,
             prebattle_seconds=arena.prebattle_seconds,
             sandbox_enabled=arena.sandbox_enabled,
-            room_mode=arena.room_mode,
+            room_mode=arena.room_mode, room_settings=arena.room_settings,
             map_cache=getattr(self.endpoint, 'map_cache', None))
 
     def start(self, arena, selected, factory):
@@ -133,6 +133,18 @@ class ArenaOwnerService:
             initial = await job.route.request(Command('motion', time.monotonic(), account_id))
             owner_ready_ms = (time.monotonic()-owner_started)*1000
             self._observe(job, initial)
+            if arena.room_settings is not None:
+                # The worker began with the original roster. Replay departures
+                # before exposing the completed world to the remaining sessions.
+                while True:
+                    selected = {client.account_id for _, client in job.selected}
+                    departed = [account for account, player in arena.players.items()
+                                if player.attached and account not in selected]
+                    if not departed:
+                        break
+                    for account in departed:
+                        reply = await job.route.request(Command('disconnect', time.monotonic(), account))
+                        self._observe(job, reply)
             for addr, client in job.selected:
                 if (self.endpoint.clients.get(addr) is not client
                         or client.arena_id != arena.result_id or client.phase != 'battle_building'
@@ -458,6 +470,14 @@ class ArenaOwnerService:
         if job is None or job.spawner is None:
             raise OwnerError('arena owner is unavailable')
         return job.spawner.start(addr, client)
+
+    def withdraw_loading_player(self, arena, client):
+        job = self.jobs.get(arena.result_id)
+        if job is None or job.closing:
+            return
+        job.selected = tuple(entry for entry in job.selected if entry[1] is not client)
+        if not job.selected:
+            self.cancel(arena, 'All players left during owner startup')
 
     def cancel(self, arena, reason):
         job = self.jobs.get(arena.result_id)
