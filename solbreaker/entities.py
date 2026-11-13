@@ -37,6 +37,7 @@ class Vehicle:
     reload_at: float = 0.
     reload_total: float = 6.  # Current full-cycle duration, not elapsed history.
     reload_kind: str = 'reload'  # What reload_at/total time: 'reload' (magazine) or 'interval'.
+    sandbox_fast_reload: bool = False
     # Pump autoreloader refill of raw index clip, separate from the reload_at
     # fire gate. pump_at 0 is idle; pump_waiting resumes it after an intershot.
     pump_at: float = 0.

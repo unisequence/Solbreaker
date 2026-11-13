@@ -67,6 +67,7 @@ reply_local:
     call set_int
     movl 8(%ebp), %eax
     xorl %edx, %edx
+    andl $0x1fffff, %eax # Remove the battle-rule bits.
     movl $10000, %ecx
     divl %ecx
     testl %eax, %eax
@@ -170,9 +171,10 @@ set_bool:
     popl %esi
     leave
     ret $4
-get_title: .asciz "SolbreakerBotGet"
+get_title: .asciz "SolbreakerBotV2!"
 empty: .asciz ""
 recipe_name: .asciz "localRecipe"
 return_name: .asciz "localReturnLevels"
 saved_name: .asciz "localSaved"
+.section .battle_maps,"a"
 .include "battle_settings_maps.inc"

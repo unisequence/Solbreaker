@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.1.0-alpha.7 — 2026-11-13
+
+- Choose sunset or fog variants of Mines, Falls Creek and Vineyards in
+  training rooms and bot battles. Replays keep the map variant used in battle.
+- Set unlimited respawns, a battle duration and unlimited ammunition in bot
+  battles as well as training rooms. Change maps in an existing room without
+  recreating it.
+- With server sandbox enabled, press NumPad 5 for a 0.5-second reload or
+  NumPad 6 to teleport to the aim point. The client shows confirmations.
+- Keep missile camera mode armed between launches and retain vehicle markers
+  in missile view and replay free camera. Adjust motion blur in Graphics.
+- Restore crew callouts when you destroy an enemy or your track breaks.
+- After publishing a complete release, CI updates the download link in both READMEs.
+
 ## 0.1.0-alpha.6 — 2026-11-13
 
 - Set bot counts for both teams in the training room. The room header shows

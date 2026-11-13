@@ -9,6 +9,15 @@ PREFIX = b'TFS-LAB-S'
 INPUT = struct.Struct('<IIIIfff')  # battle token, sequence, flags, shot, direction
 BOOST, FLIGHT, ASCEND, DESCEND, MISSILE_VIEW, SPAWN_TARGET = (1, 2, 4, 8, 16, 32)
 GRAVITY_JUMP = 64
+FAST_RELOAD = 128
+TELEPORT = 256
+FAST_RELOAD_SECONDS = .5
+SANDBOX_KEYS = 0x0f
+GRAVITY_KEY = 0x10
+FAST_RELOAD_KEY = 0x20
+TARGET_PLACED = 0x40
+TELEPORT_KEY = 0x80
+TELEPORTED = 0x100
 INPUT_LEASE = .85
 BOOST_POWER = 2.4
 BOOST_SPEED = 1.75
@@ -18,11 +27,15 @@ def token(arena):
     return arena.unique_id & 0xffffffff or 1
 
 
-def advertisement(arena):
+def advertisement(arena, *, notice=0):
     # Avatar method 37 carries two vectors. The patched client consumes this
     # sentinel before the native method sees it.
-    second = (b'\1'+struct.pack('<I', 16 | (15 if arena.sandbox_enabled else 0))
-              if getattr(arena, 'gravity_mode', False) is True else b'\0')
+    capabilities = (SANDBOX_KEYS | FAST_RELOAD_KEY if arena.sandbox_enabled else 0) | (
+        GRAVITY_KEY if getattr(arena, 'gravity_mode', False) is True else 0)
+    if arena.sandbox_enabled:
+        capabilities |= TELEPORT_KEY
+    capabilities |= notice
+    second = b'\1' + struct.pack('<I', capabilities) if capabilities else b'\0'
     return b'\x13' + variable8(96, b'\x03TFS1SBOX' + struct.pack('<I', token(arena)) + second)
 
 
@@ -55,7 +68,7 @@ def receive(endpoint, addr, client, arena, body, now):
         if not 0 < distance < (1 << 31):
             return True
     client.sandbox_input = (current, control.sequence, now, control.flags)
-    if (control.flags ^ previous[3]) & (BOOST | FLIGHT | MISSILE_VIEW):
+    if (control.flags ^ previous[3]) & (BOOST | FLIGHT | MISSILE_VIEW | FAST_RELOAD):
         endpoint.server.event('sandbox_controls', account_id=client.account_id,
                               arena_id=arena.result_id, flags=control.flags)
     if getattr(arena, 'owner_backed', False):
@@ -81,7 +94,7 @@ class Control:
             raise ValueError('Invalid sandbox control size')
         control = cls(*INPUT.unpack(data))
         length = math.hypot(control.x, control.y, control.z)
-        if (control.flags & ~127 or not math.isfinite(length) or length > 10000.
+        if (control.flags & ~511 or not math.isfinite(length) or length > 10000.
                 or control.flags & MISSILE_VIEW and (not control.shot or length < .01)):
             raise ValueError('Invalid sandbox control')
         return control

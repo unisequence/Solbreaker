@@ -7,7 +7,9 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
-from solbreaker import client_atgm_aim, client_sandbox, client_t49_textures as t49, dvpl
+import yaml
+
+from solbreaker import client_atgm_aim, client_atmosphere, client_sandbox, client_t49_textures as t49, dvpl
 from solbreaker.client_patch import BUILD_SHA256
 from solbreaker.management_tasks import launch_client
 
@@ -31,6 +33,108 @@ class ClientRepairs(unittest.TestCase):
     def write_manifest(self, **fields):
         self.manifest.write_text(json.dumps(dict(game=str(self.game), client=str(self.client),
                                                   exe_sha256=BUILD_SHA256, **fields)))
+
+    def test_weather_maps_have_separate_client_rows_and_use_pinned_scenes(self):
+        from solbreaker.map_catalog import training_map_catalog
+
+        data = self.game/'Data'
+        mines = client_atmosphere.MINES
+        scene = client_atmosphere.scene_path(mines)
+        row = {'id': 6, 'localName': f'{mines}/{mines}.sc2', 'avaliableInTrainingRoom': True}
+        original = dvpl.encode(bytes(1024))
+        resources = {
+            Path('maps.yaml.dvpl'): dvpl.encode(yaml.safe_dump({'maps': {'rudniki': row}}).encode()),
+            scene: original,
+            scene.with_name(mines+'.scg.dvpl'): b'geometry',
+            Path('Gfx/UI/BattleLoadingScreen/rudniki/BackgroundLoading.packed.webp.dvpl'): b'loading',
+            Path('Gfx/UI/BattleScreenHUD/minimap/rudniki/MiniMapSmall.packed.webp.dvpl'): b'minimap',
+            Path('Gfx/UI/BattleScreenHUD/minimap/rudniki/MiniMapSmall@2x.packed.webp.dvpl'): b'minimap2x',
+        }
+        for relative, content in resources.items():
+            target = data/relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(content)
+        prepared = self.client/'Data'
+        prepared.rmdir()
+        prepared.symlink_to(data, target_is_directory=True)
+        self.write_manifest()
+        layout = (digest(original), 32, 150, 200, 320, 8.)
+        with patch.dict(client_atmosphere.SCENES, {mines: layout}):
+            manifest = client_atmosphere.install_weather_maps(self.lab, json.loads(self.manifest.read_text()))
+        self.assertEqual(manifest['weather_maps_version'], 1)
+        self.assertEqual(training_map_catalog(self.game), {6: 'rudniki', 101: 'rudniki_evening', 102: 'rudniki_fog'})
+        maps = yaml.safe_load(dvpl.read(prepared/'maps.yaml.dvpl'))['maps']
+        self.assertEqual(maps['rudniki'], row)
+        self.assertEqual(maps['rudniki_evening'], dict(row, id=101, localName=f'{mines}/rudniki_evening.sc2'))
+        self.assertNotEqual((prepared/scene.with_name('rudniki_evening.sc2.dvpl')).read_bytes(), original)
+        self.assertEqual((prepared/scene.with_name('rudniki_fog.scg.dvpl')).read_bytes(), b'geometry')
+        self.assertEqual((data/'maps.yaml.dvpl').read_bytes(), resources[Path('maps.yaml.dvpl')])
+        self.assertFalse((data/scene.with_name('rudniki_evening.sc2.dvpl')).exists())
+
+    def test_lighting_restores_originals_after_interrupted_preset_switch(self):
+        maps = (client_atmosphere.MINES, '05_amigosville_am')
+        original = dvpl.encode(bytes(1024))
+        legacy = dvpl.encode(bytes(1023)+b'\x01')
+        layout = (digest(original), 32, 150, 200, 320, 8.0)
+        self.write_manifest(mines_evening_overlay=True)
+        with (patch.object(client_atmosphere, 'SCENES', dict.fromkeys(maps, layout)),
+              patch.object(client_atmosphere, 'SUMMER_SCENES', frozenset(maps)),
+              patch.object(client_atmosphere, 'LEGACY_MINES_EVENING_SHA256',
+                           digest(legacy))):
+            for name in maps:
+                relative = Path('Data')/client_atmosphere.scene_path(name)
+                for root in (self.game, self.client):
+                    (root/relative).parent.mkdir(parents=True, exist_ok=True)
+                (self.game/relative).write_bytes(original)
+                (self.client/relative).write_bytes(legacy if name == client_atmosphere.MINES else original)
+
+            from solbreaker.connection import atomic_write
+
+            def fail_after_one_scene(path, data, **kwargs):
+                if path.suffix == '.dvpl' and path.stem == '05_amigosville_am.sc2':
+                    raise OSError('interrupted')
+                return atomic_write(path, data, **kwargs)
+
+            with patch('solbreaker.connection.atomic_write', side_effect=fail_after_one_scene):
+                with self.assertRaises(OSError):
+                    client_atmosphere.apply_preset(self.lab, json.loads(self.manifest.read_text()), 'fog')
+            self.assertEqual(
+                (self.client/'Data'/client_atmosphere.scene_path(client_atmosphere.MINES)).read_bytes(),
+                client_atmosphere.scene_preset(original, client_atmosphere.MINES, 'fog'))
+            client_atmosphere.apply_preset(self.lab, json.loads(self.manifest.read_text()), 'original')
+            for name in maps:
+                relative = Path('Data')/client_atmosphere.scene_path(name)
+                self.assertEqual((self.client/relative).read_bytes(), original)
+                self.assertEqual((self.game/relative).read_bytes(), original)
+            self.assertNotIn('map_lighting_overlays', json.loads(self.manifest.read_text()))
+            self.assertNotIn('mines_evening_overlay', json.loads(self.manifest.read_text()))
+
+    def test_sunset_replaces_old_overlay_and_restores_excluded_maps(self):
+        mines, canyon = client_atmosphere.MINES, '25_canyon_ca'
+        scene = bytearray(1024)
+        struct.pack_into('<f', scene, 32, 1.)
+        original = dvpl.encode(scene)
+        layout = (digest(original), 32, 150, 200, 320, 8.)
+        with (patch.object(client_atmosphere, 'SCENES', dict.fromkeys((mines, canyon), layout)),
+              patch.object(client_atmosphere, 'SUMMER_SCENES', frozenset({mines}))):
+            old = dvpl.encode(bytes(1024))
+            self.write_manifest(map_lighting_overlays={name: [digest(old)] for name in (mines, canyon)})
+            for name in (mines, canyon):
+                relative = Path('Data')/client_atmosphere.scene_path(name)
+                for root, content in ((self.game, original), (self.client, old)):
+                    target = root/relative
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_bytes(content)
+
+            client_atmosphere.apply_preset(
+                self.lab, json.loads(self.manifest.read_text()), 'evening')
+            mines_path = self.client/'Data'/client_atmosphere.scene_path(mines)
+            canyon_path = self.client/'Data'/client_atmosphere.scene_path(canyon)
+            self.assertAlmostEqual(struct.unpack_from('<f', dvpl.read(mines_path), 32)[0], .79)
+            self.assertEqual(canyon_path.read_bytes(), original)
+            client_atmosphere.apply_preset(
+                self.lab, json.loads(self.manifest.read_text()), 'original')
+            self.assertEqual(mines_path.read_bytes(), original)
 
     def test_atgm_patch_recovers_an_interrupted_launch_upgrade(self):
         target = self.client/'wotblitz.exe'
@@ -64,6 +168,7 @@ class ClientRepairs(unittest.TestCase):
               patch.object(client_sandbox, 'OUTPUT_SHA256', digest(after)),
               patch.object(client_sandbox, 'patch', return_value=after) as upgrade_image,
               patch('solbreaker.management_tasks.require_executable_idle'),
+              patch('solbreaker.client_motion_blur.install_motion_blur'),
               patch('solbreaker.client_ui.install_server_name'),
               patch('solbreaker.client_tls.configure_environment'),
               patch('solbreaker.management_tasks.subprocess.call', return_value=0) as launch):

@@ -108,12 +108,15 @@ class Arena:
         if room_settings is not None and (solo or not isinstance(room_settings, RoomBattleSettings)):
             raise ValueError('Invalid training room settings')
         self.room_settings = room_settings
-        self.endless = room_settings is not None and room_settings.minutes == 0
-        self.unlimited_lives = room_settings is not None and room_settings.unlimited_lives
+        settings = training.battle_settings if solo else room_settings or RoomBattleSettings()
+        self.endless = settings.minutes == 0
+        self.unlimited_lives = settings.unlimited_lives
+        self.unlimited_ammo = settings.unlimited_ammo
         rules = (training.battle_mode if training.bots_enabled else 'elimination') if solo else room_mode
         self.gravity_mode = rules == 'gravity'
         self._gravity_game = bot_game if self.gravity_mode else None
         self.practice = sandbox_enabled and solo and not bot_enabled
+        self.practice_clock_repeats = self.practice and settings.minutes is None
         self.practice_slots = set()
         self.practice_spawned = set()
         self.practice_next_spawn = 0.
@@ -136,8 +139,8 @@ class Arena:
                          if rules == 'supremacy' else None)
         self.client_map_id = self.map_id | (0x10000 if self.supremacy is not None else 0)
         self.battle_seconds = 420 if self.base_capture is not None or self.supremacy is not None else 600
-        if room_settings is not None and room_settings.minutes:
-            self.battle_seconds = room_settings.minutes * 60
+        if settings.minutes:
+            self.battle_seconds = settings.minutes * 60
         self.epoch = time.monotonic() if now is None else now
         self.last_tick = self.epoch
         self.simulation_time = self.epoch
@@ -691,7 +694,8 @@ class Arena:
         gun = self.guns.get(vehicle.entity_id)
         return gun is not None and gun.destroyed
 
-    def _module_changed(self, vehicle, part, reason, now, *, sync_track_modifiers=True):
+    def _module_changed(self, vehicle, part, reason, now, *, sync_track_modifiers=True,
+                        track_just_broke=False):
         if part == _ENGINE_EXTRA:
             extra,health = _ENGINE_EXTRA,self.engines[vehicle.entity_id].health
         elif part == _AMMO_RACK_EXTRA:
@@ -721,7 +725,8 @@ class Arena:
             self.emit('module_repair', vehicle.entity_id, extra=previous_repair,
                       progress=100, duration=self.STEP, at=now)
         self.emit('module_state', vehicle.entity_id, extra=extra, reason=reason,
-                  critical=critical, destroyed=destroyed, health=health, at=now)
+                  critical=critical, destroyed=destroyed, health=health, at=now,
+                  track_just_broke=track_just_broke)
         if part in _TRACK_EXTRAS:
             for repair_extra,progress,duration in repair_status:
                 self.emit('module_repair', vehicle.entity_id, extra=repair_extra,
@@ -1079,7 +1084,8 @@ class Arena:
         self.emit('module_hit',contact.shooter,contact.target,shot=contact.shot,
                   part=contact.hit.part,damage=applied,health=state.health,at=at)
         if before != (state.broken,state.critical) or state.broken and applied > 0:
-            self._module_changed(target,contact.hit.part,1 if state.broken else 0,at)
+            self._module_changed(target, contact.hit.part, 1 if state.broken else 0, at,
+                                 track_just_broke=state.broken and not before[0])
 
     def _repair_tracks(self, vehicle, now):
         """Repair kit: full HP for supported local modules."""
@@ -1106,6 +1112,41 @@ class Arena:
         return (vehicle.reload_speed_factor
                 * self.applied_ammo_reload_factors.get(vehicle.entity_id, 1.)
                 * self.applied_crew_reload_factors.get(vehicle.entity_id, 1.))
+
+    def _reload_duration(self, vehicle, kind, nominal):
+        if vehicle.sandbox_fast_reload:
+            return sandbox.FAST_RELOAD_SECONDS
+        if kind == 'interval':
+            return nominal / vehicle.reload_speed_factor * vehicle.interval_factor
+        return nominal / self._full_reload_rate(vehicle)
+
+    def _set_fast_reload(self, vehicle, enabled):
+        if vehicle.sandbox_fast_reload == enabled:
+            return
+        vehicle.sandbox_fast_reload = enabled
+        now = self.simulation_time
+        weapon = vehicle.definition.weapon if vehicle.definition else None
+        kind = vehicle.reload_kind
+        if not vehicle.burst_pending:
+            if kind == 'interval':
+                nominal = weapon.interval if weapon else .1
+            else:
+                nominal = weapon.reload if weapon else 6.
+            duration = self._reload_duration(vehicle, kind, nominal)
+            if vehicle.reload_at > now:
+                vehicle.reload_at = now + (vehicle.reload_at-now) * duration / vehicle.reload_total
+            vehicle.reload_total = duration
+        if vehicle.pump_at > now:
+            duration = self._reload_duration(vehicle, 'reload', vehicle.pump_times[vehicle.clip])
+            vehicle.pump_at = now + (vehicle.pump_at-now) * duration / vehicle.pump_total
+            vehicle.pump_total = duration
+        if not vehicle.burst_pending:
+            self.emit('reload', vehicle.entity_id, delay=max(0., vehicle.reload_at-now),
+                      total=vehicle.reload_total)
+        if vehicle.pump_times:
+            if not vehicle.clip:
+                self._emit_pump_gate(vehicle, now)
+            self._emit_pump(vehicle, now)
 
     def _configure_ammunition(self, vehicle):
         """Copy the garage loadout; live counts never alias persistent data."""
@@ -1142,11 +1183,11 @@ class Arena:
         vehicle.burst_remaining = 0
         vehicle.burst_switch_shell = 0
         vehicle.reload_kind = 'reload'
-        vehicle.reload_total = (weapon.reload if weapon else 6.)/self._full_reload_rate(vehicle)
+        vehicle.reload_total = self._reload_duration(vehicle, 'reload', weapon.reload if weapon else 6.)
         if vehicle.pump_times and weapon:
             # A ready pump's next cycle is the intershot, never the full reload.
             vehicle.reload_kind = 'interval'
-            vehicle.reload_total = weapon.interval/vehicle.reload_speed_factor*vehicle.interval_factor
+            vehicle.reload_total = self._reload_duration(vehicle, 'interval', weapon.interval)
         vehicle.pump_at = vehicle.pump_total = 0.
         vehicle.pump_waiting = False
 
@@ -1175,7 +1216,7 @@ class Arena:
         times = vehicle.pump_times
         vehicle.pump_waiting = False
         if vehicle.clip < len(times) and vehicle.ammo > vehicle.clip:
-            vehicle.pump_total = times[vehicle.clip]/self._full_reload_rate(vehicle)
+            vehicle.pump_total = self._reload_duration(vehicle, 'reload', times[vehicle.clip])
             vehicle.pump_at = start+vehicle.pump_total
         else:
             vehicle.pump_at = vehicle.pump_total = 0.
@@ -1252,10 +1293,10 @@ class Arena:
             self._publish_base_capture()
 
     def _combat_can_finish(self):
-        if self.room_settings is None:
-            return True
         if self.endless or self.unlimited_lives:
             return False
+        if self.room_settings is None:
+            return True
         return ({p.team for p in self.players.values() if p.attached}
                 == {p.team for p in self.players.values()})
 
@@ -1533,7 +1574,7 @@ class Arena:
                     self._update_recon_camouflage(vehicle, self.started)
             self._record_motion_frame(self.started)
             self.emit('period',period=3,seconds=0 if self.endless else self.battle_seconds,winner=0)
-            if self.practice:
+            if self.practice_clock_repeats:
                 self.practice_timer_at = self.started+self.battle_seconds
             if self.base_capture is not None:
                 self._publish_base_capture()
@@ -1578,10 +1619,33 @@ class Arena:
             return
         if self.sandbox_enabled:
             self._sandbox_inputs[account_id] = (self.simulation_time, control)
+            self._set_fast_reload(self.vehicle_for(account_id), bool(control.flags & sandbox.FAST_RELOAD))
         if self.gravity_mode and control.flags & sandbox.GRAVITY_JUMP:
             self._gravity_jump(self.vehicle_for(account_id))
         if self.practice and control.flags & sandbox.SPAWN_TARGET:
             self._spawn_practice_target(self.vehicle_for(account_id))
+        if self.sandbox_enabled and control.flags & sandbox.TELEPORT:
+            self._teleport_vehicle(self.vehicle_for(account_id))
+
+    def _teleport_vehicle(self, vehicle):
+        if self.world is None:
+            return
+        entity = vehicle.entity_id
+        _, (x, _, z) = self.aim_hit(vehicle)
+        pose = self.world.training_placement(entity, x, z, vehicle.pose.yaw, stationary=True)
+        if pose is None:
+            return
+        self.world.relocate_training_body(entity, pose)
+        vehicle.pose, vehicle.speed = pose, 0.
+        self.motion_frame = None
+        for state in (self._sandbox_flights, self._landing_airborne_since, self._landing_skids,
+                      self._track_drive_motion, self._track_drive_yaw_rates,
+                      self._track_drive_track_rates, self.fall_hp_carry):
+            state.pop(entity, None)
+        for track in vehicle.tracks:
+            self.track_fall_peaks.pop((entity, track), None)
+        self.emit('sandbox_teleport', entity, position=pose.position,
+                  yaw=pose.yaw, pitch=pose.pitch, roll=pose.roll)
 
     def _gravity_jump(self, vehicle):
         entity = vehicle.entity_id
@@ -1622,7 +1686,8 @@ class Arena:
         new = entity not in self.practice_spawned
         self._restore_vehicle(entity, pose)
         self.practice_spawned.add(entity)
-        self.emit('practice_spawn', entity, first=new, position=pose.position)
+        self.emit('practice_spawn', entity, first=new, position=pose.position,
+                  placed_by=player_vehicle.entity_id)
 
     def _restore_vehicle(self, entity, pose):
         previous = self.vehicles[entity]
@@ -1637,6 +1702,7 @@ class Arena:
                           'piercings_received', 'distance', 'capture_points', 'defense_points'):
                 setattr(restored, field, getattr(previous, field))
         restored.consumable_clock = self.simulation_time
+        restored.sandbox_fast_reload = previous.sandbox_fast_reload
         self._configure_battle_vehicle(restored, self.world.assets_for(entity))
         restored.movable_armor_state = self._movable_armor_snapshot_at(restored, self.simulation_time)
         self.world.relocate_training_body(entity, pose)
@@ -1850,7 +1916,7 @@ class Arena:
         weapon = vehicle.definition.weapon if vehicle.definition else None
         vehicle.clip = 0
         vehicle.reload_kind = 'reload'
-        vehicle.reload_total = (weapon.reload if weapon else 6.) / self._full_reload_rate(vehicle)
+        vehicle.reload_total = self._reload_duration(vehicle, 'reload', weapon.reload if weapon else 6.)
         vehicle.reload_at = self.simulation_time + vehicle.reload_total
         self.emit('ammo',vehicle.entity_id)
         self.emit('reload',vehicle.entity_id,delay=vehicle.reload_total)
@@ -1934,11 +2000,9 @@ class Arena:
             return
         # Berserk's speed applies to both cycles; NewAutoloader only to the intershot.
         vehicle.reload_kind = 'interval' if vehicle.clip else 'reload'
-        delay = ((weapon.interval if vehicle.clip else weapon.reload) if weapon else
-                 (.1 if vehicle.clip else 6.)) / (vehicle.reload_speed_factor if vehicle.clip
-                                                   else self._full_reload_rate(vehicle))
-        if vehicle.clip:
-            delay *= vehicle.interval_factor
+        nominal = (weapon.interval if vehicle.clip else weapon.reload) if weapon else (
+            .1 if vehicle.clip else 6.)
+        delay = self._reload_duration(vehicle, vehicle.reload_kind, nominal)
         vehicle.reload_at = now+delay
         vehicle.reload_total = delay
         self._emit_shot(vehicle,shell,origin,velocity,now,shot_effect)
@@ -1998,7 +2062,7 @@ class Arena:
     def _launch(self, vehicle, shell, now):
         """Spend one round and spawn its projectile from the live pose."""
         vehicle.shots += 1
-        if not self.practice or vehicle.account_id is None:
+        if not (self.unlimited_ammo or (self.practice and vehicle.account_id is not None)):
             vehicle.ammo -= 1
         vehicle.ammo_by_shell[vehicle.shell_id] = vehicle.ammo
         vehicle.clip -= 1
@@ -2110,7 +2174,7 @@ class Arena:
             vehicle.burst_switch_shell = 0
             vehicle.clip = 0
             vehicle.reload_kind = 'reload'
-            vehicle.reload_total = weapon.reload/self._full_reload_rate(vehicle)
+            vehicle.reload_total = self._reload_duration(vehicle, 'reload', weapon.reload)
             vehicle.reload_at = now+vehicle.reload_total
             self.emit('ammo',vehicle.entity_id)
             self.emit('reload',vehicle.entity_id,delay=vehicle.reload_total)
@@ -2125,10 +2189,8 @@ class Arena:
         else:
             vehicle.burst_shell,vehicle.burst_effect = None,0
             vehicle.reload_kind = 'interval' if vehicle.clip else 'reload'
-            delay = (weapon.interval if vehicle.clip else weapon.reload)/(
-                vehicle.reload_speed_factor if vehicle.clip else self._full_reload_rate(vehicle))
-            if vehicle.clip:
-                delay *= vehicle.interval_factor
+            nominal = weapon.interval if vehicle.clip else weapon.reload
+            delay = self._reload_duration(vehicle, vehicle.reload_kind, nominal)
             vehicle.reload_at = now+delay
             vehicle.reload_total = delay
         # The initial event already started this group's muzzle/audio sequence.
@@ -2153,7 +2215,7 @@ class Arena:
         vehicle.pump_at = vehicle.pump_total = 0.
         switched = 0
         if vehicle.clip:
-            delay = weapon.interval/vehicle.reload_speed_factor*vehicle.interval_factor
+            delay = self._reload_duration(vehicle, 'interval', weapon.interval)
             vehicle.reload_kind = 'interval'
             vehicle.reload_at = now+delay
             vehicle.reload_total = delay
@@ -2294,6 +2356,10 @@ class Arena:
                 scale *= interval/vehicle.interval_factor
             else:
                 scale = full_scale
+            if vehicle.sandbox_fast_reload:
+                pump_scale = 1.
+                if not vehicle.burst_pending:
+                    scale = 1.
             if scale != 1:
                 vehicle.reload_total *= scale
                 if vehicle.reload_at > at:
@@ -2474,10 +2540,13 @@ class Arena:
             return
         player.attached = False
         player.departure_reason = reason
+        self._sandbox_inputs.pop(account_id, None)
         if self._recon_point_probe is not None:
             self._recon_point_probe['points'].pop(account_id, None)
             self._recon_point_probe['next'].pop(account_id, None)
         vehicle = self.vehicle_for(account_id)
+        if vehicle.alive and not self.finished_at:
+            self._set_fast_reload(vehicle, False)
         if self.recon is not None:
             self.recon.remove_vehicle(vehicle.entity_id)
             self._recon_camouflage_still.pop(vehicle.entity_id, None)
@@ -2767,7 +2836,8 @@ class Arena:
                 self.emit('module_hit',0,vehicle.entity_id,shot=0,part=part,
                           damage=applied,health=track.health,at=at,cause='fall')
             if before != (track.broken,track.critical) or track.broken and applied:
-                self._module_changed(vehicle,part,1 if track.broken else 0,at)
+                self._module_changed(vehicle, part, 1 if track.broken else 0, at,
+                                     track_just_broke=track.broken and not before[0])
 
     @staticmethod
     def _skid_velocity(previous, yaw, speed, grip_step):
@@ -3700,7 +3770,8 @@ class Arena:
                 self.emit('reload',vehicle.entity_id,delay=0.,total=vehicle.reload_total)
         if self.practice and not self.finished_at:
             self._advance_practice(now)
-        if (not self.practice and not self.endless and not self.finished_at and not self.solo_victory_team
+        if (not self.practice_clock_repeats and not self.endless and not self.finished_at
+                and not self.solo_victory_team
                 and now-self.started>=self.battle_seconds):
             self.finish(self.supremacy.timeout_winner() if self.supremacy is not None else 0,
                         'supremacy_timeout' if self.supremacy is not None else 'timeout', now)
@@ -3946,7 +4017,7 @@ class Arena:
             pending_burst = any(v.alive and v.burst_pending and
                                 (v.account_id is None or self.players[v.account_id].attached)
                                 for v in self.vehicles.values())
-            if (not self.practice and self.solo and teams == {1}
+            if (not self.practice and self.solo and teams == {1} and self._combat_can_finish()
                     and self.base_capture is None and self.supremacy is None):
                 self.solo_victory_team = 1
             if (not self.practice and not self.solo_victory_team and len(teams)<=1

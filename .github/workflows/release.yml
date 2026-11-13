@@ -3,6 +3,7 @@ name: Release
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -13,6 +14,7 @@ concurrency:
 
 jobs:
   ci:
+    if: github.event_name == 'push'
     uses: ./.github/workflows/ci.yml
 
   package:
@@ -94,3 +96,45 @@ jobs:
           fi
           gh release create "$GITHUB_REF_NAME" "${options[@]}" \
             "Solbreaker-$version-source.zip" "Solbreaker-$version-windows-x64.zip" SHA256SUMS
+
+  sync-readmes:
+    needs: publish
+    if: >-
+      ${{ !cancelled() && (needs.publish.result == 'success' ||
+          (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    concurrency:
+      group: release-readmes-main
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: main
+      - name: Update release links on main
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          for attempt in 1 2 3; do
+            git fetch origin main
+            git reset --hard FETCH_HEAD
+            gh api --paginate "repos/$GH_REPO/releases?per_page=100" |
+              jq --slurp . |
+              python3 tools/sync_release_readmes.py
+            if git diff --quiet -- README.md README.ru.md; then
+              exit 0
+            fi
+            git add -- README.md README.ru.md
+            git commit -m 'Update README release links'
+            python3 tools/audit_repository.py --base HEAD^
+            if git push origin HEAD:refs/heads/main; then
+              exit 0
+            fi
+          done
+          exit 1

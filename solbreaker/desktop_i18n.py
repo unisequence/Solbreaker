@@ -8,6 +8,12 @@ import re
 from PySide6.QtWidgets import QApplication
 
 ENGLISH = {
+    'Освещение карт': 'Map lighting',
+    'Оригинал': 'Original',
+    'Закат': 'Sunset',
+    'Туман': 'Fog',
+    'Освещение при следующем запуске игры. Доступно на Рудниках, на Протоке и на Виноградниках.':
+        'Applies the next time the game starts. Available on Mines, Falls Creek and Vineyards.',
     'Игра': 'Game',
     'Подготовить карты': 'Prepare maps',
     'Запустить свой сервер и подготовить карты заранее. Можно начать игру в любой момент.':

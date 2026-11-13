@@ -36,6 +36,12 @@ map_keys:
     .long 85, map_key_85-0x400000
     .long 89, map_key_89-0x400000
     .long 100, map_key_100-0x400000
+    .long 101, map_key_101-0x400000
+    .long 102, map_key_102-0x400000
+    .long 103, map_key_103-0x400000
+    .long 104, map_key_104-0x400000
+    .long 105, map_key_105-0x400000
+    .long 106, map_key_106-0x400000
     .long 0,0
 map_key_1: .asciz "#maps:karelia:17_karelia_ka/17_karelia_ka.sc2"
 map_key_2: .asciz "#maps:desert_train:02_desert_train_dt/02_desert_train_dt.sc2"
@@ -71,3 +77,9 @@ map_key_83: .asciz "#maps:erlenberg_old:erlenberg_old/erlenberg_old.sc2"
 map_key_85: .asciz "#maps:amigosville_old:amigosville_old/amigosville_old.sc2"
 map_key_89: .asciz "#maps:savanna_old:savanna_old/savanna_old.sc2"
 map_key_100: .asciz "#maps:user_map:06_rudniki_rd/user_map.sc2"
+map_key_101: .asciz "#maps:rudniki_evening:06_rudniki_rd/rudniki_evening.sc2"
+map_key_102: .asciz "#maps:rudniki_fog:06_rudniki_rd/rudniki_fog.sc2"
+map_key_103: .asciz "#maps:amigosville_evening:05_amigosville_am/amigosville_evening.sc2"
+map_key_104: .asciz "#maps:amigosville_fog:05_amigosville_am/amigosville_fog.sc2"
+map_key_105: .asciz "#maps:italy_evening:22_italy_it/italy_evening.sc2"
+map_key_106: .asciz "#maps:italy_fog:22_italy_it/italy_fog.sc2"

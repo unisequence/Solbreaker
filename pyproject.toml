@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "solbreaker-server"
-version = "0.1.0a6"
+version = "0.1.0a7"
 description = "Solbreaker multiplayer tank server compatible with build 11.21.0.1235_7376187"
 requires-python = ">=3.11"
 license = "AGPL-3.0-only"

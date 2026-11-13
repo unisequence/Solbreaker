@@ -1,6 +1,10 @@
 # Solbreaker
 
-[Скачать alpha.5](https://github.com/unisequence/Solbreaker/releases/tag/v0.1.0-alpha.5) ·
+<!-- release-download:start -->
+[Скачать 0.1.0-alpha.6](https://github.com/unisequence/Solbreaker/releases/tag/v0.1.0-alpha.6)
+<!-- release-download:end -->
+
+[Все релизы](https://github.com/unisequence/Solbreaker/releases) ·
 [English](README.md) ·
 [Сообщить об ошибке](https://github.com/unisequence/Solbreaker/issues/new/choose)
 

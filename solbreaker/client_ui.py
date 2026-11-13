@@ -48,16 +48,30 @@ UI_RESOURCES = (BASE_HEADER, BASE_LOBBY, BASE_LOBBY_ACTIONS, STATS_ITEM, INVENTO
                 client_battle_settings.FORM, client_battle_settings.ROOM, *client_recon.MARKER_OPACITY)
 STRINGS_EN = "Strings/en.yaml.dvpl"
 STRINGS_RU = "Strings/ru.yaml.dvpl"
-SANDBOX_BINDINGS_VERSION = 3
+SANDBOX_BINDINGS_VERSION = 8
 SANDBOX_BINDING_STRINGS = {
     STRINGS_EN: {'Title': 'Solbreaker Sandbox',
                  'Boost': 'Toggle boost', 'Flight': 'Toggle flight',
                  'Missile': 'Toggle missile camera', 'Target': 'Place training target',
-                 'Jump': 'Gravity Force thruster'},
+                 'Reload': 'Toggle fast reload',
+                 'Jump': 'Gravity Force thruster',
+                 'Boost0': 'Boost off', 'Boost1': 'Boost on',
+                 'Fly0': 'Flight off', 'Fly1': 'Flight on',
+                 'Cam0': 'Missile camera off', 'Cam1': 'Missile camera armed',
+                 'Load0': 'Fast reload off', 'Load1': 'Fast reload on (0.5 s)',
+                 'Spawn': 'Target placed', 'TP': 'Teleport to aim point',
+                 'Moved': 'Teleported'},
     STRINGS_RU: {'Title': 'Песочница Solbreaker',
                  'Boost': 'Включить или выключить форсаж', 'Flight': 'Взлететь или сесть',
                  'Missile': 'Переключить камеру ПТУР', 'Target': 'Поставить мишень на Полигоне',
-                 'Jump': 'Прыгнуть в «Гравитации»'},
+                 'Reload': 'Быстрая перезарядка',
+                 'Jump': 'Прыгнуть в «Гравитации»',
+                 'Boost0': 'Форсаж выключен', 'Boost1': 'Форсаж включён',
+                 'Fly0': 'Полёт выключен', 'Fly1': 'Полёт включён',
+                 'Cam0': 'Камера ПТУР выключена', 'Cam1': 'Камера ПТУР включится при пуске',
+                 'Load0': 'Быстрая перезарядка выключена', 'Load1': 'Быстрая перезарядка включена (0,5 с)',
+                 'Spawn': 'Мишень установлена', 'TP': 'Телепорт в точку прицеливания',
+                 'Moved': 'Танк перемещён'},
 }
 LOCAL_TRAINING_MAP_STRINGS = {
     STRINGS_EN: {"#maps:lagoon:15_lagoon_ln/15_lagoon_ln.sc2": "Lagoon"},
@@ -130,6 +144,20 @@ def _sandbox_binding_strings(relative):
             for key, value in SANDBOX_BINDING_STRINGS[relative].items()}
 
 
+def _weather_map_strings(document, relative):
+    from .map_catalog import WEATHER_MAPS
+
+    suffixes = {'evening': 'Закат', 'fog': 'Туман'} if relative == STRINGS_RU else {
+        'evening': 'Sunset', 'fog': 'Fog'}
+    directories = {'rudniki': '06_rudniki_rd', 'amigosville': '05_amigosville_am',
+                   'italy': '22_italy_it'}
+    for key, (_, base, preset) in WEATHER_MAPS.items():
+        directory = directories[base]
+        name = document.get(f'#maps:{base}:{directory}/{directory}.sc2')
+        if name:
+            document[f'#maps:{key}:{directory}/{key}.sc2'] = f'{name} — {suffixes[preset]}'
+
+
 def _sandbox_controls(document):
     page, = (node for node in document['Prototypes'] if node['name'] == 'KeyboardMouseControlOptionsPage')
     scroll, = (node for node in page['children'] if node['name'] == 'ScrollView')
@@ -165,6 +193,7 @@ def patched_strings(source, relative, *, navigation_enabled=True):
     document.update(LOCAL_PROVISION_STRINGS.get(relative, {}))
     document.update(LOCAL_MODE_STRINGS.get(relative, {}))
     document.update(_sandbox_binding_strings(relative))
+    _weather_map_strings(document, relative)
     locale = 'ru' if relative == STRINGS_RU else 'en'
     document.update({'Local/BattleSettings/'+key: value
                      for key, value in client_battle_settings.STRINGS[locale].items()})
@@ -526,6 +555,7 @@ def install_sandbox_bindings(lab, manifest):
     for relative in SANDBOX_BINDING_STRINGS:
         strings = yaml.load(dvpl.read(data/relative), Loader=_StringsLoader)
         strings.update(_sandbox_binding_strings(relative))
+        _weather_map_strings(strings, relative)
         patches[relative] = dvpl.encode(yaml.safe_dump(strings, sort_keys=False, allow_unicode=True,
                                                        width=1 << 30).encode())
     for relative, content in patches.items():

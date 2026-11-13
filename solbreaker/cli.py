@@ -61,6 +61,8 @@ def main(argv=None):
     launch_origin.add_argument('--connection', type=Path)
     launch_origin.add_argument('--url')
     launch.add_argument('--auto-login', action=argparse.BooleanOptionalAction, default=None)
+    from .client_atmosphere import PRESETS
+    launch.add_argument('--lighting', choices=PRESETS, help='Local lighting on supported maps')
     backup = commands.add_parser('backup-state', help='Back up offline accounts, progress and server keys')
     backup.add_argument('--state', type=Path, default=Path('data'))
     backup.add_argument('--output', type=Path, required=True)
@@ -83,7 +85,7 @@ def main(argv=None):
         elif args.command == 'launch-client':
             from .management_tasks import launch_client
             result = launch_client(args.lab, auto_login=args.auto_login,
-                                   profile=args.connection, url=args.url)
+                                   profile=args.connection, url=args.url, lighting=args.lighting)
             if result not in (0, 1):
                 parser.exit(1, f'Client exited with code {result}\n')
             return

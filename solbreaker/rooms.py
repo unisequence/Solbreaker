@@ -280,6 +280,7 @@ class RoomManager:
                 'map_id':room.map_id,'map_key':self.endpoint.map_catalog[room.map_id],
                 'battle_mode':room.battle_mode,
                 'unlimited_lives':room.battle_settings.unlimited_lives,
+                'unlimited_ammo':room.battle_settings.unlimited_ammo,
                 'battle_minutes':room.battle_settings.minutes,
                 'bot_counts':list(room.bot_counts),'active_bot_counts':list(room.active_bot_counts),
                 'state':'battle' if room.arena_id else 'waiting',
@@ -306,7 +307,8 @@ class RoomManager:
             if not isinstance(data,dict):raise ValueError('Expected a JSON object')
             if path=='/rooms/create':room=self.create(account,data.get('team',1),data.get('map_id'),
                 bot_counts=data.get('bot_counts',(0,0)), battle_mode=data.get('battle_mode','encounter'),
-                battle_settings=RoomBattleSettings(data.get('unlimited_lives',False),data.get('battle_minutes')))
+                battle_settings=RoomBattleSettings(data.get('unlimited_lives',False),
+                    data.get('battle_minutes'),data.get('unlimited_ammo',False)))
             elif path=='/rooms/join':room=self.join(account,data.get('id'),data.get('team'))
             elif path=='/rooms/map':room=self.set_map(account,data.get('map_id'))
             elif path=='/rooms/bots':room=self.set_bots(account,data.get('bot_counts'))

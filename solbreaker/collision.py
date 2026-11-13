@@ -2203,7 +2203,7 @@ class CollisionWorld:
         bullet.resetBasePositionAndOrientation(body, pose.position,
                     quaternion(pose.yaw, pose.pitch, pose.roll), physicsClientId=self.cid)
 
-    def training_placement(self, entity, x, z, yaw):
+    def training_placement(self, entity, x, z, yaw, *, stationary=False):
         """Find a supported placement without leaving a speculative sensor pose."""
         low_x, low_z, high_x, high_z = self.assets.bounds
         if not (low_x < x < high_x and low_z < z < high_z):
@@ -2211,7 +2211,10 @@ class CollisionWorld:
         previous = self.poses[entity]
         pose = self.ground_pose(x, z, yaw, entity=entity)
         try:
-            valid, _ = self._valid(pose, previous, entity=entity, climb=False, suspension=True)
+            if stationary:
+                valid = self._inside(pose, entity) and not self._contacts(pose, entity, suspension=True)
+            else:
+                valid, _ = self._valid(pose, previous, entity=entity, climb=False, suspension=True)
         finally:
             self.set_pose(self.bodies[entity], previous)
         return pose if valid else None

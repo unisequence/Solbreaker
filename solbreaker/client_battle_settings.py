@@ -3,6 +3,7 @@ from pathlib import Path
 import struct
 
 from . import dvpl
+from .battle_settings_wire import PREFIX, RULES_SHIFT
 from .roster import TEAM_SIZE
 from .training_config import MAX_ROOM_MINUTES
 
@@ -10,10 +11,8 @@ FORM = 'UI/Screens/Lobby/Training/CreateRoom.yaml.dvpl'
 ROOM = 'UI/Screens/Lobby/Training/Room.yaml.dvpl'
 ACTIONS = 'UI/Screens/Lobby/Training/LocalBattleSettings.actions.dvpl'
 TITLE = 'SolbreakerBotSetup'
-PREFIX = 'SolbreakerBots/1/'
 SAVED_RESULT = 127
 LOADED_RESULT = 128
-GET_TITLE = 'SolbreakerBotGet'
 EXTENSION_VA = 0x4B1DE00
 EXTENSION_REPLY_VA = 0x4B1DE64
 
@@ -152,6 +151,7 @@ RULES_CAPTION = ('when localRules == 3 -> localize("Local/BattleSettings/Gravity
 
 ROOM_MODE_VALUE = '(when roomModeOverride >= 0 -> roomModeOverride, (when roomInitialMode >= 0 -> roomInitialMode, 1))'
 ROOM_LIVES_VALUE = '(when roomLivesOverride >= 0 -> roomLivesOverride, roomInitialLives)'
+ROOM_AMMO_VALUE = '(when roomAmmoOverride >= 0 -> roomAmmoOverride, roomInitialAmmo)'
 ROOM_MINUTES_VALUE = '(when roomMinutesOverride >= -1 -> roomMinutesOverride, roomInitialMinutes)'
 ROOM_BOT_VALUES = {
     team: f'(when roomBots{team}Override >= 0 -> roomBots{team}Override, roomInitialBots{team})'
@@ -191,24 +191,29 @@ def _room_duration_settings(root):
     container, = [n for n in _walk(root) if n.get('name') == 'scrollContainerControl']
     rows = container['children']
     rows[:] = [row for row in rows if row.get('name') not in
-               ('LocalRoomLives', 'LocalRoomDuration', 'LocalRoomOptions', 'LocalRoomBots1', 'LocalRoomBots2')]
+               ('LocalRoomLives', 'LocalRoomAmmo', 'LocalRoomDuration', 'LocalRoomOptions',
+                'LocalRoomBots1', 'LocalRoomBots2')]
     room_rules, = [row for row in rows if row.get('name') == 'LocalRoomRules']
     components = root['components']
     local_vars = components['UIDataLocalVarsComponent']['data']
     local_vars[:] = [row for row in local_vars if not row[1].startswith('localRoom') and row[1] not in
-                     ('roomModeOverride', 'roomLivesOverride', 'roomMinutesOverride',
+                     ('roomModeOverride', 'roomLivesOverride', 'roomAmmoOverride', 'roomMinutesOverride',
                       'roomBots1Override', 'roomBots2Override')]
     room_params = (('roomInitialMode', -1), ('roomInitialLives', 0), ('roomInitialMinutes', -1),
-                   ('roomInitialBots1', 0), ('roomInitialBots2', 0))
+                   ('roomInitialBots1', 0), ('roomInitialBots2', 0), ('roomInitialAmmo', 0))
     params = components['UIDataParamsComponent']['params']
     params[:] = [row for row in params if row[1] not in {name for name, _ in room_params}]
     params.extend([['int', name, str(value), str(value)] for name, value in room_params])
     for index in range(2, 5):
         components.pop(f'UIEventOnDataComponent{index}', None)
     # Each field inherits its saved value until the player changes that field.
+    for name in ('localFlags', 'localValue'):
+        if not any(row[1] == name for row in local_vars):
+            local_vars.append(['int', name, '0'])
     local_vars.extend([
         ['int', 'roomModeOverride', '-1'],
         ['int', 'roomLivesOverride', '-1'],
+        ['int', 'roomAmmoOverride', '-1'],
         ['int', 'roomMinutesOverride', '-2'],
         ['int', 'roomBots1Override', '-1'], ['int', 'roomBots2Override', '-1'],
     ])
@@ -229,6 +234,11 @@ def _room_duration_settings(root):
     for button, value in zip(lives['children'][1]['children'][0]['children'], (0, 1)):
         button['bindings'] = [['classes', f'when {ROOM_LIVES_VALUE} == {value} -> '
                                 '"button button-color-orange", "button button-color-gray"']]
+    ammo = _row('LocalRoomAmmo', 'Local/BattleSettings/UnlimitedAmmo', [
+        _button('Toggle', f'when {ROOM_AMMO_VALUE} == 1 -> {label("AmmoOn")}, {label("AmmoOff")}',
+                'LocalRoomToggleAmmo', 190)], conditional=False)
+    ammo['children'][1]['children'][0]['children'][0]['bindings'] = [['classes',
+        f'when {ROOM_AMMO_VALUE} == 1 -> "button button-color-orange", "button button-color-gray"']]
     duration = _row('LocalRoomDuration', 'Local/BattleSettings/Duration', [
         _button('Less', '"-"', 'LocalRoomTimeLess', 54),
         _button('Value', ROOM_TIME_CAPTION, 'LocalRoomTimeDefault', 144),
@@ -241,7 +251,7 @@ def _room_duration_settings(root):
             _button('More', '"+"', f'LocalRoomBots{team}More', 54)], conditional=False)
         for team, value in ROOM_BOT_VALUES.items()
     ]
-    for row in (lives, duration, *bots):
+    for row in bots:
         row['bindings'] = [['visible', 'not localBotSetup']]
     duration_buttons = duration['children'][1]['children'][0]['children']
     duration_buttons[-1]['bindings'] = [['classes',
@@ -256,16 +266,18 @@ def _room_duration_settings(root):
                 'localRoomRules == 2 -> "[mode supremacy] ", '
                 'localRoomRules == 0 -> "[mode elimination] ", "[mode encounter] ")')
     lives_tag = '(when localRoomLives == 1 -> "[lives unlimited] ", "[lives single] ")'
+    ammo_tag = (f'(when {ROOM_AMMO_VALUE} == 1 -> "[ammo unlimited] ", '
+                'roomInitialAmmo == 1 -> "[ammo limited] ", "")')
     time_tag = ('(when localRoomMinutes < 0 -> "[time default] ", '
                 'localRoomMinutes == 0 -> "[time endless] ", "[time " + str(localRoomMinutes) + "] ")')
     bots_tag = (f'"[bots " + str({ROOM_BOT_VALUES[1]}) + ":" + str({ROOM_BOT_VALUES[2]})'
                 ' + "] [notes] "')
-    tags = (' + '.join((mode_tag, lives_tag, time_tag, bots_tag)).replace('localRoomRules', ROOM_MODE_VALUE)
+    tags = (' + '.join((mode_tag, lives_tag, ammo_tag, time_tag, bots_tag)).replace('localRoomRules', ROOM_MODE_VALUE)
             .replace('localRoomLives', ROOM_LIVES_VALUE).replace('localRoomMinutes', ROOM_MINUTES_VALUE))
     options = dict(name='LocalRoomOptions', visible=False, input=False, bindings=[['text', tags]])
     options['class'] = 'UITextField'
     index = rows.index(room_rules) + 1
-    rows[index:index] = [lives, duration, *bots, options]
+    rows[index:index] = [lives, duration, *bots, ammo, options]
     return True
 
 
@@ -347,10 +359,15 @@ def extra_resources():
     actions = '''action LocalLoad()
 {
     ChangeData(localBotSetup, true);
-    ChangeData(localAllies, localRecipe % 10);
-    ChangeData(localEnemies, int(localRecipe / 10) % 10);
-    ChangeData(localDifficulty, int(localRecipe / 100) % 10);
-    ChangeData(localRules, int(localRecipe / 1000) % 10);
+    ChangeData(localFlags, int(localRecipe / @RULES_BASE@));
+    ChangeData(localValue, localRecipe % @RULES_BASE@);
+    ChangeData(localAllies, localValue % 10);
+    ChangeData(localEnemies, int(localValue / 10) % 10);
+    ChangeData(localDifficulty, int(localValue / 100) % 10);
+    ChangeData(localRules, int(localValue / 1000) % 10);
+    ChangeData(roomLivesOverride, localFlags % 2);
+    ChangeData(roomAmmoOverride, int(localFlags / 2) % 2);
+    ChangeData(roomMinutesOverride, int(localFlags / 4) - 1);
     DirectEvent("LocalSync", ".");
 }
 action LocalSaved()
@@ -363,7 +380,8 @@ action LocalSync()
     {
         ChangeProperty("**/Title/Container/TextFieldContainer/VerticalBox/Background/TextField", "", "text", "@TITLE@");
         ChangeProperty("**/Description/Container/TextFieldContainer/VerticalBox/Background/TextField", "", "text", "@PREFIX@" + str(localAllies)
-            + "/" + str(localEnemies) + "/" + str(localDifficulty) + "/" + str(localRules));
+            + "/" + str(localEnemies) + "/" + str(localDifficulty) + "/" + str(localRules)
+            + "/" + str(@ROOM_LIVES@) + "/" + str(@ROOM_MINUTES@) + "/" + str(@ROOM_AMMO@));
     }
 }
 action LocalAllyLess() { ChangeData(localAllies, max(0, localAllies - 1)); DirectEvent("LocalSync", "."); }
@@ -384,21 +402,26 @@ action LocalRulesNext()
 }
 action LocalNoop() {}
 action LocalRoomRulesNext() { ChangeData(roomModeOverride, (@ROOM_MODE@ + 1) % 4); }
-action LocalRoomSingleLife() { ChangeData(roomLivesOverride, 0); }
-action LocalRoomUnlimitedLives() { ChangeData(roomLivesOverride, 1); }
+action LocalRoomSingleLife() { ChangeData(roomLivesOverride, 0); DirectEvent("LocalSync", "."); }
+action LocalRoomUnlimitedLives() { ChangeData(roomLivesOverride, 1); DirectEvent("LocalSync", "."); }
+action LocalRoomToggleAmmo() { ChangeData(roomAmmoOverride, 1 - @ROOM_AMMO@); DirectEvent("LocalSync", "."); }
 action LocalRoomTimeLess()
 {
     ChangeData(roomMinutesOverride, when @ROOM_MINUTES@ <= 0 -> 6, max(1, @ROOM_MINUTES@ - 1));
+    DirectEvent("LocalSync", ".");
 }
 action LocalRoomTimeMore()
 {
     ChangeData(roomMinutesOverride, when @ROOM_MINUTES@ <= 0 -> 8, min(@MAX_ROOM_MINUTES@, @ROOM_MINUTES@ + 1));
+    DirectEvent("LocalSync", ".");
 }
-action LocalRoomTimeDefault() { ChangeData(roomMinutesOverride, -1); }
-action LocalRoomTimeEndless() { ChangeData(roomMinutesOverride, 0); }
+action LocalRoomTimeDefault() { ChangeData(roomMinutesOverride, -1); DirectEvent("LocalSync", "."); }
+action LocalRoomTimeEndless() { ChangeData(roomMinutesOverride, 0); DirectEvent("LocalSync", "."); }
 '''
     actions = actions.replace('@TITLE@', TITLE).replace('@PREFIX@', PREFIX)
     actions = actions.replace('@ROOM_MODE@', ROOM_MODE_VALUE).replace('@ROOM_MINUTES@', ROOM_MINUTES_VALUE)
+    actions = actions.replace('@ROOM_AMMO@', ROOM_AMMO_VALUE).replace('@ROOM_LIVES@', ROOM_LIVES_VALUE)
+    actions = actions.replace('@RULES_BASE@', str(1 << RULES_SHIFT))
     for team, value in ROOM_BOT_VALUES.items():
         actions += f"""
 action LocalRoomBots{team}Less() {{ ChangeData(roomBots{team}Override, max(0, {value} - 1)); }}
@@ -416,6 +439,7 @@ STRINGS = {
            'Save': 'Save', 'Saved': 'Settings saved', 'Create': 'Create',
            'Lives': 'Lives per tank', 'Duration': 'Battle duration', 'Minutes': 'min', 'ModeDefault': 'Mode default',
            'SingleLife': 'One life', 'Endless': 'Unlimited', 'NoTimer': 'No limit',
+           'UnlimitedAmmo': 'Unlimited ammo', 'AmmoOn': 'On', 'AmmoOff': 'Off',
            'RoomBotsCaption': 'Description',
            'RoomBotsHint': 'Optional', 'RoomBots1': 'Team 1 bots', 'RoomBots2': 'Team 2 bots',
            'RoomHeaderBots': 'Bots', 'RoomHeaderTime': 'Time'},
@@ -427,6 +451,7 @@ STRINGS = {
            'Save': 'Сохранить', 'Saved': 'Настройки сохранены', 'Create': 'Создать',
            'Lives': 'Жизни на танк', 'Duration': 'Время боя', 'Minutes': 'мин', 'ModeDefault': 'По режиму',
            'SingleLife': 'Одна жизнь', 'Endless': 'Без ограничений', 'NoTimer': 'Без лимита',
+           'UnlimitedAmmo': 'Бесконечные снаряды', 'AmmoOn': 'Вкл.', 'AmmoOff': 'Выкл.',
            'RoomBotsCaption': 'Описание',
            'RoomBotsHint': 'Необязательно', 'RoomBots1': 'Боты команды 1', 'RoomBots2': 'Боты команды 2',
            'RoomHeaderBots': 'Боты', 'RoomHeaderTime': 'Время'}}
@@ -462,7 +487,7 @@ def patch_room(document):
 
 def upgrade_form(lab, manifest):
     """Refresh the installed native battle settings form in an idle client."""
-    if manifest.get('battle_settings_ui_version') == 11:
+    if manifest.get('battle_settings_ui_version') == 13:
         return manifest
     from hashlib import sha256
     import json
@@ -516,7 +541,7 @@ def upgrade_form(lab, manifest):
             strings = {f'Local/BattleSettings/{key}': STRINGS[locale][key]
                        for key in ('RoomBotsCaption', 'RoomBotsHint', 'Gravity', 'Encounter',
                                    'Lives', 'Duration', 'Minutes', 'ModeDefault', 'SingleLife', 'Endless', 'NoTimer', 'RoomBots1', 'RoomBots2',
-                                   'RoomHeaderBots', 'RoomHeaderTime')}
+                                   'RoomHeaderBots', 'RoomHeaderTime', 'UnlimitedAmmo', 'AmmoOn', 'AmmoOff')}
             changed = any(document.get(key) != value for key, value in strings.items())
             document.update(strings)
         content = (dvpl.encode(yaml.safe_dump(document, sort_keys=False, allow_unicode=True,
@@ -545,7 +570,7 @@ def upgrade_form(lab, manifest):
     for target, content in staged.items():
         atomic_write(target, content, replace_symlink=target == data/ROOM)
     updated = dict(manifest, ui_overrides=overrides, room_bot_hint_version=1,
-                   battle_settings_ui_version=11)
+                   battle_settings_ui_version=13)
     atomic_write(lab/'manifest.json', (json.dumps(updated, indent=2)+'\n').encode())
     return updated
 
@@ -599,4 +624,61 @@ EXTENSION = bytes.fromhex(
     "6d69676f7376696c6c655f6f6c642e73633200236d6170733a736176616e6e615f6f6c643a736176616e6e615f6f6c642f73"
     "6176616e6e615f6f6c642e73633200236d6170733a757365725f6d61703a30365f7275646e696b695f72642f757365725f6d"
     "61702e73633200"
+)
+
+# Updated adapter installed by client_sandbox after the pinned patch chain.
+SHARED_RULES_EXTENSION = bytes.fromhex(
+    "5589e583ec3056e8b47f23fc89c18b01ff503089c68d83badf7104508d4de8e8acc9b7fb8d83cbdf7104508d4dd0e89dc9b7fb6a006a01"
+    "6a008d45d0508d45e85068ff0300006a006aff89f1e81f88bffc8d4de8e8c7c8b7fb8d4dd0e8bfc8b7fb5ec9c3837d0c7f7418817d0c80"
+    "000000740f837d0c0f0f85304d37fde9954c37fd60e8000000005b81eb88de71048bbe780100008b45088d93ccdf710489f9e884000000"
+    "817d0c800000007566b8030000008d93d8df710489f9e8690000008b450831d225ffff1f00b910270000f7f185c0744e8d8b001a72048b"
+    "1185d2744239d0740583c108ebf18b510401da83ec1889e152e8d6c8b7fb89e0508d8e44010000e8e83d37fd89e1e811c8b7fb83c418eb"
+    "0f6a018d93eadf710489f9e84f00000061e9a34c37fd5589e583ec30565789ce89d78945d06a018d45d0508d4dd4e80ab5b9fb578d4de8"
+    "e881c8b7fb8d45d4508d45e85089f1e87267c1fb8d4de8e8bac7b7fb8d4dd8e8b267b8fb5f5ec9c35589e583ec2c565789ce89d76a018d"
+    "4508508d4dd4e8c492bffb578d4de8e83bc8b7fb8d45d4508d45e85089f1e82c67c1fb8d4de8e874c7b7fb8d4dd8e86c67b8fb5f5ec9c2"
+    "0400536f6c627265616b6572426f7456322100006c6f63616c526563697065006c6f63616c52657475726e4c6576656c73006c6f63616c"
+    "536176656400"
+)
+SHARED_RULES_MAPS = bytes.fromhex(
+    "01000000481b720402000000761b720403000000b31b720404000000e71b720405000000151c7204060000004f1c7204070000007d1c72"
+    "0408000000b41c720409000000d91c72040a000000131d72040b000000461d72040c000000741d72040d0000009c1d72040e000000c11d"
+    "72040f000000ef1d720413000000141e720414000000481e720415000000731e7204170000009b1e720419000000c31e72041a000000f5"
+    "1e72041b000000201f72041e0000004b1f72041f000000701f720423000000a41f720426000000c91f720427000000f41f720428000000"
+    "282072042a0000005c2072042b0000008a20720453000000af20720455000000e3207204590000001d217204640000004b217204650000"
+    "007521720466000000ad21720467000000dd2172046800000021227204690000005d2272046a0000008f2272040000000000000000236d"
+    "6170733a6b6172656c69613a31375f6b6172656c69615f6b612f31375f6b6172656c69615f6b612e73633200236d6170733a6465736572"
+    "745f747261696e3a30325f6465736572745f747261696e5f64742f30325f6465736572745f747261696e5f64742e73633200236d617073"
+    "3a65726c656e626572673a30335f65726c656e626572675f65722f30335f65726c656e626572675f65722e73633200236d6170733a6b61"
+    "72696572693a32335f6b6172696572695f6b722f32335f6b6172696572695f6b722e73633200236d6170733a616d69676f7376696c6c65"
+    "3a30355f616d69676f7376696c6c655f616d2f30355f616d69676f7376696c6c655f616d2e73633200236d6170733a7275646e696b693a"
+    "30365f7275646e696b695f72642f30365f7275646e696b695f72642e73633200236d6170733a6d65647665646b6f766f3a30345f6d6564"
+    "7665646b6f766f5f6d642f30345f6d65647665646b6f766f5f6d642e73633200236d6170733a666f72743a30375f666f72745f66742f30"
+    "375f666f72745f66742e73633200236d6170733a68696d6d656c73646f72663a31395f68696d6d656c73646f72665f686d2f31395f6869"
+    "6d6d656c73646f72665f686d2e73633200236d6170733a6d6f756e7461696e3a32315f6d6f756e7461696e5f6d6e742f32315f6d6f756e"
+    "7461696e5f6d6e742e73633200236d6170733a736176616e6e613a30395f736176616e6e615f73762f30395f736176616e6e615f73762e"
+    "73633200236d6170733a706c616e743a31315f706c616e745f706e2f31315f706c616e745f706e2e73633200236d6170733a69646c653a"
+    "30385f69646c655f69642f30385f69646c655f69642e73633200236d6170733a686f6c6c616e643a31365f686f6c6c616e645f686c2f31"
+    "365f686f6c6c616e645f686c2e73633200236d6170733a706f72743a31345f706f72745f70742f31345f706f72745f70742e7363320023"
+    "6d6170733a6d616c696e6f766b613a31325f6d616c696e6f766b615f6d612f31325f6d616c696e6f766b615f6d612e73633200236d6170"
+    "733a706c6965676f3a31335f706c6965676f5f706c2f31335f706c6965676f5f706c2e73633200236d6170733a63616e616c3a31385f63"
+    "616e616c5f636e2f31385f63616e616c5f636e2e73633200236d6170733a6974616c793a32325f6974616c795f69742f32325f6974616c"
+    "795f69742e73633200236d6170733a6d696c626173653a32345f6d696c69626173655f6d6c622f32345f6d696c69626173655f6d6c622e"
+    "73633200236d6170733a6c61676f6f6e3a31355f6c61676f6f6e5f6c6e2f31355f6c61676f6f6e5f6c6e2e73633200236d6170733a6361"
+    "6e796f6e3a32355f63616e796f6e5f63612f32355f63616e796f6e5f63612e73633200236d6170733a726f636b3a32385f726f636b5f72"
+    "632f32385f726f636b5f72632e73633200236d6170733a67726f7373626572673a33305f67726f7373626572675f73682f33305f67726f"
+    "7373626572675f73682e73633200236d6170733a736b69743a32395f736b69745f736b2f32395f736b69745f736b2e73633200236d6170"
+    "733a6c756d6265723a33315f6c756d6265725f6c6d2f33315f6c756d6265725f6c6d2e73633200236d6170733a66617573743a33325f66"
+    "617573745f66615f6e696768742f33325f66617573745f66615f6e696768742e73633200236d6170733a666f726765636974793a33345f"
+    "666f726765636974795f66632f33345f666f726765636974795f66632e73633200236d6170733a6e657074756e653a33335f6e65707475"
+    "6e655f6e742f33335f6e657074756e655f6e742e73633200236d6170733a726966743a33355f726966745f72742f33355f726966745f72"
+    "742e73633200236d6170733a65726c656e626572675f6f6c643a65726c656e626572675f6f6c642f65726c656e626572675f6f6c642e73"
+    "633200236d6170733a616d69676f7376696c6c655f6f6c643a616d69676f7376696c6c655f6f6c642f616d69676f7376696c6c655f6f6c"
+    "642e73633200236d6170733a736176616e6e615f6f6c643a736176616e6e615f6f6c642f736176616e6e615f6f6c642e73633200236d61"
+    "70733a757365725f6d61703a30365f7275646e696b695f72642f757365725f6d61702e73633200236d6170733a7275646e696b695f6576"
+    "656e696e673a30365f7275646e696b695f72642f7275646e696b695f6576656e696e672e73633200236d6170733a7275646e696b695f66"
+    "6f673a30365f7275646e696b695f72642f7275646e696b695f666f672e73633200236d6170733a616d69676f7376696c6c655f6576656e"
+    "696e673a30355f616d69676f7376696c6c655f616d2f616d69676f7376696c6c655f6576656e696e672e73633200236d6170733a616d69"
+    "676f7376696c6c655f666f673a30355f616d69676f7376696c6c655f616d2f616d69676f7376696c6c655f666f672e73633200236d6170"
+    "733a6974616c795f6576656e696e673a32325f6974616c795f69742f6974616c795f6576656e696e672e73633200236d6170733a697461"
+    "6c795f666f673a32325f6974616c795f69742f6974616c795f666f672e73633200"
 )

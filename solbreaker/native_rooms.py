@@ -4,13 +4,14 @@ RoomManager owns membership and authority; this module encodes Account RPCs.
 See docs/native-training-rooms.md for the recovered layouts and evidence.
 """
 from fnmatch import fnmatchcase
+from dataclasses import replace
 import re
 import sqlite3
 import struct
 import time
 
 from .account import account_method, command_response, pickle_document, resource_response
-from .battle_settings_wire import ROOM_FORM_PREFIX, ROOM_OPTIONS_PREFIX
+from .battle_settings_wire import GET_TITLE, GET_TITLE_V2, ROOM_FORM_PREFIX, ROOM_OPTIONS_PREFIX
 from .mercury import packed_blob
 from .map_catalog import map_team_capacity
 from .roster import TEAMS
@@ -21,8 +22,8 @@ OWNER_ROLE = 0x27e7f
 NO_RESPONSE = 202
 COMMANDS = {400,401,402,403,404,406,411,414,415,523,524}
 BOT_PREFIX = re.compile(r'^\[bots\s+([0-7])\s*:\s*([0-7])\]', re.IGNORECASE)
-SETTING_PREFIX = re.compile(r'^\[(mode|lives|time)\b', re.IGNORECASE)
-SETTING_VALUE = re.compile(r'^\[(?:mode|lives|time)\s+([a-z]+|[0-9]{1,2})\]', re.IGNORECASE)
+SETTING_PREFIX = re.compile(r'^\[(mode|lives|time|ammo)\b', re.IGNORECASE)
+SETTING_VALUE = re.compile(r'^\[(?:mode|lives|time|ammo)\s+([a-z]+|[0-9]{1,2})\]', re.IGNORECASE)
 
 
 def varint(value):
@@ -82,6 +83,8 @@ def room_comment(room, *, include_rules=True):
         options.append(f'[mode {room.battle_mode}]')
     if include_rules and room.battle_settings.unlimited_lives:
         options.append('[lives unlimited]')
+    if include_rules and room.battle_settings.unlimited_ammo:
+        options.append('[ammo unlimited]')
     minutes = room.battle_settings.minutes
     if include_rules and minutes is not None:
         options.append(f'[time {minutes or "endless"}]')
@@ -116,6 +119,10 @@ def room_options(description, previous=None):
                        else 'single')
     if lives not in ('single', 'unlimited'):
         raise ValueError('Choose single or unlimited lives')
+    ammo = values.get('ammo', 'unlimited' if previous and previous.battle_settings.unlimited_ammo
+                      else 'limited')
+    if ammo not in ('limited', 'unlimited'):
+        raise ValueError('Choose limited or unlimited ammunition')
     duration = values.get('time')
     if duration is None:
         minutes = existing.battle_settings.minutes if existing else None
@@ -129,16 +136,27 @@ def room_options(description, previous=None):
         raise ValueError('Choose a duration in minutes or an endless battle')
     # The current form submits the roster before an explicit notes boundary.
     # Older clients can still supply the bot prefix in their description.
+    settings = RoomBattleSettings(lives == 'unlimited', minutes, ammo == 'unlimited')
     bot_prefix = BOT_PREFIX.match(text)
     if full_form and bot_prefix and text[bot_prefix.end():].lstrip().startswith('[notes]'):
         description = text[bot_prefix.end():].lstrip().removeprefix('[notes]').removeprefix(' ')
         bots = tuple(map(int, bot_prefix.groups()))
-        return description, bots, mode, RoomBattleSettings(lives == 'unlimited', minutes)
+        return description, bots, mode, settings
     if existing and not description:
         description, bots = existing.description, existing.bot_counts
     else:
         description, bots = room_bot_options(description)
-    return description, bots, mode, RoomBattleSettings(lives == 'unlimited', minutes)
+    return description, bots, mode, settings
+
+
+def room_map_selector(value, *, edit=False):
+    if value == 0xffffffff or edit and value == 0:
+        return 0
+    if 0xffff0000 < value < 0xffffffff:
+        return value & 0xffff
+    if edit and 0 < value <= 0xffff:
+        return value
+    raise ValueError('Invalid room map selector')
 
 
 def create_request(body,*,with_vehicle=False,with_map=False,with_mode=False,configured_map_id=6,
@@ -152,17 +170,12 @@ def create_request(body,*,with_vehicle=False,with_map=False,with_mode=False,conf
     if len(body)-offset!=6:raise ValueError('Invalid training room request size')
     teamkill,opened,vehicle=struct.unpack_from('<BBI',body,offset)
     if command!=420:raise ValueError('Unsupported room creation operation')
-    if map_selector==0xffffffff:
-        map_id=0
-    elif map_selector>>16==0xffff and 0<(map_selector&0xffff)<=0xffff:
-        map_id=map_selector&0xffff
-    else:
-        raise ValueError('Invalid room map selector')
+    map_id = room_map_selector(map_selector)
     allowed = tuple(available_map_ids) if available_map_ids is not None else (configured_map_id,)
     if map_id != 0 and map_id not in allowed:
         raise ValueError('Room map is not available in this lab')
-    from .battle_settings_wire import TITLE, GET_TITLE
-    settings_get = title == GET_TITLE.encode()
+    from .battle_settings_wire import TITLE
+    settings_get = title in (GET_TITLE.encode(), GET_TITLE_V2.encode())
     bot_setup = title == TITLE.encode()
     invalid_options = ((battle_type not in (0, 1) or teamkill not in (0, 1)) if bot_setup
                        else (battle_type not in (0, 1, 2) or bool(teamkill)))
@@ -345,22 +358,27 @@ class NativeRooms:
                     available_map_ids=self.map_ids)
                 self.manager.hangar(account)
                 if self.manager.current(account):raise ValueError('Already in a room')
-                from .battle_settings_wire import GET_TITLE
-                if title != GET_TITLE and not any(v['id']==vehicle for v in self.progression.prepare(account)['vehicles']):
+                if title not in (GET_TITLE, GET_TITLE_V2) and not any(v['id']==vehicle for v in self.progression.prepare(account)['vehicles']):
                     raise ValueError('Vehicle is not in the garage')
             from .battle_settings import decode, packed_recipe
-            from .battle_settings_wire import TITLE, SAVED_RESULT, GET_TITLE, LOADED_RESULT
-            if title == GET_TITLE:
+            from .battle_settings_wire import TITLE, SAVED_RESULT, LEGACY_PREFIX, LOADED_RESULT
+            if title in (GET_TITLE, GET_TITLE_V2):
                 from .training_config import TrainingConfig
                 fallback = getattr(self.endpoint.server, 'training_config', None) or TrainingConfig()
                 config = self.endpoint.server.accounts.store.training_config(account, fallback).for_game_mode(7)
                 self.send(client, account_method(19, struct.pack('<IB',
-                    packed_recipe(config, self.endpoint.map_catalog), LOADED_RESULT)))
+                    packed_recipe(config, self.endpoint.map_catalog, include_rules=title == GET_TITLE_V2), LOADED_RESULT)))
                 self.endpoint.server.event('native_bot_settings_loaded', account_id=account,
                                            settings=config.to_dict())
                 return
             if title == TITLE:
                 config = decode(title, description, map_id, self.endpoint.map_catalog)
+                legacy = description.startswith(LEGACY_PREFIX)
+                if legacy:
+                    fallback = getattr(self.endpoint.server, 'training_config', None) or config
+                    previous = self.endpoint.server.accounts.store.training_config(account, fallback)
+                    config = replace(config, unlimited_lives=previous.unlimited_lives,
+                                     minutes=previous.minutes, unlimited_ammo=previous.unlimited_ammo)
                 if (map_id != 0 and config.battle_mode == 'supremacy'
                         and not self.endpoint.resolve_map_spec(map_id).strategic_points):
                     raise ValueError('This map has no Supremacy capture points')
@@ -369,7 +387,7 @@ class NativeRooms:
                 except sqlite3.Error as exc:
                     raise ValueError('Cannot save bot battle settings') from exc
                 self.send(client, account_method(19, struct.pack('<IB',
-                    packed_recipe(config, self.endpoint.map_catalog), SAVED_RESULT)))
+                    packed_recipe(config, self.endpoint.map_catalog, include_rules=not legacy), SAVED_RESULT)))
                 self.endpoint.server.event('native_bot_settings_saved', account_id=account,
                                            settings=config.to_dict())
                 return
@@ -423,9 +441,12 @@ class NativeRooms:
                     self.attach(client,room)
                 return True
             if command==406:
-                if (kind!=149 or len(numbers)!=4 or numbers[0] not in (0,*self.map_ids)
-                        or numbers[1] not in (0,1,2) or numbers[2:]!=(0,0) or len(strings)!=2):
+                if (kind!=149 or len(numbers)!=4 or numbers[1] not in (0,1,2)
+                        or numbers[2:]!=(0,0) or len(strings)!=2):
                     raise ValueError('Choose a supported map and default battle options')
+                map_id = room_map_selector(numbers[0], edit=True)
+                if map_id and map_id not in self.map_ids:
+                    raise ValueError('Room map is not available in this lab')
                 from .battle_settings_wire import TITLE
                 if strings[0] == TITLE.encode():
                     raise ValueError('Leave the training room before starting a bot battle')
@@ -433,10 +454,10 @@ class NativeRooms:
                 room = self.manager.owned(client.account_id)
                 description,bot_counts,mode,settings=room_options(description, room)
                 changed=self.manager.rename(client.account_id,title,description,
-                    map_id=numbers[0] or None,bot_counts=bot_counts,
+                    map_id=map_id or None,bot_counts=bot_counts,
                     battle_mode=mode or ('supremacy' if numbers[1]==1 else 'encounter'),
                     battle_settings=settings)
-                if numbers[0]:
+                if map_id:
                     self.endpoint.server.event('native_room_map_changed',account_id=client.account_id,
                         room_id=changed.id,map_id=changed.map_id,
                         map_key=self.endpoint.map_catalog[changed.map_id],battle_mode=changed.battle_mode)

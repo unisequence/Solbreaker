@@ -929,6 +929,13 @@ class Window(QMainWindow):
             self.path_field(form, 'steam', tr('Папка Steam'))
         self.path_field(form, 'backups', tr('Резервные копии'))
         self.path_field(form, 'network', tr('Сетевой TOML'), 'file')
+        lighting = QComboBox()
+        for preset, title in (('original', 'Оригинал'), ('evening', 'Закат'), ('fog', 'Туман')):
+            lighting.addItem(tr(title), preset)
+        lighting.setCurrentIndex(lighting.findData(self.manager.settings.map_lighting))
+        lighting.setToolTip(tr('Освещение при следующем запуске игры. Доступно на Рудниках, на Протоке и на Виноградниках.'))
+        self.fields['map_lighting'] = lighting
+        form.addRow(tr('Освещение карт'), lighting)
         self.fields['host'] = QLineEdit(self.manager.settings.host)
         form.addRow(tr('Локальный IPv4'), self.fields['host'])
         for key, title, maximum in (('http_port', tr('HTTP-порт'), 65535), ('login_port', tr('UDP-порт входа'), 65534)):
@@ -973,7 +980,10 @@ class Window(QMainWindow):
     def collect_settings(self):
         values = asdict(self.manager.settings)
         for key, field in self.fields.items():
-            values[key] = field.value() if isinstance(field, QSpinBox) else field.text().strip()
+            if isinstance(field, QComboBox):
+                values[key] = field.currentData()
+            else:
+                values[key] = field.value() if isinstance(field, QSpinBox) else field.text().strip()
         values['reuse_native'] = self.reuse.isChecked()
         values['sandbox'] = self.sandbox.isChecked()
         return Settings(**values)
@@ -1014,6 +1024,8 @@ class Window(QMainWindow):
             value = getattr(self.manager.settings, key)
             if isinstance(field, QSpinBox):
                 field.setValue(value)
+            elif isinstance(field, QComboBox):
+                field.setCurrentIndex(field.findData(value))
             else:
                 field.setText(value)
         self.reuse.setChecked(self.manager.settings.reuse_native)
