@@ -34,6 +34,8 @@ jobs:
           fi
       - name: Install locked dependencies
         run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libegl1 libgl1 libxkbcommon0 fonts-dejavu-core
           python -m venv "$RUNNER_TEMP/solbreaker-ci"
           for profile in gui tui; do
             "$RUNNER_TEMP/solbreaker-ci/bin/python" tools/install_dependencies.py --profile "$profile"
