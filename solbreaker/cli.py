@@ -19,9 +19,19 @@ def main(argv=None):
     serve = commands.add_parser('serve', help='Run the headless game server')
     serve.add_argument('--stop-on-stdin', action='store_true', help=argparse.SUPPRESS)
     serve.add_argument('--sandbox', action='store_true', help='Allow sandbox controls in every battle')
+    serve.add_argument('--workshop-drive', type=int, help=argparse.SUPPRESS)
     serve.add_argument('--state', type=Path, default=Path('data'))
     serve.add_argument('--log-file', type=Path)
     serve.add_argument('--diagnostic-log', nargs='?', const='auto', type=Path)
+    editor = commands.add_parser('tank-workshop', help='Open the Solbreaker tank editor')
+    editor.add_argument('project', type=Path, nargs='?')
+    editor.add_argument('--config', type=Path, default=Path('runtime/manager.json'))
+    editor.add_argument('--language', choices=('en', 'ru'), help='Override the launcher language')
+    install_tank = commands.add_parser('install-tank', help='Install a Workshop tank package')
+    install_tank.add_argument('package', type=Path)
+    tank_target = install_tank.add_mutually_exclusive_group(required=True)
+    tank_target.add_argument('--state', type=Path)
+    tank_target.add_argument('--client', type=Path)
     configure = commands.add_parser('configure-network', help='Apply a network TOML to idle state')
     configure.add_argument('--state', type=Path, default=Path('data'))
     configure.add_argument('--config', type=Path, required=True)
@@ -140,6 +150,19 @@ def main(argv=None):
         elif args.command == 'prepare-client-registration':
             from .client_registration import install
             result = install(args.lab)
+        elif args.command == 'tank-workshop':
+            try:
+                from .workshop.gui import run
+            except ImportError as error:
+                parser.exit(1, f'Install GUI dependencies with python tools/install_dependencies.py --profile gui. {error}\n')
+            return run(args.project, args.config, language=args.language)
+        elif args.command == 'install-tank':
+            from zipfile import BadZipFile
+            from .workshop.install import install
+            try:
+                result = install(args.package, state=args.state, client=args.client)
+            except BadZipFile as error:
+                raise ValueError(f'Invalid tank archive: {error}') from error
         else:
             handlers = [logging.StreamHandler()]
             if args.log_file:
@@ -153,7 +176,8 @@ def main(argv=None):
                 if path is not None:
                     diagnostics.install(path)
                 asyncio.run(serve_cli(args.state.resolve(), stop_on_stdin=args.stop_on_stdin,
-                                      sandbox=args.sandbox))
+                                      sandbox=args.sandbox,
+                                      workshop_drive=args.workshop_drive))
             finally:
                 diagnostics.close()
             return

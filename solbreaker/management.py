@@ -253,8 +253,9 @@ class Job:
 
 
 class Manager:
-    def __init__(self, settings):
+    def __init__(self, settings, *, workshop_vehicle=None):
         self.settings = settings
+        self.workshop_vehicle = workshop_vehicle
         self.output = queue.Queue(maxsize=2000)
         self.history = deque(maxlen=2000)
         self.job = None
@@ -328,7 +329,10 @@ class Manager:
         if action == 'server':
             if self.server is not None and self.server.running:
                 raise ValueError('Сервер уже запущен из этого окна')
-            self.server = Job(action, command(action, self.settings), self.output)
+            argv = command(action, self.settings)
+            if self.workshop_vehicle is not None:
+                argv += ['--workshop-drive', str(self.workshop_vehicle)]
+            self.server = Job(action, argv, self.output)
             self._server_exit_reported = False
             self._map_preparation = None
             self._last_prepared_map = None
