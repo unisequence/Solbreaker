@@ -2,7 +2,7 @@
 from pathlib import Path
 import struct
 
-from . import dvpl
+from . import big_boss, dvpl
 from .battle_settings_wire import PREFIX, RULES_SHIFT
 from .roster import TEAM_SIZE
 from .training_config import MAX_ROOM_MINUTES
@@ -10,6 +10,43 @@ from .training_config import MAX_ROOM_MINUTES
 FORM = 'UI/Screens/Lobby/Training/CreateRoom.yaml.dvpl'
 ROOM = 'UI/Screens/Lobby/Training/Room.yaml.dvpl'
 ACTIONS = 'UI/Screens/Lobby/Training/LocalBattleSettings.actions.dvpl'
+BATTLE_MENU = 'UI/Screens/Battle/GameMenuDialog.yaml.dvpl'
+BOSS_ACTIONS = 'UI/Screens/Battle/SolbreakerBoss.actions.dvpl'
+
+def _percent(value):
+    return f'{value:.0%}'
+
+
+# Picker values come from the same rules as combat.
+BOSS_CARDS = (
+    ('boss', 'Boss', 'Босс', 'Wave · Megashot', 'Волна · Мегавыстрел', (
+        ('Max HP', 'Прочность', f'×{big_boss.HEALTH_MULTIPLIER}'),
+        ('Reload speed', 'Перезарядка', f'×{big_boss.RELOAD_RATE:g}'),
+        ('Blast radius', 'Радиус волны', f'{big_boss.BLAST_RADIUS:g}', 'm', 'м'),
+    )),
+    ('graviton', 'Graviton', 'Гравитон', 'Gravity Trap', 'Гравиловушка', (
+        ('Pull radius', 'Радиус поля', tuple(f'{value:g}' for value in big_boss.TRAP_RADIUS), 'm', 'м'),
+        ('Duration', 'Действие', f'{big_boss.TRAP_DURATION:g}', 's', 'с'),
+        ('Absorption', 'Поглощение', tuple(map(_percent, big_boss.TRAP_SHIELD))),
+    )),
+    ('kamikaze', 'Bomber', 'Бомбардир', 'Blast', 'Взрыв', (
+        ('Blast radius', 'Радиус взрыва', f'{big_boss.BOMB_RADIUS:g}', 'm', 'м'),
+        ('Damage (% HP)', 'Урон от HP', tuple(map(_percent, big_boss.BOMB_DAMAGE))),
+        ('Mobility', 'Мобильность', tuple('+' + _percent(value - 1) for value in big_boss.BOMB_MOBILITY)),
+    )),
+    ('healer', 'Regenerator', 'Регенератор', 'Healing Aura · Shield', 'Аура лечения · Щит', (
+        ('Heal radius', 'Радиус лечения', f'{big_boss.HEAL_RADIUS:g}', 'm', 'м'),
+        ('Ally HP / pulse', 'Лечение за тик', '+' + _percent(big_boss.HEAL_FRACTION)),
+        ('Shield duration', 'Действие щита', tuple(f'{value:g}' for value in big_boss.SHIELD_DURATION), 's', 'с'),
+    )),
+    ('killer', 'Catalyst', 'Катализатор', 'Poisoned Shells', 'Ядовитые снаряды', (
+        ('Damage bonus', 'Бонус урона', tuple('+' + _percent(value - 1) for value in big_boss.CATALYST_DAMAGE)),
+        ('Poison per tick', 'Урон яда за тик', tuple(map(_percent, big_boss.POISON_DAMAGE))),
+        ('Poison ticks', 'Импульсы яда', str(big_boss.POISON_TICKS)),
+    )),
+)
+
+
 TITLE = 'SolbreakerBotSetup'
 SAVED_RESULT = 127
 LOADED_RESULT = 128
@@ -144,7 +181,8 @@ def _row(name, caption, buttons, *, conditional=True):
     return row
 
 
-RULES_CAPTION = ('when localRules == 3 -> localize("Local/BattleSettings/Gravity"), '
+RULES_CAPTION = ('when localRules == 4 -> localize("Local/BattleSettings/BigBoss"), '
+                 'localRules == 3 -> localize("Local/BattleSettings/Gravity"), '
                  'localRules == 2 -> localize("Local/BattleSettings/Supremacy"), '
                  'localRules == 1 -> localize("Local/BattleSettings/Capture"), '
                  'localize("Local/BattleSettings/Elimination")')
@@ -171,7 +209,7 @@ def _room_rules(root):
     if 'LocalRoomRules' in fields:
         return False
     rules = _row('LocalRoomRules', 'Local/BattleSettings/Rules', [
-        _button('Choice', ROOM_RULES_CAPTION, 'LocalRoomRulesNext', 360)], conditional=False)
+        _button('Choice', ROOM_RULES_CAPTION, 'LocalOpenModePicker', 360)], conditional=False)
     rules['bindings'] = [['visible', 'not localBotSetup']]
     mode = fields['Mode']
     # The native controller looks up Mode/Container/Select and Name on open.
@@ -231,6 +269,8 @@ def _room_duration_settings(root):
     lives = _row('LocalRoomLives', 'Local/BattleSettings/Lives', [
         _button('Single', label('SingleLife'), 'LocalRoomSingleLife', 162),
         _button('Unlimited', label('Endless'), 'LocalRoomUnlimitedLives', 190)], conditional=False)
+    mode_value = f'(when localBotSetup -> localRules, {ROOM_MODE_VALUE})'
+    lives['bindings'] = [['visible', f'{mode_value} != 4']]
     for button, value in zip(lives['children'][1]['children'][0]['children'], (0, 1)):
         button['bindings'] = [['classes', f'when {ROOM_LIVES_VALUE} == {value} -> '
                                 '"button button-color-orange", "button button-color-gray"']]
@@ -262,7 +302,8 @@ def _room_duration_settings(root):
             button['components']['UILongTapComponent'] = {
                 'pressTimeout': .35, 'repeatDelay': .12, 'longTapEvent': event}
     # The native save callback reads this field separately from the notes.
-    mode_tag = ('(when localRoomRules == 3 -> "[mode gravity] ", '
+    mode_tag = ('(when localRoomRules == 4 -> "[mode big_boss] ", '
+                'localRoomRules == 3 -> "[mode gravity] ", '
                 'localRoomRules == 2 -> "[mode supremacy] ", '
                 'localRoomRules == 0 -> "[mode elimination] ", "[mode encounter] ")')
     lives_tag = '(when localRoomLives == 1 -> "[lives unlimited] ", "[lives single] ")'
@@ -349,10 +390,126 @@ def patch_form(document):
             'localDifficulty == 1 -> localize("Local/BattleSettings/Normal"), '
             'localize("Local/BattleSettings/Hard")', 'LocalDifficultyNext', 360)])
     rules = _row('LocalRules', 'Local/BattleSettings/Rules', [
-        _button('Choice', RULES_CAPTION, 'LocalRulesNext', 360)])
+        _button('Choice', RULES_CAPTION, 'LocalOpenModePicker', 360)])
     container['children'] = [allies, enemies, difficulty, rules, *container['children']]
     _room_rules(root)
     _room_duration_settings(root)
+    _mode_picker(root)
+
+
+MODE_KEYS = ('Elimination', 'Encounter', 'Supremacy', 'Gravity', 'BigBoss')
+MODE_ART = ('regular', 'regular', 'regular', 'moongame', 'bossmode')
+
+
+def _mode_picker(root):
+    """Show a preview over the same form while preserving its draft settings."""
+    local_vars = root['components']['UIDataLocalVarsComponent']['data']
+    local_vars[:] = [row for row in local_vars if row[1] not in ('modePickerOpen', 'modePreview')]
+    local_vars.extend([['bool', 'modePickerOpen', 'false'], ['int', 'modePreview', '0']])
+    root['children'][:] = [node for node in root['children'] if node.get('name') != 'LocalModePicker']
+    for row in _walk(root):
+        if row.get('name') in ('LocalRules', 'LocalRoomRules'):
+            choice, = (node for node in _walk(row) if node.get('name') == 'Choice')
+            choice['components']['UIInputEventComponent']['onTouchUpInside'] = 'LocalOpenModePicker'
+    for child in root['children']:
+        visible = next((binding for binding in child.get('bindings', []) if binding[0] == 'visible'), None)
+        if visible is None:
+            child.setdefault('bindings', []).append(['visible', 'not modePickerOpen'])
+        elif 'modePickerOpen' not in visible[1]:
+            visible[1] = f'({visible[1]}) and not modePickerOpen'
+
+    def label(name, key, style, top, height):
+        return _boss_label(name, key, style, top, height=height)
+
+    def place(control, x, y):
+        control['position'] = [float(x), float(y)]
+        return control
+
+    def artwork(art, x, y, width, height):
+        return {
+            'class': 'UIControl', 'name': 'Artwork', 'input': False,
+            'position': [x, y], 'size': [width, height],
+            'components': {'UITextureComponent': {
+                'spritePath': f'~res:/Gfx/UI/Hangar/GameTypes/battle-type_{art}',
+                'drawType': 'DRAW_SCALE_TO_RECT'}},
+        }
+
+    panels = []
+    neighbors = []
+    tabs = []
+    for index, (key, art) in enumerate(zip(MODE_KEYS, MODE_ART)):
+        title = label('Title', key, 'header3 text-color-white', 286., 42.)
+        if key == 'Encounter':
+            title['bindings'][0][1] = ('when localBotSetup -> localize("Local/BattleSettings/Capture"), '
+                                       + title['bindings'][0][1])
+        description = label('ModeSummary', f'ModeDescription{key}', 'text2-small text-color-white', 328., 40.)
+        panels.append({
+            'class': 'UIControl', 'name': f'ModeCard{index}', 'input': True,
+            'position': [277., 67.], 'size': [286., 374.],
+            'bindings': [['visible', f'modePreview == {index}']],
+            'components': {
+                'Background': {'drawType': 'DRAW_FILL', 'color': [.08, .11, .13, 1.]},
+                'UIInputEventComponent': {'onTouchUpInside': 'LocalApplyModePicker'},
+                'Sound': {'touchUpInside': 'GUI/buttons/choose'},
+            },
+            'children': [
+                artwork(art, 18., 6., 250., 328.),
+                {'class': 'UIControl', 'name': 'CaptionShade', 'input': False,
+                 'position': [0., 278.], 'size': [286., 96.],
+                 'components': {'Background': {'drawType': 'DRAW_FILL', 'color': [.04, .055, .07, .95]}}},
+                title, description,
+            ],
+        })
+        for offset, side, x in ((-1, 'Previous', 63.), (1, 'Next', 621.)):
+            neighbor_title = label('Title', key, 'header3 text-color-white', 204., 29.)
+            neighbor_title['bindings'][0][1] = title['bindings'][0][1]
+            neighbors.append({
+                'class': 'UIControl', 'name': f'{side}Preview{index}', 'input': True,
+                'position': [x, 113.], 'size': [156., 233.],
+                'bindings': [['visible', f'modePreview == {(index - offset) % len(MODE_KEYS)}']],
+                'components': {'UIInputEventComponent': {'onTouchUpInside': f'Local{side}Mode'}},
+                'children': [
+                    artwork(art, 0., 0., 156., 205.),
+                    {'class': 'UIControl', 'name': 'Shade', 'input': False,
+                     'size': [156., 233.], 'components': {
+                         'Background': {'drawType': 'DRAW_FILL', 'color': [.035, .05, .065, .65]}}},
+                    neighbor_title,
+                ],
+            })
+        tab = _button(f'ModeTab{index}', title['bindings'][0][1], f'LocalPreviewMode{index}', 150)
+        tab['bindings'] = [['classes', f'when modePreview == {index} -> '
+                            '"button button-color-orange", "button button-color-gray"']]
+        tabs.append(place(tab, 29 + 158 * index, 461))
+
+    root['children'].append({
+        'class': 'UIControl', 'name': 'LocalModePicker', 'input': False,
+        'bindings': [['visible', 'modePickerOpen']],
+        'components': {
+            'IgnoreLayout': {},
+            'Anchor': {f'{edge}AnchorEnabled': True for edge in ('left', 'right', 'top', 'bottom')},
+            'Background': {'drawType': 'DRAW_FILL', 'color': [.045, .06, .07, 1.]},
+            'UIShortcutEventComponent': {'shortcuts':
+                'LocalCloseModePicker, Escape; LocalApplyModePicker, Enter; '
+                'LocalPreviousMode, Left; LocalNextMode, Right', 'escape': 'LocalCloseModePicker'},
+        },
+        'children': [{
+            'class': 'UIControl', 'name': 'Carousel', 'input': False, 'size': [840., 614.],
+            'components': {
+                'Anchor': {'hCenterAnchorEnabled': True, 'vCenterAnchorEnabled': True},
+                'Background': {'drawType': 'DRAW_FILL', 'color': [.09, .12, .14, 1.]},
+            },
+            'children': [
+                label('Heading', 'Rules', 'header2 text-color-white', 12., 48.), *neighbors, *panels,
+                place(_button('Previous', '"<"', 'LocalPreviousMode', 48), 228, 204),
+                place(_button('Next', '">"', 'LocalNextMode', 48), 564, 204),
+                *tabs,
+                place(_button('Cancel', 'localize("Local/BattleSettings/ModeCancel")',
+                              'LocalCloseModePicker', 190), 221, 539),
+                place(_button('Select', 'localize("Local/BattleSettings/ModeSelect")',
+                              'LocalApplyModePicker', 190), 429, 539),
+            ],
+        }],
+    })
 
 
 def extra_resources():
@@ -394,14 +551,21 @@ action LocalDifficultyNext()
     else { ChangeData(localDifficulty, localDifficulty + 1); }
     DirectEvent("LocalSync", ".");
 }
-action LocalRulesNext()
+action LocalOpenModePicker()
 {
-    if (localRules == 3) { ChangeData(localRules, 0); }
-    else { ChangeData(localRules, localRules + 1); }
-    DirectEvent("LocalSync", ".");
+    ChangeData(modePreview, when localBotSetup -> localRules, @ROOM_MODE@);
+    ChangeData(modePickerOpen, true);
+}
+action LocalCloseModePicker() { ChangeData(modePickerOpen, false); }
+action LocalPreviousMode() { ChangeData(modePreview, (modePreview + 4) % 5); }
+action LocalNextMode() { ChangeData(modePreview, (modePreview + 1) % 5); }
+action LocalApplyModePicker()
+{
+    if (localBotSetup) { ChangeData(localRules, modePreview); DirectEvent("LocalSync", "."); }
+    else { ChangeData(roomModeOverride, modePreview); }
+    ChangeData(modePickerOpen, false);
 }
 action LocalNoop() {}
-action LocalRoomRulesNext() { ChangeData(roomModeOverride, (@ROOM_MODE@ + 1) % 4); }
 action LocalRoomSingleLife() { ChangeData(roomLivesOverride, 0); DirectEvent("LocalSync", "."); }
 action LocalRoomUnlimitedLives() { ChangeData(roomLivesOverride, 1); DirectEvent("LocalSync", "."); }
 action LocalRoomToggleAmmo() { ChangeData(roomAmmoOverride, 1 - @ROOM_AMMO@); DirectEvent("LocalSync", "."); }
@@ -427,7 +591,14 @@ action LocalRoomTimeEndless() { ChangeData(roomMinutesOverride, 0); DirectEvent(
 action LocalRoomBots{team}Less() {{ ChangeData(roomBots{team}Override, max(0, {value} - 1)); }}
 action LocalRoomBots{team}More() {{ ChangeData(roomBots{team}Override, min({TEAM_SIZE}, {value} + 1)); }}
 """
-    return {ACTIONS: dvpl.encode(actions.replace('@MAX_ROOM_MINUTES@', str(MAX_ROOM_MINUTES)).encode())}
+    actions += ''.join(f'action LocalPreviewMode{i}() {{ ChangeData(modePreview, {i}); }}\n'
+                       for i in range(len(MODE_KEYS)))
+    boss_actions = ''.join(f'action SolPick{i}() {{ ChangeData(solRole, solRole + 10 - solRole % 10 + {i}); }}\n' for i in range(1, 6))
+    boss_actions += ''.join(f'action SolLevel{i}() {{ ChangeData(solRoleLevel, {i}); }}\n'
+                            for i in range(1, big_boss.ROLE_LEVEL_COUNT + 1))
+    boss_actions += 'action SolRespawn() { ChangeData(solRespawn, solRespawn + 1); }\n'
+    return {ACTIONS: dvpl.encode(actions.replace('@MAX_ROOM_MINUTES@', str(MAX_ROOM_MINUTES)).encode()),
+            BOSS_ACTIONS: dvpl.encode(boss_actions.encode())}
 
 
 STRINGS = {
@@ -435,7 +606,7 @@ STRINGS = {
            'Enemies': 'Enemy bots', 'Difficulty': 'Bot difficulty', 'Rules': 'Battle rules',
            'Easy': 'Easy', 'Normal': 'Normal', 'Hard': 'Hard', 'Capture': 'Base capture',
            'Elimination': 'Elimination', 'Encounter': 'Encounter',
-           'Supremacy': 'Supremacy', 'Gravity': 'Gravity Force',
+           'Supremacy': 'Supremacy', 'Gravity': 'Gravity Force', 'BigBoss': 'Big Boss',
            'Save': 'Save', 'Saved': 'Settings saved', 'Create': 'Create',
            'Lives': 'Lives per tank', 'Duration': 'Battle duration', 'Minutes': 'min', 'ModeDefault': 'Mode default',
            'SingleLife': 'One life', 'Endless': 'Unlimited', 'NoTimer': 'No limit',
@@ -447,7 +618,7 @@ STRINGS = {
            'Enemies': 'Боты противника', 'Difficulty': 'Сложность ботов', 'Rules': 'Правила боя',
            'Easy': 'Лёгкая', 'Normal': 'Обычная', 'Hard': 'Сложная', 'Capture': 'Захват базы',
            'Elimination': 'Перестрелка', 'Encounter': 'Встречный бой',
-           'Supremacy': 'Превосходство', 'Gravity': 'Гравитация',
+           'Supremacy': 'Превосходство', 'Gravity': 'Гравитация', 'BigBoss': 'Большой босс',
            'Save': 'Сохранить', 'Saved': 'Настройки сохранены', 'Create': 'Создать',
            'Lives': 'Жизни на танк', 'Duration': 'Время боя', 'Minutes': 'мин', 'ModeDefault': 'По режиму',
            'SingleLife': 'Одна жизнь', 'Endless': 'Без ограничений', 'NoTimer': 'Без лимита',
@@ -457,16 +628,229 @@ STRINGS = {
            'RoomHeaderBots': 'Боты', 'RoomHeaderTime': 'Время'}}
 
 
-def patch_room(document):
-    """Keep room metadata in the native map and mode row, outside the notes."""
+STRINGS['en'].update(ModeCancel='Cancel', ModeSelect='Select',
+                     ModeDescriptionElimination='Destroy the enemy team.',
+                     ModeDescriptionEncounter='Capture the base or destroy the enemy team.',
+                     ModeDescriptionSupremacy='Capture control points to earn team points.',
+                     ModeDescriptionGravity='Low gravity and a jump ability.',
+                     ModeDescriptionBigBoss='Five roles with special abilities and respawns.')
+STRINGS['ru'].update(ModeCancel='Отмена', ModeSelect='Выбрать',
+                     ModeDescriptionElimination='Уничтожь команду противника.',
+                     ModeDescriptionEncounter='Захвати базу или уничтожь противников.',
+                     ModeDescriptionSupremacy='Захватывай точки и набирай очки команды.',
+                     ModeDescriptionGravity='Низкая гравитация и прыжок танка.',
+                     ModeDescriptionBigBoss='Пять ролей со способностями и возрождениями.')
+
+
+for locale, respawn, title in (('en', 'RESPAWN', 'Choose a role'), ('ru', 'ПЕРЕСПАВН', 'Выбери роль')):
+    strings = STRINGS[locale]
+    strings.update(Respawn=respawn, BossRoleTitle=title,
+                   BossRoleLevel='Role level' if locale == 'en' else 'Уровень роли')
+    for index, (_, en_name, ru_name, en_ability, ru_ability, stats) in enumerate(BOSS_CARDS, 1):
+        prefix = f'BossRole{index}'
+        strings[prefix] = f'{index}  {en_name if locale == "en" else ru_name}'
+        strings[prefix + 'Ability'] = en_ability if locale == 'en' else ru_ability
+        for row, (en_label, ru_label, value, *units) in enumerate(stats, 1):
+            unit = ' ' + units[locale == 'ru'] if units else ''
+            strings[f'{prefix}Label{row}'] = en_label if locale == 'en' else ru_label
+            key = f'{prefix}Value{row}'
+            if isinstance(value, tuple):
+                for level, amount in enumerate(value, 1):
+                    strings[f'{key}L{level}'] = amount + unit
+            else:
+                strings[key] = value + unit
+
+
+def _boss_actions(root, name):
+    root['components']['UIActionComponent'] = {'actionsPath': '~res:/'+BOSS_ACTIONS.removesuffix('.dvpl')}
+    root['components']['UIDataLocalVarsComponent'] = {'data': [['int', name, '0']]}
+
+
+def _boss_value(name, expression):
+    return dict(name=name, **{'class': 'UITextField'}, visible=False, input=False,
+                bindings=[['text', f'str({expression})']])
+
+
+def _boss_label(name, key, style, top, *, align='HCENTER', left=7., right=7., height=22.):
+    return {
+        'class': 'UIControl', 'name': name, 'input': False, 'size': [140., height],
+        'classes': style,
+        'components': {
+            'Anchor': {'leftAnchorEnabled': True, 'leftAnchor': left,
+                       'rightAnchorEnabled': True, 'rightAnchor': right,
+                       'topAnchorEnabled': True, 'topAnchor': top},
+            'UITextComponent': {'align': [align, 'VCENTER'], 'fitting': 'FITTING_REDUCE',
+                                'color': [1., 1., 1., 1.], 'colorInheritType': 'COLOR_IGNORE_PARENT'},
+            'StyleSheet': {'styles': '~res:/UI/Screens/Fonts.yaml'},
+        },
+        'bindings': [['UITextComponent.text', f'localize("Local/BattleSettings/{key}")']],
+    }
+
+
+def patch_boss_screen(document):
+    root, = document['Prototypes']
+    _boss_actions(root, 'solRole')
+    root['components']['UIDataLocalVarsComponent']['data'].append(['int', 'solRoleLevel', '1'])
+    # The client resolves the original prototypes from its own installed resources.
+    document.setdefault('ImportedPackages', []).extend((
+        '~res:/UI/Screens/Battle/OptionalHUDControls/BossmodeAbility.yaml',
+        '~res:/UI/Screens/Common/StyledButton.yaml',
+    ))
+    centered = {'hCenterAnchorEnabled': True}
+    edges = {f'{edge}AnchorEnabled': True for edge in ('left', 'right', 'top', 'bottom')}
+    detail = 'AbilityButton/Content/AbilityDetailContainer'
+    cards = []
+    for index, (icon, *_, stats) in enumerate(BOSS_CARDS, 1):
+        prefix = f'BossRole{index}'
+        rows = []
+        for row, (_, _, value, *_) in enumerate(stats, 1):
+            key = f'"Local/BattleSettings/{prefix}Value{row}"'
+            if isinstance(value, tuple):
+                key += ' + "L" + str(solRoleLevel)'
+            rows.append({
+                'prototype': 'BossmodeAbility/AbilityParam', 'name': f'Stat{row}',
+                'size': [170., 32.],
+                'components': {
+                    'LinearLayout': {'enabled': False},
+                    'SizePolicy': {'horizontalPolicy': 'PercentOfParent', 'horizontalValue': 100.,
+                                   'verticalPolicy': 'FixedSize', 'verticalValue': 32.},
+                },
+                'children': [
+                    {'path': 'Descr', 'classes': 'text2-small text-color-white-70', 'size': [112., 32.], 'components': {
+                        'Anchor': {'leftAnchorEnabled': True, 'leftAnchor': 12.,
+                                   'rightAnchorEnabled': True, 'rightAnchor': 47.,
+                                   'topAnchorEnabled': True, 'topAnchor': 0.},
+                        'SizePolicy': {'horizontalPolicy': 'Ignore', 'verticalPolicy': 'Ignore'},
+                        'UITextComponent': {'align': ['LEFT', 'VCENTER'],
+                                            'multiline': 'MULTILINE_DISABLED', 'fitting': 'FITTING_NONE'}},
+                     'bindings': [['UITextComponent.text',
+                                   f'localize("Local/BattleSettings/{prefix}Label{row}")']]},
+                    {'path': 'Value', 'size': [38., 32.], 'components': {
+                        'Anchor': {'rightAnchorEnabled': True, 'rightAnchor': 12.,
+                                   'topAnchorEnabled': True, 'topAnchor': 0.},
+                        'SizePolicy': {'horizontalPolicy': 'Ignore', 'verticalPolicy': 'Ignore'},
+                        'UITextComponent': {'align': ['RIGHT', 'VCENTER']}},
+                     'bindings': [['UITextComponent.text',
+                                   f'localize({key})']]},
+                ],
+            })
+        ability = _boss_label('Ability', prefix + 'Ability', 'text3-small text-color-white', 100.)
+        ability['components']['IgnoreLayout'] = {}
+        cards.append({
+            'prototype': 'BossmodeAbility/Ability', 'name': f'Role{index}', 'size': [170., 226.],
+            'components': {
+                'SizePolicy': {'horizontalPolicy': 'Formula', 'horizontalFormula': '(parent - 32) / 5',
+                               'verticalPolicy': 'FixedSize', 'verticalValue': 226.},
+            },
+            'children': [
+                {'path': 'AbilityButton', 'input': True, 'classes': 'button-choose-sound',
+                 'components': {'SizePolicy': {'horizontalPolicy': 'PercentOfParent',
+                                               'verticalPolicy': 'PercentOfParent'},
+                                'UIInputEventComponent': {'onTouchUpInside': f'SolPick{index}'}}},
+                {'path': 'AbilityButton/Content', 'components': {
+                    'LinearLayout': {'padding': '0', 'spacing': 0.},
+                    'SizePolicy': {'horizontalPolicy': 'PercentOfParent', 'verticalPolicy': 'PercentOfParent'}},
+                 'children': [ability]},
+                {'path': 'AbilityButton/Content/Fade', 'components': {
+                    'SizePolicy': {'horizontalPolicy': 'PercentOfParent', 'verticalValue': 146.}}},
+                {'path': 'AbilityButton/Content/Background', 'components': {
+                    'Anchor': {'topAnchor': 48.},
+                    'SizePolicy': {'verticalPolicy': 'Formula', 'verticalFormula': 'parent - 48'}}},
+                {'path': detail, 'classes': '', 'components': {
+                    'LinearLayout': {'orientation': 'TopDown', 'spacing': 0.},
+                    'SizePolicy': {'horizontalPolicy': 'PercentOfParent', 'verticalPolicy': 'FixedSize',
+                                   'verticalValue': 123.}}},
+                {'path': detail + '/icon', 'components': {
+                    'Background': {'drawType': 'DRAW_SCALE_PROPORTIONAL_ONE',
+                                   'sprite': f'~res:/Gfx/Shared/HUD/bossmode/icon_role-{icon}_s'},
+                    'SizePolicy': {'horizontalValue': 70., 'verticalValue': 70.}}},
+                {'path': detail + '/Spacer', 'components': {
+                    'SizePolicy': {'verticalValue': 4.}}},
+                {'path': detail + '/BossmodeAbilityType', 'visible': False,
+                 'components': {'IgnoreLayout': {}}},
+                {'path': detail + '/AbilityName', 'size': [156., 24.], 'components': {
+                    'SizePolicy': {'horizontalPolicy': 'PercentOfParent', 'horizontalValue': 94.,
+                                   'verticalPolicy': 'FixedSize', 'verticalValue': 24.},
+                    'UITextComponent': {'align': ['HCENTER', 'VCENTER'], 'fitting': 'FITTING_NONE'}},
+                 'bindings': [['UITextComponent.text', f'localize("Local/BattleSettings/{prefix}")']]},
+                {'path': detail + '/AbilityDescription', 'visible': False,
+                 'components': {'IgnoreLayout': {}}},
+                {'path': 'AbilityButton/Content/AbilityParamsContainer', 'children': rows},
+            ],
+        })
+    levels = []
+    for level in range(1, big_boss.ROLE_LEVEL_COUNT + 1):
+        button = _button(f'Level{level}', f'"{level}"', f'SolLevel{level}', 42)
+        button['components']['SizePolicy']['verticalValue'] = 30.
+        button['bindings'] = [['classes', f'when solRoleLevel == {level} -> '
+                               '"button button-color-orange", "button button-color-gray"']]
+        levels.append(button)
+    panel = {
+        'class': 'UIControl', 'name': 'RoleSelection', 'input': False, 'size': [882., 325.],
+        'components': {
+            'Anchor': dict(centered, vCenterAnchorEnabled=True, vCenterAnchor=59.),
+            'SizePolicy': {'horizontalPolicy': 'Formula', 'horizontalFormula': 'min(parent - 24, 882)'},
+        },
+        'children': [
+            _boss_label('Title', 'BossRoleTitle', 'header0 text-color-white', 0., height=30.),
+            _boss_label('LevelTitle', 'BossRoleLevel', 'text2-small text-color-white', 31.),
+            {'class': 'UIControl', 'name': 'Levels', 'input': False,
+             'components': {
+                 'Anchor': dict(centered, topAnchorEnabled=True, topAnchor=54.),
+                 'LinearLayout': {'spacing': 5.},
+                 'SizePolicy': {'horizontalPolicy': 'PercentOfChildrenSum',
+                                'verticalPolicy': 'PercentOfMaxChild'},
+             },
+             'children': levels},
+            {'class': 'UIControl', 'name': 'Cards', 'input': False,
+             'components': {
+                 'Anchor': {'leftAnchorEnabled': True, 'rightAnchorEnabled': True,
+                            'topAnchorEnabled': True, 'topAnchor': 96.},
+                 'LinearLayout': {'spacing': 8.},
+                 'SizePolicy': {'verticalPolicy': 'PercentOfMaxChild'},
+             },
+             'children': cards},
+        ],
+    }
+    # Native code toggles this root, including the dimmer, as one unit.
+    root['children'].insert(-1, {
+        'class': 'UIControl', 'name': 'SolBossPicker', 'visible': False, 'input': False,
+        'components': {'Anchor': edges, 'StyleSheet': {'styles': '~res:/UI/Screens/Fonts.yaml'},
+                       'Background': {'drawType': 'DRAW_FILL', 'color': [.025, .035, .045, .57]}},
+        'children': [panel, _boss_value('SolRoleValue', 'solRole'),
+                     _boss_value('SolRoleLevel', 'solRoleLevel')],
+    })
+
+
+def patch_boss_menu(document):
+    from copy import deepcopy
+    root, = document['Prototypes']
+    _boss_actions(root, 'solRespawn')
+    buttons = next(node for node in _walk(root) if node.get('path') == 'Middle/VerticalBox')['children']
+    exit_button = next(button for button in buttons if button.get('name') == 'exitButton')
+    respawn = deepcopy(exit_button)
+    respawn.update(name='SolRespawnButton', visible=False, classes='button button-color-gray')
+    respawn['components']['UIInputEventComponent'] = {'onTouchUpInside': 'SolRespawn'}
+    respawn['children'][0]['components']['UITextComponent']['text'] = 'Local/BattleSettings/Respawn'
+    buttons.insert(buttons.index(exit_button), respawn)
+    root['children'].append(_boss_value('SolRespawnValue', 'solRespawn'))
+
+
+def _room_header(document):
     root, = [node for node in document['Prototypes'] if node.get('name') == 'ScreenContainer']
-    params = root['components']['UIDataParamsComponent']['params']
-    params.extend(['int', f'roomHeader{name}', str(default), str(default)] for name, default in
-                  (('Mode', -1), ('Minutes', -1), ('Bots1', 0), ('Bots2', 0)))
     header, = [node for node in _walk(root) if node.get('name') == 'HorizContainer2']
     mode, = [node for node in _walk(header) if node.get('name') == 'ModeTxt']
     mode['bindings'] = [['UITextComponent.text', ROOM_RULES_CAPTION.replace(
         ROOM_MODE_VALUE, '(when roomHeaderMode < 0 -> 1, roomHeaderMode)')]]
+    return root, header
+
+
+def patch_room(document):
+    """Keep room metadata in the native map and mode row, outside the notes."""
+    root, header = _room_header(document)
+    params = root['components']['UIDataParamsComponent']['params']
+    params.extend(['int', f'roomHeader{name}', str(default), str(default)] for name, default in
+                  (('Mode', -1), ('Minutes', -1), ('Bots1', 0), ('Bots2', 0)))
     summary = {
         'class': 'UIStaticText', 'name': 'RoomOptionsSummary',
         'classes': 'text2 text-color-blue', 'input': False,
@@ -484,10 +868,9 @@ def patch_room(document):
     }
     header['children'].append(summary)
 
-
 def upgrade_form(lab, manifest):
     """Refresh the installed native battle settings form in an idle client."""
-    if manifest.get('battle_settings_ui_version') == 13:
+    if manifest.get('battle_settings_ui_version') == 28:
         return manifest
     from hashlib import sha256
     import json
@@ -517,7 +900,8 @@ def upgrade_form(lab, manifest):
                 document = yaml.safe_load(raw)
                 changed = False
             root, = [node for node in document['Prototypes'] if node.get('name') == 'Content']
-            description, = [node for node in _walk(root) if node.get('name') == 'Description']
+            description, = [node for node in _walk(root) if node.get('name') == 'Description'
+                            and any(child.get('path') == 'Container/Caption' for child in node.get('children', []))]
             changed = _room_bot_hint(description) or changed
             rules, = [node for node in _walk(root) if node.get('name') == 'LocalRules']
             caption, = [node for node in _walk(rules) if node.get('path') == 'Caption']
@@ -535,13 +919,18 @@ def upgrade_form(lab, manifest):
                 if room_caption['bindings'] != room_binding:
                     room_caption['bindings'] = room_binding
                     changed = True
+                _mode_picker(root)
+                changed = True
         else:
             document = yaml.load(raw, Loader=_StringsLoader)
             locale = 'en' if relative == STRINGS_EN else 'ru'
             strings = {f'Local/BattleSettings/{key}': STRINGS[locale][key]
-                       for key in ('RoomBotsCaption', 'RoomBotsHint', 'Gravity', 'Encounter',
+                       for key in ('RoomBotsCaption', 'RoomBotsHint', 'Gravity', 'Encounter', 'BigBoss',
                                    'Lives', 'Duration', 'Minutes', 'ModeDefault', 'SingleLife', 'Endless', 'NoTimer', 'RoomBots1', 'RoomBots2',
                                    'RoomHeaderBots', 'RoomHeaderTime', 'UnlimitedAmmo', 'AmmoOn', 'AmmoOff')}
+            strings.update({f'Local/BattleSettings/{key}': value for key, value in STRINGS[locale].items()
+                            if key == 'Respawn' or key.startswith(('BossRole', 'ModeDescription'))
+                            or key in ('ModeCancel', 'ModeSelect')})
             changed = any(document.get(key) != value for key, value in strings.items())
             document.update(strings)
         content = (dvpl.encode(yaml.safe_dump(document, sort_keys=False, allow_unicode=True,
@@ -549,13 +938,19 @@ def upgrade_form(lab, manifest):
         if changed:
             staged[target] = content
         overrides[relative] = sha256(content).hexdigest()
-    if has_room_form and ROOM not in overrides:
+    if has_room_form:
         room = data/ROOM
         if room.parent.resolve(strict=True) != room.parent:
             raise ValueError('Room header requires a private UI overlay')
-        game = Path(manifest.get('source_game') or manifest['game'])
-        document = yaml.safe_load(dvpl.read(game/'Data'/ROOM))
-        patch_room(document)
+        if ROOM in overrides:
+            if room.resolve(strict=True) != room or not room.is_file():
+                raise ValueError('Room header requires a private UI overlay')
+            document = yaml.safe_load(dvpl.read(room))
+            _room_header(document)
+        else:
+            game = Path(manifest.get('source_game') or manifest['game'])
+            document = yaml.safe_load(dvpl.read(game/'Data'/ROOM))
+            patch_room(document)
         content = dvpl.encode(yaml.safe_dump(document, sort_keys=False, allow_unicode=True,
                                              width=1 << 30).encode())
         staged[room] = content
@@ -567,10 +962,27 @@ def upgrade_form(lab, manifest):
     if actions.read_bytes() != actions_content:
         staged[actions] = actions_content
     overrides[ACTIONS] = sha256(actions_content).hexdigest()
+    source = manifest.get('source_game') or manifest.get('game')
+    if source:
+        from .client_ui import local_directory
+        game = Path(source).resolve(strict=True)
+        menu_source = game/'Data'/BATTLE_MENU
+        if menu_source.is_file():
+            document = yaml.safe_load(dvpl.read(menu_source))
+            patch_boss_menu(document)
+            menu = data/BATTLE_MENU
+            for parent in reversed(menu.parents):
+                if parent.is_relative_to(data) and parent.is_symlink():
+                    local_directory(parent, game)
+            staged[menu] = dvpl.encode(yaml.safe_dump(
+                document, sort_keys=False, allow_unicode=True).encode())
+            staged[data/BOSS_ACTIONS] = extra_resources()[BOSS_ACTIONS]
+            for relative in (BATTLE_MENU, BOSS_ACTIONS):
+                overrides[relative] = sha256(staged[data/relative]).hexdigest()
     for target, content in staged.items():
-        atomic_write(target, content, replace_symlink=target == data/ROOM)
+        atomic_write(target, content, replace_symlink=target in (data/ROOM, data/BATTLE_MENU))
     updated = dict(manifest, ui_overrides=overrides, room_bot_hint_version=1,
-                   battle_settings_ui_version=13)
+                   battle_settings_ui_version=28)
     atomic_write(lab/'manifest.json', (json.dumps(updated, indent=2)+'\n').encode())
     return updated
 

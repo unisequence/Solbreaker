@@ -20,7 +20,7 @@ SCHEMA_VERSION = 1
 FILE_NAME = 'training.json'
 MAX_BYTES = 4096
 MODES = ('target', 'bots')
-BATTLE_MODES = ('elimination', 'encounter', 'supremacy', 'gravity')
+BATTLE_MODES = ('elimination', 'encounter', 'supremacy', 'gravity', 'big_boss')
 # The player occupies one slot of team 1.
 MAX_ENEMIES = TEAM_SIZE
 MAX_ALLIES = TEAM_SIZE-1

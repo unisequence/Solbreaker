@@ -1025,6 +1025,40 @@ impl Movement<'_> {
         Ok(None)
     }
 
+    fn separating_map_contacts(&self, points: &[Contact], dx: f64, dz: f64) -> bool {
+        !points.is_empty()
+            && points.iter().all(|point| {
+                self.world.solid_map(point.body_b)
+                    && dx * point.normal[0] + dz * point.normal[2] > 1e-8
+            })
+    }
+
+    fn valid_retreat(&mut self, candidate: Pose, previous: Pose) -> Result<(bool, Vec<Contact>), String> {
+        let (clear, points) = self.valid(candidate, previous, false)?;
+        let (dx, dz) = (candidate.x - previous.x, candidate.z - previous.z);
+        if !self.separating_map_contacts(&points, dx, dz) {
+            return Ok((clear, points));
+        }
+        // Back up through an existing overlap one slice at a time.
+        // Each remaining contact must be shallower on the same face.
+        let prior = self.contacts(previous)?;
+        let sensor = self.world.entities[&self.entity];
+        self.world
+            .set_pose(sensor, position(candidate), quaternion(candidate), None)?;
+        if points.iter().all(|point| {
+            prior.iter().any(|old| {
+                old.body_b == point.body_b
+                    && old.link_a == point.link_a
+                    && old.distance < point.distance - 1e-6
+                    && dot(old.normal, point.normal) >= 0.95
+                    && dot(difference(point.point_b, old.point_b), old.normal).abs() <= self.skin()
+            })
+        }) {
+            return Ok((true, Vec::new()));
+        }
+        Ok((false, points))
+    }
+
     fn retreat(
         &mut self,
         previous: Pose,
@@ -1032,14 +1066,7 @@ impl Movement<'_> {
         dx: f64,
         dz: f64,
     ) -> Result<Option<Pose>, String> {
-        let config = Rc::clone(&self.state.configuration);
-        if points.is_empty()
-            || points.iter().any(|point| {
-                !config.track_links.contains(&point.link_a)
-                    || !self.world.solid_map(point.body_b)
-                    || dx * point.normal[0] + dz * point.normal[2] <= 1e-8
-            })
-        {
+        if !self.separating_map_contacts(points, dx, dz) {
             return Ok(None);
         }
         let held = Pose {
@@ -1047,9 +1074,10 @@ impl Movement<'_> {
             z: previous.z + dz,
             ..previous
         };
-        if !self.valid(held, previous, false)?.0 {
+        if !self.valid_retreat(held, previous)?.0 {
             return Ok(None);
         }
+        let config = Rc::clone(&self.state.configuration);
         let matrix = rotation(held);
         let stations: Vec<_> = config
             .a
@@ -1509,8 +1537,11 @@ impl Movement<'_> {
                         road = target;
                         pose
                     };
-                    let (mut clear, more) =
-                        self.valid_impact(adjusted, previous, impact, dx, dz)?;
+                    let (mut clear, more) = if retreating {
+                        self.valid_retreat(adjusted, previous)?
+                    } else {
+                        self.valid_impact(adjusted, previous, impact, dx, dz)?
+                    };
                     let mut adjusted = adjusted;
                     if !clear && !more.is_empty() {
                         let contacts;

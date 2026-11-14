@@ -318,6 +318,7 @@ solbreaker/battle.py
 solbreaker/battle_rewards.py
 solbreaker/battle_settings.py
 solbreaker/battle_settings_wire.py
+solbreaker/big_boss.py
 solbreaker/bootstrap.py
 solbreaker/bot_ai.py
 solbreaker/bot_navigation.py
@@ -346,6 +347,7 @@ solbreaker/client_setup.py
 solbreaker/client_t49_textures.py
 solbreaker/client_tls.py
 solbreaker/client_ui.py
+solbreaker/client_x11_input.py
 solbreaker/collision.py
 solbreaker/connection.py
 solbreaker/consumables.py
@@ -416,6 +418,7 @@ solbreaker/native/recon_client.h
 solbreaker/native/recon_wire.c
 solbreaker/native/recon_wire.h
 solbreaker/native/sandbox_client.c
+solbreaker/native/x11_repeat_filter.c
 solbreaker/native/sim_core/Cargo.lock
 solbreaker/native/sim_core/Cargo.toml
 solbreaker/native/sim_core/abi.h
@@ -487,6 +490,7 @@ tests/test_battle_provisions.py
 tests/test_bot_combat.py
 tests/test_captures.py
 tests/test_client_repairs.py
+tests/test_client_x11_input.py
 tests/test_collision_queries.py
 tests/test_contact_queries.py
 tests/test_dependencies.py

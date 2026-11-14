@@ -294,6 +294,44 @@ class NativePhysicsTests(unittest.TestCase):
             self.assertGreater(pose.position[1], -.12)
             self.assertLess(pose.position[1], .6)
 
+    def test_grounded_tank_can_reverse_out_of_existing_rock_overlap(self):
+        for native in (False, True):
+            with self.subTest(native=native):
+                assets = self.assets('rock')
+                assets.vertices = box((-5., 0., 4.), (5., 3., 6.))
+                world = self.world(assets, native)
+                entity = 200
+                start = Pose((0., .05, 2.32), 0.)
+                world.relocate_training_body(entity, start)
+
+                pose, moved = world.move(.024, 0., entity, dt=1/60)
+                self.assertFalse(moved)
+                self.assertEqual(pose, start)
+                for _ in range(20):
+                    previous = pose
+                    pose, moved = world.move(-.024, 0., entity, dt=1/60)
+                    self.assertTrue(moved)
+                    self.assertLess(pose.position[2], previous.position[2])
+                    self.assertTrue(world.motion[entity].grounded)
+                self.assertFalse(world._contacts(pose, entity, suspension=True))
+
+                for _ in range(30):
+                    pose, _ = world.move(.024, 0., entity, dt=1/60)
+                self.assertLessEqual(pose.position[2], 2.)
+
+    def test_airborne_body_collides_with_static_cover_and_grounded_tanks(self):
+        for obstacle, launch_z, tank_z, limit in (('wall', -3., 20., 2.15),
+                                                 ('flat', -8., -2., -5.9)):
+            with self.subTest(obstacle=obstacle):
+                world = self.world(self.assets(obstacle))
+                world.relocate_training_body(201, Pose((0., .001, tank_z), 0.))
+                world.relocate_training_body(200, Pose((0., .6, launch_z), 0.))
+                self.assertTrue(world.set_flight_velocity(200, (0., 0., 16.), (0., 0., 0.)))
+                for _ in range(32):
+                    world.dynamic_commit(1/60, piloted=(200,))
+                    self.assertLess(world.poses[200].position[2], limit)
+                self.assertLess(world.motion[200].velocity[2], 8.)
+
     def test_native_tracks_cross_a_low_riser_but_stop_at_a_wall(self):
         for height, can_cross in ((.18, True), (.20, True), (.27, True), (.50, False), (1., False)):
             with self.subTest(height=height):

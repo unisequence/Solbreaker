@@ -182,4 +182,4 @@ class TrainingRoomBotsTests(unittest.TestCase):
             self.assertEqual(yaml.safe_load(dvpl.read(data/STRINGS_RU))['Custom'], 'Рудники')
             self.assertIn(b'Local/BattleSettings/RoomBotsHint', dvpl.read(data/FORM))
             self.assertIn(b'Local/BattleSettings/Gravity', dvpl.read(data/FORM))
-            self.assertIn(b'if (localRules == 3)', dvpl.read(actions))
+            self.assertIn(b'ChangeData(localRules, modePreview)', dvpl.read(actions))

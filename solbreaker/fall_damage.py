@@ -28,6 +28,8 @@ _RULES = {
     SIDE: (7., 1.25),
     ROOF: (5., 1.5),
 }
+# No contact class can deal hull damage at or below this speed.
+MIN_HULL_DAMAGE_SPEED = min(threshold for threshold, _ in _RULES.values())
 
 
 def _finite(value, name):

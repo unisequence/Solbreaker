@@ -23,7 +23,7 @@ NO_RESPONSE = 202
 COMMANDS = {400,401,402,403,404,406,411,414,415,523,524}
 BOT_PREFIX = re.compile(r'^\[bots\s+([0-7])\s*:\s*([0-7])\]', re.IGNORECASE)
 SETTING_PREFIX = re.compile(r'^\[(mode|lives|time|ammo)\b', re.IGNORECASE)
-SETTING_VALUE = re.compile(r'^\[(?:mode|lives|time|ammo)\s+([a-z]+|[0-9]{1,2})\]', re.IGNORECASE)
+SETTING_VALUE = re.compile(r'^\[(?:mode|lives|time|ammo)\s+([a-z_]+|[0-9]{1,2})\]', re.IGNORECASE)
 
 
 def varint(value):

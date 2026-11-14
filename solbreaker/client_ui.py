@@ -45,20 +45,22 @@ UI_RESOURCES = (BASE_HEADER, BASE_LOBBY, BASE_LOBBY_ACTIONS, STATS_ITEM, INVENTO
                 SIDEBAR, ACCOUNT_OPTIONS, KEYBOARD_OPTIONS, GAME_TYPES, GAME_TYPE_CARD,
                 AVATAR_RATING, CALIBRATION_POPUP, NOTIFICATION_7X7,
                 LOGIN_ENTRY, SERVER_SELECTION, SERVER_MAP_ELEMENT,
-                client_battle_settings.FORM, client_battle_settings.ROOM, *client_recon.MARKER_OPACITY)
+                client_battle_settings.FORM, client_battle_settings.ROOM,
+                client_battle_settings.BATTLE_MENU, *client_recon.MARKER_OPACITY)
 STRINGS_EN = "Strings/en.yaml.dvpl"
 STRINGS_RU = "Strings/ru.yaml.dvpl"
-SANDBOX_BINDINGS_VERSION = 10
+SANDBOX_BINDINGS_VERSION = 13
 SANDBOX_BINDING_STRINGS = {
     STRINGS_EN: {'Title': 'Solbreaker Sandbox',
                  'Boost': 'Toggle boost', 'Flight': 'Toggle flight',
                  'Missile': 'Toggle missile camera', 'Target': 'Place training target',
-                 'Reload': 'Toggle fast reload',
+                 'Reload': 'Fast reload and cooldowns',
+                 'God': 'Toggle God Mode', 'God0': 'God Mode off', 'God1': 'God Mode on',
                  'Jump': 'Gravity Force thruster',
                  'Boost0': 'Boost off', 'Boost1': 'Boost on',
                  'Fly0': 'Flight off', 'Fly1': 'Flight on',
                  'Cam0': 'Missile camera off', 'Cam1': 'Missile camera armed',
-                 'Load0': 'Fast reload off', 'Load1': 'Fast reload on (0.5 s)',
+                 'Load0': 'Fast reload and cooldowns off', 'Load1': 'Fast reload and cooldowns on (0.5 s)',
                  'Spawn': 'Target placed', 'TP': 'Teleport to aim point',
                  'Moved': 'Teleported', 'Heal': 'Restore full HP', 'Healed': 'HP restored',
                  'Next': 'Cycle training target tank', 'Fire': 'Toggle target return fire',
@@ -70,12 +72,13 @@ SANDBOX_BINDING_STRINGS = {
     STRINGS_RU: {'Title': 'Песочница Solbreaker',
                  'Boost': 'Включить или выключить форсаж', 'Flight': 'Взлететь или сесть',
                  'Missile': 'Переключить камеру ПТУР', 'Target': 'Поставить мишень на Полигоне',
-                 'Reload': 'Быстрая перезарядка',
+                 'Reload': 'Быстрая перезарядка и откат',
+                 'God': 'Режим бога', 'God0': 'Режим бога выключен', 'God1': 'Режим бога включён',
                  'Jump': 'Прыгнуть в «Гравитации»',
                  'Boost0': 'Форсаж выключен', 'Boost1': 'Форсаж включён',
                  'Fly0': 'Полёт выключен', 'Fly1': 'Полёт включён',
                  'Cam0': 'Камера ПТУР выключена', 'Cam1': 'Камера ПТУР включится при пуске',
-                 'Load0': 'Быстрая перезарядка выключена', 'Load1': 'Быстрая перезарядка включена (0,5 с)',
+                 'Load0': 'Быстрая перезарядка и откат выкл.', 'Load1': 'Быстрая перезарядка и откат вкл. (0,5 с)',
                  'Spawn': 'Мишень установлена', 'TP': 'Телепорт в точку прицеливания',
                  'Moved': 'Танк перемещён', 'Heal': 'Восстановить прочность',
                  'Healed': 'Прочность восстановлена',
@@ -89,6 +92,10 @@ SANDBOX_BINDING_STRINGS = {
 LOCAL_TRAINING_MAP_STRINGS = {
     STRINGS_EN: {"#maps:lagoon:15_lagoon_ln/15_lagoon_ln.sc2": "Lagoon"},
     STRINGS_RU: {"#maps:lagoon:15_lagoon_ln/15_lagoon_ln.sc2": "Лагуна"},
+}
+VEHICLE_NAME_STRINGS = {
+    key: "FVE Defender" for key in ("#other_vehicles:Oth84_FVE_Defender",
+                                    "#other_vehicles:Oth84_FVE_Defender_short")
 }
 LOCAL_PROVISION_STRINGS = {
     STRINGS_EN: {'#artefacts:desert_power/name': 'Desert Kit',
@@ -203,6 +210,7 @@ def patched_strings(source, relative, *, navigation_enabled=True):
     # The pinned training catalog exposes Lagoon without either locale label.
     for key, text in LOCAL_TRAINING_MAP_STRINGS.get(relative, {}).items():
         document.setdefault(key, text)
+    document.update(VEHICLE_NAME_STRINGS)
     document.update(LOCAL_PROVISION_STRINGS.get(relative, {}))
     document.update(LOCAL_MODE_STRINGS.get(relative, {}))
     document.update(_sandbox_binding_strings(relative))
@@ -447,6 +455,8 @@ action SolbreakerSettingsSaved(int arg1)
         client_battle_settings.patch_form(document)
     elif relative == client_battle_settings.ROOM and navigation_enabled:
         client_battle_settings.patch_room(document)
+    elif relative == client_battle_settings.BATTLE_MENU:
+        client_battle_settings.patch_boss_menu(document)
     return dvpl.encode(yaml.safe_dump(document, sort_keys=False, allow_unicode=True).encode())
 
 
@@ -554,7 +564,7 @@ def install_ui_guards(lab):
 
 
 def install_sandbox_bindings(lab, manifest):
-    """Add the key reference to an already prepared, idle client."""
+    """Update sandbox controls and local labels in a prepared, idle client."""
     if manifest.get('sandbox_bindings_version') == SANDBOX_BINDINGS_VERSION:
         return manifest
     from .connection import atomic_write
@@ -567,6 +577,7 @@ def install_sandbox_bindings(lab, manifest):
     patches = {KEYBOARD_OPTIONS: patched_resource(data/KEYBOARD_OPTIONS, KEYBOARD_OPTIONS)}
     for relative in SANDBOX_BINDING_STRINGS:
         strings = yaml.load(dvpl.read(data/relative), Loader=_StringsLoader)
+        strings.update(VEHICLE_NAME_STRINGS)
         strings.update(_sandbox_binding_strings(relative))
         _weather_map_strings(strings, relative)
         patches[relative] = dvpl.encode(yaml.safe_dump(strings, sort_keys=False, allow_unicode=True,

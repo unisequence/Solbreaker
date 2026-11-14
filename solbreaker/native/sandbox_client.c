@@ -19,14 +19,18 @@
 #define TOGGLE_TARGET_FIRE 1024u
 #define CLEAR_TARGETS 2048u
 #define RESTORE_HP 4096u
+#define BOSS_PICK_ROLE 8192u
+#define BOSS_RESPAWN 16384u
+#define GOD_MODE 32768u
 #define PRACTICE_ACTIONS (NEXT_TARGET | TOGGLE_TARGET_FIRE | CLEAR_TARGETS)
 #define ONE_SHOT_ACTIONS (SPAWN_TARGET | GRAVITY_JUMP | TELEPORT | PRACTICE_ACTIONS | RESTORE_HP)
 /* The pinned keyboard registry uses 0 through 0x32 for stock actions. */
 #define FIRST_SANDBOX_ACTION 0x33u
-#define SANDBOX_ACTION_COUNT 11u
-#define VISIBLE_SANDBOX_ACTIONS 10u
+#define SANDBOX_ACTION_COUNT 12u
+#define VISIBLE_SANDBOX_ACTIONS 11u
 #define TELEPORT_KEY (1u << 5)
 #define RESTORE_HP_KEY (1u << 9)
+#define GOD_MODE_KEY (1u << 10)
 #define JUMP_KEY (1u << VISIBLE_SANDBOX_ACTIONS)
 #define SANDBOX_KEYS (JUMP_KEY - 1u)
 #define ABILITY_ONE_ACTION 7u /* Native Consumables4 / ABILITY 1. */
@@ -51,7 +55,7 @@ static const NativeString binding_names[] = {
     {"SolTarget", 9, 15}, {"SolJump", 7, 15}, {"SolReload", 9, 15},
     {"SolTeleport", 11, 15},
     {"SolNextTank", 11, 15}, {"SolTargetFire", 13, 15}, {"SolClear", 8, 15},
-    {"SolHeal", 7, 15},
+    {"SolHeal", 7, 15}, {"SolGod", 6, 15},
 };
 static const NativeString binding_captions[][2] = {
     {{"Local/SbBoost", 13, 15}, {"", 0, 15}},
@@ -65,8 +69,9 @@ static const NativeString binding_captions[][2] = {
     {{"Local/SbFire", 12, 15}, {"", 0, 15}},
     {{"Local/SbClear", 13, 15}, {"", 0, 15}},
     {{"Local/SbHeal", 12, 15}, {"", 0, 15}},
+    {{"Local/SbGod", 11, 15}, {"", 0, 15}},
 };
-static const uint8_t visible_bindings[] = {0, 1, 2, 3, 5, 6, 7, 8, 9, 10};
+static const uint8_t visible_bindings[] = {0, 1, 2, 3, 5, 6, 7, 8, 9, 10, 11};
 
 typedef struct { float x, y, z; } Vector;
 typedef struct { Vector position, target; } CameraPose;
@@ -88,6 +93,9 @@ typedef struct {
     CameraPose marker_pose;
     uint32_t marker_pose_ready;
     void *notice_controller;
+    void *role_picker, *role_value, *stock_boss_panel;
+    uint32_t role_token, role_state, role_sent, respawn_sent, role_keys;
+    void *respawn_menu, *respawn_value;
 } Sandbox;
 
 extern uint32_t sandbox_delta(void);
@@ -138,7 +146,7 @@ static int read_setting(uint32_t delta, const char *path, void *data, uint32_t s
 }
 
 static int read_bindings(uint32_t delta, SavedBindings *data) {
-    static const uint8_t saved_counts[] = {SANDBOX_ACTION_COUNT, 10, 7, 6, 5};
+    static const uint8_t saved_counts[] = {SANDBOX_ACTION_COUNT, 11, 10, 7, 6, 5};
     for (unsigned index = 5; index < SANDBOX_ACTION_COUNT; index++)
         data->keys[index] = (SavedKey){0};
     for (unsigned index = 0; index < sizeof(saved_counts); index++) {
@@ -193,6 +201,7 @@ static void seed_bindings(uint32_t delta, void *layout, int restore) {
         if (!get_binding(delta, layout, action).device) {
             /* Native keyboard device, Numpad 1 through 9 then 0. */
             KeyBinding key = {0x400, binding == 10 ? 0x49 : 0x4a + index, 0, 9};
+            if (binding == 11) key = (KeyBinding){0x400, 0x53, 0, 9};
             if (have_saved && saved.keys[binding].key && saved.keys[binding].key < 0x7f
                     && saved.keys[binding].modifiers < 16) {
                 key.key = saved.keys[binding].key;
@@ -261,6 +270,7 @@ static uint32_t binding_keys(uint32_t delta, Sandbox *s) {
     return pressed;
 }
 
+__attribute__((section(".late_sandbox"), noinline))
 void THISCALL sandbox_binding_menu(void *controller, void *page, const ActionVector *actions,
                                   uint32_t device, uint32_t columns) {
     typedef void (THISCALL *Original)(void *, void *, const ActionVector *, uint32_t, uint32_t);
@@ -338,12 +348,19 @@ static void clear_view(Sandbox *s) {
     __atomic_exchange_n(&s->mouse_y, 0, __ATOMIC_RELAXED);
 }
 
+static void boss_picker_update(uint32_t delta, Sandbox *s);
+static void boss_picker_message(uint32_t delta, const uint32_t *message);
+static void boss_respawn_menu(void *menu, uint32_t delta);
+static void *find_control(void *root, const char *name, uint32_t delta);
+
 static void reset(Sandbox *s) {
     clear_view(s);
     s->owner = s->avatar = s->scene = s->token = s->sequence = 0;
     s->previous_keys = s->toggles = s->last_report = s->sent_flags = s->shot = 0;
     s->pending_actions = s->allowed_keys = 0;
     s->bindings_layout = 0;
+    s->respawn_menu = s->respawn_value = 0;
+    s->role_sent = s->respawn_sent = 0;
     s->aim_frame_tick = 0;
     s->blur_tick = s->blur_camera = s->blur_scene = 0;
     s->blur_offset[0] = s->blur_offset[1] = 0;
@@ -366,7 +383,8 @@ static Vector normalized(Vector value) {
     return (Vector){value.x/length, value.y/length, value.z/length};
 }
 
-static int send_control(uint32_t delta, Sandbox *s, uint32_t flags, Vector direction) {
+__attribute__((section(".boss_ui"), noinline))
+static int send_control_value(uint32_t delta, Sandbox *s, uint32_t flags, Vector direction, uint32_t value) {
     typedef uint32_t *(THISCALL *Begin)(uint32_t *, uint32_t, uint32_t, uint8_t *);
     typedef uint8_t *(THISCALL *Reserve)(uint32_t *, uint32_t);
     uint8_t status = 0xff;
@@ -384,13 +402,17 @@ static int send_control(uint32_t delta, Sandbox *s, uint32_t flags, Vector direc
     FIELD(body, 0) = 0x2d534654u;  /* TFS- */
     FIELD(body, 4) = 0x2d42414cu;  /* LAB- */
     body[8] = 'S';
-    FIELD(body, 9) = s->token;
+    FIELD(body, 9) = flags & (BOSS_PICK_ROLE | BOSS_RESPAWN) ? s->role_token : s->token;
     FIELD(body, 13) = ++s->sequence;
     FIELD(body, 17) = flags;
-    FIELD(body, 21) = flags & MISSILE_VIEW ? s->shot : 0;
+    FIELD(body, 21) = value;
     *(Vector *)(body + 25) = direction;
     body[37] = 1;
     return 1;
+}
+
+static int send_control(uint32_t delta, Sandbox *s, uint32_t flags, Vector direction) {
+    return send_control_value(delta, s, flags, direction, flags & MISSILE_VIEW ? s->shot : 0);
 }
 
 /* Native battle HUD refresh, with an override scoped to the current arena. */
@@ -454,7 +476,7 @@ static void sandbox_notice(uint32_t delta, Sandbox *s, uint32_t index) {
         {"Local/SbKV1", 11, 15}, {"Local/SbPzIV", 12, 15},
         {"Local/SbFire0", 13, 15}, {"Local/SbFire1", 13, 15},
         {"Local/SbClean", 13, 15}, {"Local/SbFull", 12, 15},
-        {"Local/SbHealed", 14, 15},
+        {"Local/SbHealed", 14, 15}, {"Local/SbGod0", 12, 15}, {"Local/SbGod1", 12, 15},
     };
     void *controller = s->notice_controller;
     void *localization = (void *)FIELD(0x471eea0u + delta, 0);
@@ -484,6 +506,10 @@ int sandbox_message(uint32_t delta, const uint32_t *first, const uint32_t *end,
                     const uint32_t *second, const uint32_t *second_end) {
     typedef int (*Original)(uint32_t, const uint32_t *, const uint32_t *,
                             const uint32_t *, const uint32_t *);
+    if (first && end == first+4 && first[0] == 0x31534654u && first[1] == 0x454c4f52u) {
+        boss_picker_message(delta, first);
+        return 1;
+    }
     if (first && end == first+3 && first[0] == 0x31534654u && first[1] == 0x43494f56u) {
         /* VOICE_ENEMY_KILLED and the stock TrackHealth voice. */
         if (first[2] == 0x22 || first[2] == 0x4f)
@@ -523,7 +549,8 @@ int sandbox_message(uint32_t delta, const uint32_t *first, const uint32_t *end,
                               | ((capabilities & 32) ? 16 : 0)
                               | ((capabilities & 128) ? TELEPORT_KEY : 0)
                               | ((capabilities & 512) ? 0x1c0 : 0)
-                              | ((capabilities & 0x4000) ? RESTORE_HP_KEY : 0);
+                              | ((capabilities & 0x4000) ? RESTORE_HP_KEY : 0)
+                              | ((capabilities & 0x10000) ? GOD_MODE_KEY : 0);
             s->last_report = 0;
         }
         return 1;
@@ -538,6 +565,8 @@ void sandbox_reset(uint32_t delta, uint32_t *layer) {
     if (s && s->thread == thread_id()) {
         s->score_active = 0;
         s->score_panel = 0;
+        s->role_picker = s->role_value = s->stock_boss_panel = 0;
+        s->role_token = s->role_state = s->role_keys = 0;
         reset(s);
     }
 }
@@ -596,9 +625,13 @@ static void poll_controls(uint32_t delta, Sandbox *s, uint32_t now) {
     }
     if (changes & JUMP_KEY) s->pending_actions |= GRAVITY_JUMP;
     if (changes & TELEPORT_KEY) s->pending_actions |= TELEPORT;
+    if (changes & GOD_MODE_KEY) {
+        s->toggles ^= GOD_MODE;
+        sandbox_notice(delta, s, 19 + !!(s->toggles & GOD_MODE));
+    }
     /* The four Numpad 7–0 action bits follow the order of their binding bits. */
     s->pending_actions |= (changes << 3) & (PRACTICE_ACTIONS | RESTORE_HP);
-    uint32_t flags = s->toggles & (BOOST | FLIGHT | FAST_RELOAD);
+    uint32_t flags = s->toggles & (BOOST | FLIGHT | FAST_RELOAD | GOD_MODE);
     if ((flags & FLIGHT) && key(0x20) < 0) flags |= ASCEND;
     if ((flags & FLIGHT) && key(0x11) < 0) flags |= DESCEND;
     Vector direction = {0, 0, 0};
@@ -817,6 +850,8 @@ void THISCALL sandbox_draw(void *scene) {
     uint32_t delta = sandbox_delta();
     Draw draw = (Draw)(0x00d54070u + delta);
     Sandbox *s = state(delta, 0);
+    if (s && s->owner && s->thread == thread_id() && s->role_state)
+        boss_picker_update(delta, s);
     if (!s || s->thread != thread_id() || s->scene != (uint32_t)scene) {
         draw(scene);
         return;
@@ -843,6 +878,24 @@ void sandbox_mouse(uint32_t delta, int32_t x, int32_t y) {
         __atomic_fetch_add(&s->mouse_x, x, __ATOMIC_RELAXED);
         __atomic_fetch_add(&s->mouse_y, y, __ATOMIC_RELAXED);
     }
+}
+
+__attribute__((section(".boss_exit")))
+void THISCALL sandbox_boss_menu_open(void *menu, uint32_t action) {
+    typedef void *(THISCALL *Get)(void *);
+    typedef void (THISCALL *Open)(void *, uint32_t);
+    typedef void (THISCALL *ShowExit)(void *);
+    uint32_t delta = sandbox_delta();
+    void *context = (void *)FIELD(menu, 0x164);
+    void *logic = context ? ((Get)FIELD(FIELD(context, 0), 0xa0))(context) : 0;
+    void *avatar = logic && FIELD(logic, 0) == 0x03801fc4u + delta
+                   ? ((Get)FIELD(FIELD(logic, 0), 4))(logic) : 0;
+    /* Keep the native Exit to Hangar control in Big Boss. The button
+       retains its stock confirmation and sends the normal leave RPC. */
+    if (avatar && *(const uint8_t *)((uintptr_t)avatar + 0xd9) == 27)
+        ((ShowExit)(0x01df6db0u + delta))(menu);
+    boss_respawn_menu(menu, delta);
+    ((Open)(0x0194c490u + delta))(menu, action);
 }
 
 __asm__(
@@ -898,6 +951,7 @@ static const char *room_parse_options(const NativeString *value, RoomOptions *se
             if (room_prefix(text + 6, "elimination]")) mode = 0;
             if (room_prefix(text + 6, "supremacy]")) mode = 2;
             if (room_prefix(text + 6, "gravity]")) mode = 3;
+            if (room_prefix(text + 6, "big_boss]")) mode = 4;
         } else if (room_prefix(text, "[lives ")) {
             lives = room_prefix(text + 7, "unlimited]");
         } else if (room_prefix(text, "[ammo ")) {
@@ -1015,6 +1069,127 @@ static void *find_control(void *root, const char *name, uint32_t delta) {
     void *control = ((Find)(0xcde480u + delta))(root, &path);
     ((Destroy)(0x69a720u + delta))(&path);
     return control;
+}
+
+#define BOSS_UI __attribute__((section(".boss_ui"), noinline))
+#define BOSS_DATA __attribute__((section(".boss_rodata")))
+
+static const char boss_picker_path[] BOSS_DATA = "SolBossPicker";
+static const char boss_role_path[] BOSS_DATA = "SolRoleValue";
+static const char boss_level_path[] BOSS_DATA = "SolRoleLevel";
+static const char stock_boss_path[] BOSS_DATA = "AbilityPanel";
+static const char respawn_button_path[] BOSS_DATA = "menuDialog/**/SolRespawnButton";
+static const char respawn_value_path[] BOSS_DATA = "SolRespawnValue";
+
+BOSS_UI static unsigned picker_value(void *field, uint32_t delta) {
+    typedef NativeString *(THISCALL *Get)(void *, NativeString *);
+    typedef void (THISCALL *Destroy)(NativeString *);
+    NativeString value;
+    ((Get)(0xb7b0f0u + delta))(field, &value);
+    unsigned number = 0;
+    const char *text = room_text(&value);
+    if (value.size && value.size <= 5)
+        for (unsigned i = 0; i < value.size && text[i] >= '0' && text[i] <= '9'; ++i)
+            number = number * 10 + text[i] - '0';
+    ((Destroy)(0x69a720u + delta))(&value);
+    return number;
+}
+
+BOSS_UI static void boss_visible(void *control, uint32_t visible, uint32_t delta) {
+    typedef void (THISCALL *Visible)(void *, uint32_t);
+    if (control) ((Visible)(0xd05020u + delta))(control, visible);
+}
+
+/* The pinned BattleScreen constructor takes ownership of this UI root. */
+BOSS_UI void *THISCALL boss_screen_root(void *package, void *result, const NativeString *name) {
+    typedef void *(THISCALL *Get)(void *, void *, const NativeString *);
+    void *returned = ((Get)(0xcddf80u + sandbox_delta()))(package, result, name);
+    uint32_t delta = sandbox_delta();
+    Sandbox *s = state(delta, 1);
+    void *root = (void *)FIELD(result, 0);
+    if (s && root) {
+        s->role_picker = find_control(root, boss_picker_path, delta);
+        s->role_value = s->role_picker ? find_control(s->role_picker, boss_role_path, delta) : 0;
+        s->role_sent = s->role_value ? picker_value(s->role_value, delta) : 0;
+        boss_visible(s->role_picker, s->role_state == 2, delta);
+    }
+    return returned;
+}
+
+/* Track the native read-only cards to give the interactive cards their own
+ * panel during training selection. The regular countdown can use them again. */
+BOSS_UI void *THISCALL boss_stock_panel(void *view, void *result, const NativeString *name) {
+    typedef void *(THISCALL *Get)(void *, void *, const NativeString *);
+    uint32_t delta = sandbox_delta();
+    void *returned = ((Get)(0x1c61300u + delta))(view, result, name);
+    Sandbox *s = state(delta, 1);
+    void *root = (void *)FIELD(result, 0);
+    if (s && root && room_prefix(room_text(name), stock_boss_path)) {
+        s->stock_boss_panel = root;
+        if (s->role_state == 2) boss_visible(root, 0, delta);
+    }
+    return returned;
+}
+
+BOSS_UI static void boss_picker_message(uint32_t delta, const uint32_t *message) {
+    Sandbox *s = state(delta, 1);
+    if (!s || (s->thread && s->thread != thread_id()) || message[3] > 2) return;
+    if (!s->thread) s->thread = thread_id();
+    // Countdown can arrive before the local gun controller binds the Avatar.
+    s->role_token = message[3] ? message[2] : 0;
+    s->role_state = message[3];
+    s->role_keys = 0x3e; /* Require a fresh press after the picker opens. */
+    s->role_sent = s->role_value ? picker_value(s->role_value, delta) : 0;
+    boss_visible(s->role_picker, s->role_state == 2, delta);
+    boss_visible(s->stock_boss_panel, s->role_state != 2, delta);
+}
+
+BOSS_UI static void boss_respawn_menu(void *menu, uint32_t delta) {
+    Sandbox *s = state(delta, 0);
+    if (!s) return;
+    void *button = find_control(menu, respawn_button_path, delta);
+    if (!button) return;
+    s->respawn_menu = menu;
+    s->respawn_value = find_control(menu, respawn_value_path, delta);
+    s->respawn_sent = s->respawn_value ? picker_value(s->respawn_value, delta) : 0;
+    boss_visible(button, s->role_state == 1, delta);
+}
+
+BOSS_UI static void boss_picker_update(uint32_t delta, Sandbox *s) {
+    typedef int16_t (STDCALL *Key)(int);
+    if (s->role_state == 2 && foreground(delta, s)) {
+        uint32_t value = s->role_value ? picker_value(s->role_value, delta) : 0;
+        uint32_t choice = value != s->role_sent ? value % 10 : 0;
+        uint32_t keys = 0;
+        Key key = (Key)s->key_state;
+        for (uint32_t number = 1; key && number <= 5; ++number) {
+            uint32_t bit = 1u << number;
+            if (key('0' + number) < 0) {
+                keys |= bit;
+                if (!choice && !(s->role_keys & bit)) choice = number;
+            }
+        }
+        uint32_t encoded = choice;
+        if (choice > 1 && s->role_picker) {
+            void *field = find_control(s->role_picker, boss_level_path, delta);
+            uint32_t level = field ? picker_value(field, delta) : 1;
+            if (level >= 1 && level <= 5) encoded += level * 5;
+        }
+        if (!choice || (choice <= 5 &&
+                send_control_value(delta, s, BOSS_PICK_ROLE, (Vector){0, 0, 0}, encoded))) {
+            s->role_keys = keys;
+            s->role_sent = value;
+        }
+    } else if (s->role_state == 1 && s->respawn_value) {
+        uint32_t value = picker_value(s->respawn_value, delta);
+        if (value != s->respawn_sent &&
+                send_control_value(delta, s, BOSS_RESPAWN, (Vector){0, 0, 0}, 0)) {
+            s->respawn_sent = value;
+            typedef void (THISCALL *Close)(void *);
+            ((Close)(0x19449c0u + delta))(s->respawn_menu);
+            s->respawn_menu = s->respawn_value = 0;
+        }
+    }
 }
 
 void *THISCALL sandbox_graphics_page(void *package, const NativeString *name) {

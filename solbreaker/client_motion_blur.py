@@ -6,7 +6,7 @@ from pathlib import Path
 import yaml
 
 from . import dvpl
-from .client_battle_settings import _walk
+from .client_battle_settings import _walk, patch_boss_screen
 
 SHADER = Path('Materials/Shaders/2d/scene-blit-fp.sl.dvpl')
 SHADER_SHA256 = '42f1c765ab13bf23d1ba8ab598dc70cd6916e5b08acb99943cc89a25d0a8d5e8'
@@ -18,6 +18,7 @@ LABEL_KEY = '#solbreaker:MotionBlur'
 
 def battle_framebuffer(source):
     document = yaml.safe_load(dvpl.decode(source))
+    patch_boss_screen(document)
     root, = document['Prototypes']
     scene, = (node for node in _walk(root) if node.get('class') == 'UI3DView' and node.get('name') == 'Scene')
     scene['components'].setdefault('SceneComponent', {})['drawToFramebuffer'] = True
@@ -86,6 +87,7 @@ def install_motion_blur(lab, manifest):
     data = lab/'client/Data'
     local_directory(data, source)
     changes = {}
+    overrides = dict(manifest.get('ui_overrides', {}))
     for relative, patch in ((SHADER, motion_blur_shader), (BATTLE, battle_framebuffer),
                             (GRAPHICS, graphics_slider)):
         original = (source/'Data'/relative).read_bytes()
@@ -100,14 +102,15 @@ def install_motion_blur(lab, manifest):
         current = target.read_bytes()
         recorded = previous if isinstance(previous, str) and relative == SHADER else (
             previous.get(relative.as_posix()) if isinstance(previous, dict) else None)
-        if current not in (original, modified) and hashlib.sha256(current).hexdigest() != recorded:
+        if current not in (original, modified) and hashlib.sha256(current).hexdigest() not in (recorded, overrides.get(relative.as_posix())):
             raise ValueError('A motion blur resource already has a different local modification')
         changes[relative] = (target, current, modified)
     manifest_path = lab/'manifest.json'
     manifest = dict(manifest)
     receipts = {key.as_posix(): hashlib.sha256(row[2]).hexdigest()
                 for key, row in changes.items()}
-    overrides = dict(manifest.get('ui_overrides', {}))
+    if BATTLE.as_posix() in overrides:
+        overrides[BATTLE.as_posix()] = receipts[BATTLE.as_posix()]
     for relative, label in ((STRINGS_EN, 'Motion Blur'), (STRINGS_RU, 'Размытие в движении')):
         target = data/relative
         document = yaml.load(dvpl.read(target), Loader=_StringsLoader)

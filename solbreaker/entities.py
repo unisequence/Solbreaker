@@ -38,6 +38,7 @@ class Vehicle:
     reload_total: float = 6.  # Current full-cycle duration, not elapsed history.
     reload_kind: str = 'reload'  # What reload_at/total time: 'reload' (magazine) or 'interval'.
     sandbox_fast_reload: bool = False
+    sandbox_god_mode: bool = False
     # Pump autoreloader refill of raw index clip, separate from the reload_at
     # fire gate. pump_at 0 is idle; pump_waiting resumes it after an intershot.
     pump_at: float = 0.
@@ -91,6 +92,7 @@ class Vehicle:
     forward_speed_bias: float = 0.  # timed m/s added once to the forward/reverse caps
     reverse_speed_bias: float = 0.
     reload_speed_factor: float = 1.0
+    aiming_time_factor: float = 1.0
     interval_factor: float = 1.0
     consumable_clock: float = 0.0
     tracks: dict[str, TrackState] = field(default_factory=dict)

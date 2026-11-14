@@ -4,11 +4,12 @@ import math
 import time
 
 from .account import pickle_document, variable16
+from . import big_boss
 from .mercury import packed_blob, read_blob, variable8
 from .motion import vehicle_snapshot
 from .destructibles import DestructibleState
 from .sandbox import (FAST_RELOAD_SECONDS, HP_RESTORED, PRACTICE_NOTICE, TARGET_PLACED, TELEPORTED,
-                      advertisement as sandbox_advertisement)
+                      advertisement as sandbox_advertisement, boss_picker_message)
 
 
 AVATAR_ID = 101
@@ -120,7 +121,7 @@ def create_vehicle(account, descriptor, position, health=280, entity_id=VEHICLE_
     return b"\x0a" + struct.pack("<IB", entity_id, alias) + variable16(9, body)
 
 
-def create_avatar(account, avatar_id=AVATAR_ID, arena_id=1, map_id=6):
+def create_avatar(account, avatar_id=AVATAR_ID, arena_id=1, map_id=6, *, game_mode=2):
     # Avatar::readBaseProperties, 0x177b1f0. arenaTypeID combines the
     # map in its low word and gameplay in its high word.
     properties = (packed_blob(account["nickname"].encode())
@@ -130,11 +131,17 @@ def create_avatar(account, avatar_id=AVATAR_ID, arena_id=1, map_id=6):
                   + packed_blob(pickle_document({}))
                   # +0xd8 is observer mode, NOT arena bonus type. Nonzero
                   # makes AvatarGameLogic ignore ammo, reload and health RPCs.
-                  + struct.pack("<BB", 0, 2))
+                  # +0xd9 selects the native game mode and its battle effects.
+                  + struct.pack("<BB", 0, game_mode))
     return variable16(5, struct.pack("<IH", avatar_id, 1) + properties)
 
 
-def create_avatar_cell(space_id=SPACE_ID, team=1):
+def boss_ability_cards(abilities):
+    return bytes([len(abilities)]) + b''.join(struct.pack('<IB', ident, grade)
+                                             for ident, grade in abilities)
+
+
+def create_avatar_cell(space_id=SPACE_ID, team=1, respawns_left=0, abilities=()):
     # Client ServerConnection::createCellPlayer 0x2818240 uses the vanilla
     # header, unlike current desktop WoT: space, vehicle, position, scale, dir.
     header = struct.pack("<II7f", space_id, 0, 0, 0, 0, 0.0076444, 0, 0, 0)
@@ -142,8 +149,9 @@ def create_avatar_cell(space_id=SPACE_ID, team=1):
     # until the arena vehicle roster and Vehicle entity have been delivered.
     # First cell property is Avatar +0xda, the player's team. Native
     # 0x180d4a1 compares it with Vehicle.publicInfo.team at +0xb0.
-    props = (struct.pack("<BIBBfHB", team, 0, 0, 0, 0.0, 0, 0)
-             + b"\0" + struct.pack("<fB", 0.0, 0)
+    # Avatar +0xec: array of (item compact descriptor, ability grade).
+    props = (struct.pack("<BIBBfHB", team, 0, 0, 0, 0.0, 0, respawns_left)
+             + boss_ability_cards(abilities) + struct.pack("<fB", 0.0, 0)
              + b"\0\0" + struct.pack("<4I", 0, 0, 0, 0))
     return variable16(6, header + props)
 
@@ -164,17 +172,46 @@ def missile_message(shooter, shot, effect, position, velocity):
 
 
 def provision_effect_message(entity_id, compact_id):
-    """Avatar45: BW blob of ShortClientEffect{ExtrasEffect(entity, provisionCD)}.
+    """Avatar45: BW blob of ShortClientEffect{ExtrasEffect(entity, itemCD)}.
 
     Native 177a6c0 group18 returns -1 for45, as for36/38. Decoder177f57d
     reads a BW blob; protobuf21ae7f0/21ae3a0 uses nested field1, then entity
     varint64 field1 and compactCD varint32 field2. Unknown field3 stays zero.
     AntiHE handler1d4e1e0 reads the visual duration from the pinned item itself.
     """
-    if type(entity_id) is not int or not 0 < entity_id <= 0xffffffff or compact_id != 26109:
+    if (type(entity_id) is not int or not 0 < entity_id <= 0xffffffff
+            or (compact_id not in (26109, big_boss.BLAST_WAVE.compact_id)
+                and compact_id not in big_boss.ROLE_EFFECTS
+                and compact_id not in big_boss.HEAL_SHOT_EFFECTS)):
         raise ValueError('Unsupported short provision effect')
     child = pb_int(1, entity_id) + pb_int(2, compact_id)
     return avatar_method(45, packed_blob(pb_blob(1, child)))
+
+
+def gravity_traps_message(traps):
+    # Avatar property 24 is clientEffects. Each entry is a pickled
+    # (effect key, serialized effect) pair; the client diffs by entry.
+    effects = []
+    for trap in traps:
+        position = b''.join(bytes([(field << 3) | 5]) + struct.pack('<f', value)
+                            for field, value in enumerate(trap.center, 1))
+        gravity_shot = pb_blob(1, position) + pb_int(2, trap.owner)
+        effect = pb_blob(1, pb_blob(1, gravity_shot))
+        effects.append(packed_blob(pickle_document((trap.ident, effect))))
+    count = bytes([len(effects)]) if len(effects) < 255 else b'\xff' + len(effects).to_bytes(3, 'little')
+    return b'\x13' + variable8(158 + 24, count + b''.join(effects))
+
+
+def boss_vehicle_effects_message(arena, entity_id, effects):
+    # Vehicle property 17 contains pickled continuous effects, just like
+    # Avatar.clientEffects. Effect removal is driven by the authoritative
+    # snapshot. The client extrapolates its clock during loading and can be
+    # a few tick-sync wraps ahead, so leave room in its local expiry timer.
+    entries = []
+    for key, kind, start, end in effects:
+        times = b'\x0d' + struct.pack('<f', start-arena.epoch) + b'\x15' + struct.pack('<f', end-start+30.)
+        entries.append(packed_blob(pickle_document((key, pb_blob(2, pb_blob(kind, times))))))
+    return b'\x12' + struct.pack('<I', entity_id) + variable8(158+17, bytes([len(entries)])+b''.join(entries))
 
 
 def vehicle_property(entity_id, number, payload):
@@ -251,9 +288,11 @@ def targeting_info(vehicle=None, yaw_rate=None, pitch_rate=None):
         pitch_rate = vehicle.gun.pitch_rate if vehicle else math.radians(45)
     regular = pb_blob(1, pb_double(1, .1)) + pb_blob(2, pb_double(1, .1))
     factors = pb_double(1, 1) + pb_double(2, .1) + pb_blob(3, pb_blob(1, regular))
+    aiming_time = config.aiming_time if config else 1.7
+    aiming_time *= getattr(vehicle, 'aiming_time_factor', 1.)
     info = (pb_double(1, 0) + pb_double(2, 0) + pb_double(3, yaw_rate)
             + pb_double(4, pitch_rate)
-            + pb_double(5, config.aiming_time if config else 1.7) + pb_blob(6, factors))
+            + pb_double(5, aiming_time) + pb_blob(6, factors))
     return avatar_method(36, packed_blob(info))
 
 
@@ -304,20 +343,23 @@ def supremacy_messages(arena, player, state=None, previous=None):
                + pb_int(4, progress) + pb_int(5, int(blocked))
                + pb_int(6, int(player.vehicle_id in members)))
         messages.append(arena_update(12, pb_blob(11, row)))
-    messages.extend(arena_update(13, pb_blob(12, pb_int(1, team) + pb_int(2, scores[team-1])))
+    messages.extend(team_points_message(team, scores[team-1])
                     for team in (1, 2)
                     if previous is None or previous[0][team-1] != scores[team-1])
     return tuple(messages)
 
 
 def team_kill_score(arena, player):
-    from .mercury import variable8
     totals = [0, 0]
     for vehicle in arena.vehicles.values():
         totals[vehicle.team != player.team] += vehicle.kills
     # Avatar37 vector sentinel for the Solbreaker HUD. Supremacy retains its
     # native capture points, which are independent of the kill totals.
     return b'\x13' + variable8(96, b'\x04TFS1FRAG' + struct.pack('<II', *totals) + b'\0')
+
+
+def team_points_message(team, score):
+    return arena_update(13, pb_blob(12, pb_int(1, team) + pb_int(2, score)))
 
 
 VOICE_ENEMY_KILLED = 0x22
@@ -340,8 +382,23 @@ def battle_hints_message():
 
 
 def initial_messages(arena, player):
-    return create_avatar({'nickname':player.nickname},player.avatar_id,arena.unique_id,
-                         getattr(arena,'client_map_id',getattr(arena,'map_id',6)))+create_avatar_cell(arena.space_id,player.team)
+    boss = getattr(arena, 'big_boss', None)
+    result = create_avatar({'nickname':player.nickname},player.avatar_id,arena.unique_id,
+                           getattr(arena,'client_map_id',getattr(arena,'map_id',6)),
+                           game_mode=big_boss.CLIENT_GAME_MODE if boss is not None else 2)
+    lives = boss.lives.get(player.vehicle_id, 1) if boss is not None else 1
+    abilities = ()
+    if boss is not None:
+        abilities = tuple((compact_id, 0) for compact_id in boss.abilities(player.vehicle_id))
+    result += create_avatar_cell(arena.space_id, player.team, future_respawns(lives), abilities)
+    if boss is not None:
+        # The pinned client selects the BossMode HUD and effect handlers from
+        # GameModeData.gameplayBehavior when constructing the battle UI.
+        mode = pb_int(4, big_boss.LIVES) + pb_blob(5, b'bossmode') + pb_blob(7, b'bossmode')
+        if boss.tickets:
+            mode += pb_int(10, big_boss.TICKETS) + pb_int(11, big_boss.TICKETS)
+        result += arena_update(18, pb_blob(17, mode))
+    return result
 
 
 def destructible_state(arena):
@@ -366,37 +423,82 @@ def present_vehicles(arena):
             yield alias, vehicle
 
 
+def battle_nickname(arena, vehicle):
+    boss = getattr(arena, 'big_boss', None)
+    return '★ ' + vehicle.nickname if boss is not None and vehicle.entity_id in boss.bosses else vehicle.nickname
+
+
+def boss_role_message(entity_id, role=None, level=0, progress=(0, 0)):
+    # BossmodeData stores the role in the low nibble (1 = boss). Its high
+    # nibble is the role level, unused for bosses.
+    value = 1 if role is None else big_boss.ROLE_HUD[role] | ((level+1) << 4)
+    current, required = progress
+    info = pb_int(1, entity_id) + pb_int(2, value)
+    if required:
+        info += pb_int(3, current) + pb_int(4, required)
+    return arena_update(24, pb_blob(21, info))
+
+
+def future_respawns(lives):
+    return max(0, lives - 1)
+
+
+def boss_lives_message(lives):
+    # Private Avatar property 19 (respawnsLeft). The native HUD shows one
+    # heart for the current tank, with additional hearts for future spawns.
+    return b'\x13\xb1' + bytes([future_respawns(lives)])
+
+
+def boss_role_messages(arena):
+    boss = arena.big_boss
+    return tuple(boss_role_message(entity_id, boss.roles.get(entity_id), boss.levels.get(entity_id, 0),
+                                   boss.role_progress(entity_id, arena.vehicles[entity_id].max_health))
+                 for entity_id in sorted(arena.vehicles))
+
+
 def vehicle_spawn_parts(arena, vehicle, alias):
     pose = vehicle.pose
     critical, destroyed = module_snapshot(arena, vehicle)
     # Entity creation reads yaw/pitch/roll, detailed movement roll/pitch/yaw.
-    yield create_vehicle({'nickname':vehicle.nickname}, vehicle.descriptor, pose.position,
+    yield create_vehicle({'nickname':battle_nickname(arena, vehicle)}, vehicle.descriptor, pose.position,
         vehicle.health, vehicle.entity_id, vehicle.team, alias, (pose.yaw,pose.pitch,pose.roll),
         vehicle.max_health, vehicle.definition.optional_devices if vehicle.definition else (),
         critical, destroyed, gun_angles=vehicle.gun.packed(),
-        state_modifiers=getattr(arena, 'state_modifiers', lambda vehicle: ())(vehicle))
+        # The client's particle tree is still being built for new entities.
+        # Apply the boss aura at battle start or in the reconnect snapshot.
+        state_modifiers=tuple(modifier for modifier in getattr(arena, 'state_modifiers', lambda _: ())(vehicle)
+                              if modifier != big_boss.BOSS_AURA_MODIFIER))
     armor_state = movable_armor_states_message(vehicle)
     if armor_state:
         # Dynamic property16 is applied only after the Vehicle exists.
         yield armor_state
+    boss = getattr(arena, 'big_boss', None)
+    effects = boss.vehicle_effects(vehicle.entity_id) if boss else ()
+    if effects:
+        yield boss_vehicle_effects_message(arena, vehicle.entity_id, effects)
 
 
 def spawn_message_parts(arena, player, *, include_owner_state=True):
     """Complete wire units; native Mercury cannot split an element header."""
     participants = participant_ids((v.entity_id,v.account_id) for v in arena.vehicles.values())
     present = tuple(present_vehicles(arena))
-    rows = b''.join(pb_blob(1,vehicle_info(v.entity_id,v.nickname,v.team,participants[v.entity_id],v.descriptor,
+    rows = b''.join(pb_blob(1,vehicle_info(v.entity_id,battle_nickname(arena,v),v.team,participants[v.entity_id],v.descriptor,
                                          alive=v.alive or (getattr(arena, 'unlimited_lives', False)
                                                            and v.entity_id in arena.respawn_at)))
                     for _,v in present)
     stats = b''.join(pb_blob(1,pb_int(1,v.entity_id)+pb_int(2,v.kills)) for _,v in present)
     parts = [arena_update(1,pb_blob(1,rows)),arena_update(4,pb_blob(4,stats)),
              b'\x13\xa6'+struct.pack('<I',player.vehicle_id)]
-    if getattr(arena, 'unlimited_lives', False) and arena.supremacy is None:
+    boss = getattr(arena, 'big_boss', None)
+    if boss is not None:
+        parts.extend(team_points_message(team, score) for team, score in enumerate(boss.tickets, 1))
+    elif getattr(arena, 'unlimited_lives', False) and arena.supremacy is None:
         parts.append(team_kill_score(arena, player))
     for alias,v in present:
         parts.extend(vehicle_spawn_parts(arena, v, alias))
     parts.append(b'\x14'+struct.pack('<III6f',player.avatar_id,arena.space_id,player.vehicle_id,0,0,0,0,0,0))
+    if boss is not None:
+        parts.extend(boss_role_messages(arena))
     # Creation/public vectors do not establish the owner's private crew
     # Health objects. Replay only that owner's wounds after control is set.
     own = arena.vehicles[player.vehicle_id]
@@ -740,7 +842,7 @@ def event_messages(arena, player, events):
         if event.kind == 'practice_spawn':
             entity = actor.entity_id
             participants = participant_ids((v.entity_id,v.account_id) for v in arena.vehicles.values())
-            info = vehicle_info(entity, actor.nickname, actor.team, participants[entity], actor.descriptor)
+            info = vehicle_info(entity, battle_nickname(arena, actor), actor.team, participants[entity], actor.descriptor)
             if d['first']:
                 result += arena_update(2, pb_blob(2, pb_blob(1, info)))
                 alias = tuple(arena.vehicles).index(entity)
@@ -753,8 +855,9 @@ def event_messages(arena, player, events):
                 if own:
                     for extra in d['repaired']:
                         result += module_damage_message(entity, 19, extra)
-                result += state_modifiers_message(entity, arena.state_modifiers(actor))
                 result += movable_armor_states_message(actor)
+                if getattr(arena, 'boss_role_picker', False):
+                    result += vehicle_property(entity,13,struct.pack('<h',actor.max_health))
                 result += vehicle_property(entity,3,struct.pack('<h',actor.health))
                 result += vehicle_property(entity,1,b'\1')
                 # Refresh observers' health/appearance listeners after reviving the model.
@@ -763,6 +866,7 @@ def event_messages(arena, player, events):
                 # Native equipment input consults the arena's player record.
                 result += arena_update(11, pb_blob(10, pb_blob(1, info)))
                 result += arena_update(20, pb_blob(6, pb_int(1, entity)))
+                result += state_modifiers_message(entity, arena.state_modifiers(actor))
             if d.get('placed_by') == player.vehicle_id:
                 result += sandbox_advertisement(arena, notice=TARGET_PLACED)
         elif event.kind == 'practice_clear':
@@ -779,7 +883,31 @@ def event_messages(arena, player, events):
                 result += sandbox_advertisement(arena, notice=HP_RESTORED)
         elif event.kind == 'practice_notice' and own:
             result += sandbox_advertisement(arena, notice=PRACTICE_NOTICE | (d['notice'] << 11))
+        elif event.kind == 'boss_score':
+            result += b''.join(team_points_message(team, score) for team, score in enumerate(d['tickets'], 1))
+        elif event.kind == 'boss_picker' and own:
+            result += boss_picker_message(arena, d['state'])
+        elif event.kind == 'boss_health':
+            result += vehicle_property(event.actor, 13, struct.pack('<h', d['max_health']))
+            result += vehicle_property(event.actor, 3, struct.pack('<h', d['health']))
+            result += health_changed(event.actor, d['health'], 0)
+        elif event.kind == 'boss_lives' and own:
+            result += boss_lives_message(d['lives'])
+        elif event.kind in ('boss_role', 'boss_role_progress'):
+            result += boss_role_message(event.actor, d['role'], d['level'], d['progress'])
+            if own and event.kind == 'boss_role':
+                # Avatar property 20 uses the same card array as cell creation.
+                result += b'\x13' + variable8(158 + 20, boss_ability_cards(d['abilities']))
+                for compact_id in reversed(d['previous']):
+                    # Native equipment state 255 removes its indexed slot. State 0
+                    # leaves its icon in the slot and only clears its activity.
+                    result += consumable_message(compact_id, 255)
         elif event.kind=='ready' and own:
+            boss = getattr(arena, 'big_boss', None)
+            if boss is not None:
+                result += sandbox_advertisement(arena, ability=True)
+            if boss is not None and not d.get('respawn'):
+                result += b''.join(boss_role_messages(arena))
             allied_reload.update(v.entity_id for v in arena.vehicles.values()
                                  if v.team == player.team and v.entity_id != player.vehicle_id)
             result += ammo_message(actor)
@@ -813,6 +941,8 @@ def event_messages(arena, player, events):
             if own and event.kind == 'sandbox_teleport':
                 result += sandbox_advertisement(arena, notice=TELEPORTED)
         elif event.kind=='period':
+            if d['period'] == 4 and getattr(arena, 'boss_role_picker', False):
+                result += boss_picker_message(arena, 0)
             result += period_message(d['period'],d['seconds'],d['winner'],
                                      0 if getattr(arena, 'endless', False) else getattr(arena, 'battle_seconds', 600),
                                      finish_reason=getattr(arena, 'finish_reason', None))
@@ -898,6 +1028,14 @@ def event_messages(arena, player, events):
             result += movable_armor_states_message(actor, d['states'])
         elif event.kind=='provision_effect':
             result += provision_effect_message(event.actor, d['compact_id'])
+        elif event.kind=='boss_blast':
+            result += provision_effect_message(event.actor, big_boss.BLAST_WAVE.compact_id)
+        elif event.kind in ('bomber_blast', 'boss_role_effect'):
+            result += provision_effect_message(event.actor, d['compact_id'])
+        elif event.kind == 'boss_vehicle_effects':
+            result += boss_vehicle_effects_message(arena, event.actor, d['effects'])
+        elif event.kind in ('gravitrap', 'gravitrap_expired'):
+            result += gravity_traps_message(d['traps'])
         elif event.kind=='explosion':
             # Avatar27 / decoder0x177eab3: shot, shell CD, material, position,
             # shot direction (not surface normal), unused byte. Keep stopTracer.
@@ -952,7 +1090,8 @@ def event_messages(arena, player, events):
             if actor is not None:
                 result += arena_update(5,pb_blob(5,pb_blob(1,pb_int(1,event.actor)+pb_int(2,actor.kills))))
                 update_team_score = update_team_score or (
-                    getattr(arena, 'unlimited_lives', False) and arena.supremacy is None)
+                    getattr(arena, 'unlimited_lives', False) and arena.supremacy is None
+                    and getattr(arena, 'big_boss', None) is None)
     if update_team_score:
         result += team_kill_score(arena, player)
     # Reload and pump edges can share one step. Send one final authoritative
@@ -1016,7 +1155,15 @@ def reconnect_message_parts(arena, player):
              ammo_message(own), *provision_messages(own), b'\x13\xa8'+struct.pack('<I',own.damage),
              b'\x13\xa9'+struct.pack('<I',own.blocked_damage),
              b'\x13\xaa'+struct.pack('<I',own.assisted_damage)]
-    if getattr(arena, 'unlimited_lives', False) and arena.supremacy is None:
+    boss = getattr(arena, 'big_boss', None)
+    if boss is not None:
+        parts.extend(team_points_message(team, score) for team, score in enumerate(boss.tickets, 1))
+        parts.extend(boss_role_messages(arena))
+        if boss.traps:
+            parts.append(gravity_traps_message(boss.traps))
+        if player.vehicle_id in boss.bosses:
+            parts.append(boss_lives_message(boss.lives[player.vehicle_id]))
+    elif getattr(arena, 'unlimited_lives', False) and arena.supremacy is None:
         parts.append(team_kill_score(arena, player))
     battle_seconds = 0 if getattr(arena, 'endless', False) else arena.battle_seconds
     if arena.finished_at:
@@ -1031,6 +1178,9 @@ def reconnect_message_parts(arena, player):
     elif getattr(arena, 'prebattle_end', 0.):
         parts.append(period_message(2, max(0., arena.prebattle_end-arena.simulation_time),
                                     battle_seconds=battle_seconds))
+    if getattr(arena, 'boss_role_picker', False) and not arena.finished_at:
+        picking = (not arena.started and arena.prebattle_end or player.vehicle_id in arena.respawn_at)
+        parts.append(boss_picker_message(arena, 2 if picking else 1))
     for state in own.consumables:
         if state:
             view = state.state_at(arena.simulation_time)

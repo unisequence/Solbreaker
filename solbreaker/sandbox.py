@@ -3,6 +3,7 @@ from dataclasses import dataclass
 import math
 import struct
 
+from . import big_boss
 from .mercury import variable8
 
 PREFIX = b'TFS-LAB-S'
@@ -14,6 +15,9 @@ TELEPORT = 256
 NEXT_TARGET, TOGGLE_TARGET_FIRE, CLEAR_TARGETS = 512, 1024, 2048
 PRACTICE_ACTIONS = NEXT_TARGET | TOGGLE_TARGET_FIRE | CLEAR_TARGETS
 RESTORE_HP = 4096
+BOSS_PICK_ROLE = 8192
+BOSS_RESPAWN = 16384
+GOD_MODE = 32768
 PRACTICE_TANKS = (
     ('china', 'Ch01_Type59', 'Type 59'),
     ('ussr', 'KV1', 'KV-1'),
@@ -30,6 +34,7 @@ PRACTICE_KEYS = 0x200
 PRACTICE_NOTICE = 0x400
 RESTORE_HP_KEY = 0x4000
 HP_RESTORED = 0x8000
+GOD_MODE_KEY = 0x10000
 TARGET_FIRE_OFF, TARGET_FIRE_ON, TARGETS_CLEARED, TARGET_SLOTS_FULL = range(4, 8)
 INPUT_LEASE = .85
 BOOST_POWER = 2.4
@@ -40,13 +45,13 @@ def token(arena):
     return arena.unique_id & 0xffffffff or 1
 
 
-def advertisement(arena, *, notice=0):
+def advertisement(arena, *, notice=0, ability=False):
     # Avatar method 37 carries two vectors. The patched client consumes this
     # sentinel before the native method sees it.
     capabilities = (SANDBOX_KEYS | FAST_RELOAD_KEY if arena.sandbox_enabled else 0) | (
-        GRAVITY_KEY if getattr(arena, 'gravity_mode', False) is True else 0)
+        GRAVITY_KEY if getattr(arena, 'gravity_mode', False) is True or ability else 0)
     if arena.sandbox_enabled:
-        capabilities |= TELEPORT_KEY | RESTORE_HP_KEY
+        capabilities |= TELEPORT_KEY | RESTORE_HP_KEY | GOD_MODE_KEY
     if getattr(arena, 'practice', False):
         capabilities |= PRACTICE_KEYS
     else:
@@ -56,11 +61,29 @@ def advertisement(arena, *, notice=0):
     return b'\x13' + variable8(96, b'\x03TFS1SBOX' + struct.pack('<I', token(arena)) + second)
 
 
+def decode_boss_pick(number):
+    """The first block is the legacy role-only request; later blocks specify the level."""
+    if number < 1:
+        raise ValueError('Invalid Big Boss role')
+    block, index = divmod(number - 1, len(big_boss.PICKABLE_ROLES))
+    role = big_boss.PICKABLE_ROLES[index]
+    if block > big_boss.ROLE_LEVEL_COUNT or (role == big_boss.BOSS and block):
+        raise ValueError('Invalid Big Boss role level')
+    return role, block - 1 if block else None
+
+
+def boss_picker_message(arena, state):
+    return b'\x13' + variable8(96, b'\x04TFS1ROLE' + struct.pack('<II', token(arena), state) + b'\0')
+
+
 def receive(endpoint, addr, client, arena, body, now):
     """Consume sandbox reports on the authenticated current battle session."""
     if not body.startswith(PREFIX):
         return False
-    if (arena is None or not (arena.sandbox_enabled or getattr(arena, 'gravity_mode', False) is True)
+    boss = arena.big_boss if getattr(arena, 'big_boss_mode', False) is True else None
+    player = arena.players.get(client.account_id) if boss is not None else None
+    ability = player is not None
+    if (arena is None or not (arena.sandbox_enabled or getattr(arena, 'gravity_mode', False) is True or ability)
             or client.reconnect_replay
             or not client.battle_spawned or body[-1:] != b'\x01'):
         return True
@@ -76,16 +99,20 @@ def receive(endpoint, addr, client, arena, body, now):
     if control.token == 0:
         if not control.flags and not control.shot and client.reliable_window_used < 200:
             client.sandbox_input = (current, None, now, 0)
-            endpoint.send(addr, client, advertisement(arena))
+            endpoint.send(addr, client, advertisement(arena, ability=ability))
         return True
-    if control.token != current or previous is None or previous[0] != current:
+    if control.token != current:
         return True
+    if previous is None or previous[0] != current:
+        if control.flags not in (BOSS_PICK_ROLE, BOSS_RESPAWN):
+            return True
+        previous = (current, None, 0, 0)
     if previous[1] is not None:
         distance = (control.sequence-previous[1]) & 0xffffffff
         if not 0 < distance < (1 << 31):
             return True
     client.sandbox_input = (current, control.sequence, now, control.flags)
-    if (control.flags ^ previous[3]) & (BOOST | FLIGHT | MISSILE_VIEW | FAST_RELOAD):
+    if (control.flags ^ previous[3]) & (BOOST | FLIGHT | MISSILE_VIEW | FAST_RELOAD | GOD_MODE):
         endpoint.server.event('sandbox_controls', account_id=client.account_id,
                               arena_id=arena.result_id, flags=control.flags)
     if getattr(arena, 'owner_backed', False):
@@ -111,7 +138,15 @@ class Control:
             raise ValueError('Invalid sandbox control size')
         control = cls(*INPUT.unpack(data))
         length = math.hypot(control.x, control.y, control.z)
-        if (control.flags & ~(511 | PRACTICE_ACTIONS | RESTORE_HP)
+        if control.flags & (BOSS_PICK_ROLE | BOSS_RESPAWN):
+            if length:
+                raise ValueError('Invalid Big Boss request')
+            if control.flags == BOSS_PICK_ROLE:
+                decode_boss_pick(control.shot)
+            elif control.flags != BOSS_RESPAWN or control.shot:
+                raise ValueError('Invalid Big Boss request')
+            return control
+        if (control.flags & ~(511 | PRACTICE_ACTIONS | RESTORE_HP | GOD_MODE)
                 or not math.isfinite(length) or length > 10000.
                 or control.flags & MISSILE_VIEW and (not control.shot or length < .01)):
             raise ValueError('Invalid sandbox control')

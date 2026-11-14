@@ -348,21 +348,43 @@ class ConsumableState:
     This generic clock never chooses an automatic fire-triggered activation.
     """
 
-    def __init__(self, spec: ConsumableSpec):
+    def __init__(self, spec: ConsumableSpec, *, cooldown_limit=None):
         self.spec = spec
+        self.cooldown_limit = cooldown_limit
         self.activated_at = 0.0
         self.active_until = 0.0
         self.ready_at = 0.0
         self.uses = 0
+        self.initial_cooldown = 0.
+
+    def start_cooldown(self, now, duration):
+        if self.uses or not _real(duration) or not 0 < duration <= self.spec.cooldown:
+            raise ValueError('Invalid initial cooldown')
+        now = _clock(now)
+        self.initial_cooldown = duration
+        self.ready_at = now + self._cooldown_duration()
+
+    def _cooldown_duration(self):
+        nominal = self.spec.cooldown if self.uses else self.initial_cooldown
+        return nominal if self.cooldown_limit is None else min(nominal, self.cooldown_limit)
+
+    def set_cooldown_limit(self, now, limit):
+        previous = self._cooldown_duration()
+        self.cooldown_limit = limit
+        if self.ready_at > now:
+            self.ready_at = now + (self.ready_at - now) * self._cooldown_duration() / previous
 
     def activate(self, now) -> bool:
         now = _clock(now)
-        if self.uses and now < self.ready_at:
+        if (self.uses or self.initial_cooldown) and now < self.ready_at:
+            return False
+        # A shortened cooldown can finish before the active effect ends.
+        if self.uses and now < self.active_until:
             return False
         self.activated_at = now
         self.active_until = now + self.spec.duration
-        self.ready_at = now + self.spec.cooldown
         self.uses += 1
+        self.ready_at = now + self._cooldown_duration()
         return True
 
     def stop(self, now) -> bool:
@@ -382,8 +404,9 @@ class ConsumableState:
                                   spec.damage_factors, spec.shot_effect, spec.rotation_factor,
                                   spec.forward_bias_kmh, spec.reverse_bias_kmh, spec.damage_taken_factor,
                                   spec.all_shell_damage_factor, spec.yaw_rate_factor, spec.pitch_rate_factor)
-        if self.uses and now < self.ready_at:
-            return ConsumableView(COOLDOWN, min(math.ceil(spec.cooldown), math.ceil(self.ready_at - now)), math.ceil(spec.cooldown), 1.0, 1.0)
+        if (self.uses or self.initial_cooldown) and now < self.ready_at:
+            total = math.ceil(self._cooldown_duration())
+            return ConsumableView(COOLDOWN, min(total, math.ceil(self.ready_at - now)), total, 1.0, 1.0)
         return ConsumableView(READY, 0, 0, 1.0, 1.0)
 
 

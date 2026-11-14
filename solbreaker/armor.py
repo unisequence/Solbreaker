@@ -345,6 +345,15 @@ def resolve_he(hits, direction, shell, rng=None, *, state=None, target=0):
 
 
 def resolve_shell(hits, direction, shell, rng=None, *, state=None, target=0):
+    if getattr(shell, 'railgun', False):
+        rng = rng or random
+        last = None
+        for hit in hits:
+            if hit.damage_factor > 0:
+                damage = max(1, int(shell.damage * hit.damage_factor * rng.uniform(*shell.damage_factors) + .5))
+                return ShotResult('penetrated', hit, damage)
+            last = hit
+        return ShotResult('external', last) if last is not None else ShotResult('miss', None)
     resolver = (resolve_heat if shell.kind=='HOLLOW_CHARGE' else
                 resolve_he if shell.kind=='HIGH_EXPLOSIVE' else resolve_ap)
     return resolver(hits,direction,shell,rng,state=state,target=target)

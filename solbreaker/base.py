@@ -13,7 +13,7 @@ from collections import deque
 from functools import cached_property
 from pathlib import Path
 
-from . import diagnostics
+from . import big_boss, diagnostics
 from .cipher import PacketCipher, encrypt_packet, decrypt_packet
 from .mercury import parse_packet, base_elements, encode_reply, encode_packet, RELIABLE, ReliableInbox
 from .account import create_account, show_gui, account_method, pickle_document, command_header, command_response, local_http_response, resource_response
@@ -1032,8 +1032,10 @@ class BaseEndpoint(asyncio.DatagramProtocol):
             elif event.kind == 'destruction':
                 self.server.event('training_destructibles',destroyed=sorted(arena.destructions))
             elif event.kind in ('airborne','landed','auto_recovered','practice_spawn',
-                                'sandbox_teleport','gravity_jump'):
-                self.server.event('training_'+event.kind,entity_id=event.actor,**event.data)
+                                'sandbox_teleport','gravity_jump','boss_blast','boss_lives','boss_score',
+                                'boss_role','bomber_blast','gravitrap'):
+                data = {key: value for key, value in event.data.items() if key != 'traps'}
+                self.server.event('training_'+event.kind,entity_id=event.actor,**data)
             elif event.kind == 'ground_impact':
                 self.server.event('training_ground_impact', arena_id=arena.result_id,
                     entity_a=event.actor, entity_b=event.target, **event.data)
@@ -1401,8 +1403,10 @@ class BaseEndpoint(asyncio.DatagramProtocol):
             if (prewarm := getattr(self, 'map_prewarm', None)) is not None:
                 prewarm.selected(spec.map_id)
             runtime = self.map_runtime(spec.map_id)
+            boss_mode = training and training.bots_enabled and training.battle_mode == big_boss.MODE
             options = dict(terrain=runtime['terrain'], map_spec=spec,
-                           collision_scene=runtime['collision_scene'], prebattle_seconds=7.)
+                           collision_scene=runtime['collision_scene'],
+                           prebattle_seconds=big_boss.COUNTDOWN_SECONDS if boss_mode else 7.)
             bot_enabled = getattr(self.server, 'training_bot',
                                   getattr(self.server, 'manifest', {}).get('training_bot', False))
             if type(bot_enabled) is not bool:
@@ -1515,9 +1519,10 @@ class BaseEndpoint(asyncio.DatagramProtocol):
             prewarm.selected(spec.map_id)
         runtime = self.map_runtime(spec.map_id)
         options = dict(terrain=runtime['terrain'], map_spec=spec,
-                       collision_scene=runtime['collision_scene'], prebattle_seconds=7.,
+                       collision_scene=runtime['collision_scene'],
+                       prebattle_seconds=big_boss.COUNTDOWN_SECONDS if room_mode == big_boss.MODE else 7.,
                        room_mode=room_mode, room_settings=room_settings,
-                       bot_game=self.game if room_mode == 'gravity' else None)
+                       bot_game=self.game if room_mode in ('gravity', big_boss.MODE) else None)
         owners = getattr(self, 'arena_owners_enabled', False)
         definitions = ({account_id: self.definition for account_id in account_ids}
                        if owners and getattr(self, 'progression', None) is None else {})

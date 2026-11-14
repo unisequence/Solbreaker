@@ -63,12 +63,10 @@ def launch_client(lab, *, auto_login=None, profile=None, url=None, lighting=None
         environment = dict(os.environ, SteamAppId='444200', SteamGameId='444200')
         configure_environment(environment, lab, manifest)
         if sys.platform == 'win32':
-            args = [str(executable)]
-            cwd = executable.parent
-        else:
-            args = ['bash', str(lab/'start-client.sh')]
-            cwd = lab
-        return subprocess.call(args, cwd=cwd, env=environment)
+            return subprocess.call([str(executable)], cwd=executable.parent, env=environment)
+        from .client_x11_input import preload
+        with preload(environment, lab, executable) as environment:
+            return subprocess.call(['bash', str(lab/'start-client.sh')], cwd=lab, env=environment)
 
 
 class _ProfileRedirectHandler(HTTPRedirectHandler):

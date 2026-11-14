@@ -15,6 +15,7 @@ from .arena_owner_registry import ArenaOwnerRegistry
 from .arena_owner_settlement import commit
 from .arena_owner_spawn import OwnerSpawnManager
 from .arena_owner_transport import ArenaOwnerTransport
+from .big_boss import HEALTH_MULTIPLIER
 from .motion import SIMULATION_INTERVAL
 
 
@@ -71,7 +72,9 @@ class ArenaOwnerService:
             scene = scenes[account_id]
             vehicle = arena.vehicle_for(account_id)
             vehicle.definition = definitions[account_id]
-            vehicle.max_health = vehicle.health = scene.armor.health
+            boss = getattr(arena, 'big_boss', None)
+            multiplier = HEALTH_MULTIPLIER if boss and vehicle.entity_id in boss.bosses else 1
+            vehicle.max_health = vehicle.health = scene.armor.health * multiplier
             settings.append((account_id, {
                 name: getattr(scene, name, None)
                 for name in ('internal_geometry', 'engine_spec', 'ammo_rack_spec',

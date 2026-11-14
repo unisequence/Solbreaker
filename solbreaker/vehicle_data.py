@@ -92,6 +92,9 @@ class Shell:
     # them on the shells it fires; nominal damage/devices stay unchanged.
     damage_factors: tuple = (.75, 1.25)
     missile: MissileFlight | None = None
+    railgun: bool = False
+    healing_level: int | None = None
+    poison_level: int | None = None
 
     def __post_init__(self):
         factors = self.damage_factors
