@@ -106,7 +106,8 @@ def install_records(records, *, physics=False, native=False, python=None):
     with tempfile.TemporaryDirectory(prefix='solbreaker-dependencies-') as temporary:
         requirements = Path(temporary)/'requirements.txt'
         requirements.write_text('\n'.join(lines)+'\n')
-        if physics and not native:
+        linux_bullet_wheel = (sys.platform == 'linux' and sys.version_info[:2] == (3, 11))
+        if physics and not native and not linux_bullet_wheel:
             # The upstream source detects NumPy in its build environment. Keep
             # its build inputs explicit and separate from runtime NumPy 2.x.
             build = Path(temporary)/'build-environment'
@@ -135,7 +136,7 @@ def install_records(records, *, physics=False, native=False, python=None):
             args += ['--no-index', '--find-links', str(ROOT/'wheels'), '--only-binary=:all:']
         else:
             args += ['--index-url', 'https://pypi.org/simple']
-            if not physics:
+            if not physics or linux_bullet_wheel:
                 args.append('--only-binary=:all:')
         pip_command(args, python=python)
 

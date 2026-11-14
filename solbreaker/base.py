@@ -1430,6 +1430,8 @@ class BaseEndpoint(asyncio.DatagramProtocol):
                 options.update(collision_scene=self.scene_for_vehicle(definition, spec.map_id),
                                descriptor=definition.descriptor)
             bots = training.bots_enabled if training is not None else bot_enabled
+            if not bots and definition is not None and self.arenas.sandbox_enabled:
+                options['bot_game'] = self.game
             if bots and definition is not None:
                 import uuid
                 from .bot_roster import select_bot_roster
@@ -1691,10 +1693,11 @@ class BaseEndpoint(asyncio.DatagramProtocol):
                 ident = catalog.equipment_slots(catalog.vehicle_preset(nation, name))[slot][option]
                 item = catalog.lookup(OPTIONAL_DEVICE, ident)
                 if command_id == 130:
-                    required = (1 << (a * 3)) - 1
-                    if garage.loadout(client.account_id, inventory_id)['unlocked'] & required != required:
-                        raise ValueError('Unlock all slots of the previous levels first')
-                    garage.unlock_device_slot(client.account_id, inventory_id, slot, device_tag=item.tag)
+                    from .catalog import equipment_slot_credits
+                    tier = self.progression.resolve_type(vehicle['type_cd']).tier
+                    garage.unlock_device_slot(client.account_id, inventory_id, slot, device_tag=item.tag,
+                                              credits_cost=equipment_slot_credits(tier, a),
+                                              require_previous_levels=True)
                 else:
                     current = garage.loadout(client.account_id, inventory_id)['devices']
                     current[slot] = item.tag

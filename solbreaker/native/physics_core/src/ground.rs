@@ -685,15 +685,18 @@ impl Movement<'_> {
             values.push(0.);
             weights.push(0.);
             for support in &supports {
+                let bound = support.height
+                    - if support.compliant { self.constants[4] } else { 0. };
+                // The cached and fresh contact can describe the same patch.
+                // Near-identical constraint normals make the active set singular.
+                if let Some(index) = (config.a.len() + 1..rows.len()).find(|&i| {
+                    (rows[i][1] - support.a).hypot(rows[i][2] - support.b) <= 1e-5
+                }) {
+                    lower[index] = lower[index].max(bound);
+                    continue;
+                }
                 rows.push([1., support.a, support.b]);
-                lower.push(
-                    support.height
-                        - if support.compliant {
-                            self.constants[4]
-                        } else {
-                            0.
-                        },
-                );
+                lower.push(bound);
                 values.push(0.);
                 weights.push(0.);
             }
@@ -933,6 +936,93 @@ impl Movement<'_> {
             more = contacts;
         }
         Ok((candidate, false, points))
+    }
+
+    /// Try the measured top when the spring lags a low, sharp riser.
+    /// The normal contact, climb and border checks still own the result.
+    fn low_step(
+        &mut self,
+        candidate: Pose,
+        previous: Pose,
+        points: &[Contact],
+        supports: &[Support],
+    ) -> Result<Option<Pose>, String> {
+        if points.is_empty()
+            || (candidate.x - previous.x).hypot(candidate.z - previous.z) <= 1e-8
+            || points.iter().any(|point| !self.world.solid_map(point.body_b))
+        {
+            return Ok(None);
+        }
+        // A convex contact at the seam can land just outside the track
+        // profile, leaving no support row. Re-probe the actual riser from
+        // the direction of travel, then require a measured low top.
+        let mut measured = 0_f64;
+        let dx = candidate.x - previous.x;
+        let dz = candidate.z - previous.z;
+        let distance = dx.hypot(dz);
+        let advance = self.constants[1];
+        for point in points.iter().take(8) {
+            // The leading track can reach the top before its support samples.
+            // Use the measured compression when the contact already lies on
+            // a low, upward-facing surface.
+            let top = point.point_b[1] - self.terrain(point.point_b[0], point.point_b[2]);
+            if self.state.configuration.track_links.contains(&point.link_a)
+                && point.normal[1] >= self.state.configuration.slope.cos()
+                && top > self.skin()
+                && top <= self.constants[3]
+            {
+                let excess = (-point.distance - self.constants[4]).max(0.);
+                measured = measured.max(excess / point.normal[1] + self.skin());
+                continue;
+            }
+            if dx * point.normal[0] + dz * point.normal[2] >= -1e-8 {
+                continue;
+            }
+            let x = point.point_b[0] + advance * dx / distance;
+            let z = point.point_b[2] + advance * dz / distance;
+            let ground = self.terrain(x, z);
+            let ceiling = ground + self.constants[3];
+            let hit = self.ray([x, ceiling, z], [x, ground - 0.1, z])?;
+            if self.world.solid_map(hit.body)
+                && hit.normal[1] >= self.state.configuration.slope.cos()
+                && hit.fraction > 0.
+                && hit.point[1] > ground + self.skin()
+                && hit.point[1] >= point.point_b[1] - self.skin()
+            {
+                measured = measured.max(hit.point[1] - candidate.y + self.skin());
+            }
+        }
+        let matrix = rotation(candidate);
+        let config = &self.state.configuration;
+        let mut rise: f64 = 0.;
+        for support in supports {
+            let profile = if support.compliant {
+                config.profile(support.a, support.b, self.skin())
+            } else {
+                Some(config.clearance)
+            };
+            if let Some(profile) = profile {
+                let offset = transform(matrix, [support.a, profile, support.b]);
+                rise = rise.max(support.height + profile - candidate.y - offset[1] + self.skin());
+            }
+        }
+        let limit = self.constants[4] + 3. * self.skin();
+        if measured <= 0. && (rise <= 0. || rise > limit) {
+            return Ok(None);
+        }
+        let rise = rise.max(measured).min(limit);
+        for clearance in [rise, (rise + self.skin()).min(limit), limit] {
+            let lifted = Pose {
+                y: candidate.y + clearance,
+                ..candidate
+            };
+            if self.valid(lifted, previous, true)?.0 {
+                self.state.spring.pose = lifted;
+                self.state.spring.velocity[0] = 0.;
+                return Ok(Some(lifted));
+            }
+        }
+        Ok(None)
     }
 
     fn retreat(
@@ -1330,6 +1420,13 @@ impl Movement<'_> {
             if !valid && !points.is_empty() {
                 (candidate, valid, points) =
                     self.bottom(candidate, points, dx, dz, road, previous)?;
+                if !valid {
+                    if let Some(held) = self.low_step(candidate, previous, &points, &extra)? {
+                        candidate = held;
+                        valid = true;
+                        points.clear();
+                    }
+                }
             }
             let mut retreating = false;
             if !valid && !points.is_empty() {
@@ -1416,8 +1513,15 @@ impl Movement<'_> {
                         self.valid_impact(adjusted, previous, impact, dx, dz)?;
                     let mut adjusted = adjusted;
                     if !clear && !more.is_empty() {
-                        (adjusted, clear, _) =
+                        let contacts;
+                        (adjusted, clear, contacts) =
                             self.bottom(adjusted, more, dx, dz, road, previous)?;
+                        if !clear {
+                            if let Some(held) = self.low_step(adjusted, previous, &contacts, &extra)? {
+                                adjusted = held;
+                                clear = true;
+                            }
+                        }
                     }
                     if clear {
                         candidate = adjusted;

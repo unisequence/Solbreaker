@@ -39,6 +39,7 @@ from .map_catalog import load_map_spec
 from .terrain import MapTerrain
 from .fall_damage import evaluate_fall_impact, impact_damage_speed
 from .map_materials import permeable_water_plant
+_BREAKABLE_TYPES = (3, 4, 5, 8)
 
 
 # Pinned New Bay blocks split solid facades into untyped render parts. The
@@ -148,6 +149,12 @@ class Destructible:
     vertices: np.ndarray
     triangles: np.ndarray
 
+    @property
+    def client_registered(self):
+        # Negative keys are local to physics. The client has no entry for
+        # them in the map's .lka and cannot play a networked destruction.
+        return self.key >= 0
+
 
 class CollisionScene:
     """Immutable local asset data shared between successive training battles."""
@@ -190,11 +197,12 @@ class CollisionScene:
         # State 0 meshes inherit their parent's .lka ID. Alternative ruined
         # states are excluded by active_nodes, as in the original collision map.
         owners, collision_types = {}, {}
-        def assign(nodes, owner=None, inherited_collision=None):
+        def assign(nodes, owner=None, local_owner=None, inherited_collision=None):
             for node in nodes:
                 key = ids.get(str(node['id']), owner)
-                owners[node['id']] = key
                 comps = components(node)
+                local_key = -node['id']-1 if 'StateSwitcherComponent' in comps else local_owner
+                owners[node['id']] = key if key is not None else local_key
                 own_collision = comps.get('CollisionTypeComponent')
                 if (own_collision is None and self.map_spec.key == 'forgecity'
                         and node['name'] in _FORGECITY_BUILDING_ASSEMBLIES
@@ -210,7 +218,7 @@ class CollisionScene:
                     child_collision = (own_collision if
                         own_collision.get('CollisionType') in (6, 7) and not any(batches(comps))
                         else None)
-                assign(node.get('#hierarchy',[]), key, child_collision)
+                assign(node.get('#hierarchy',[]), key, local_key, child_collision)
         assign(data['#hierarchy'])
         vertices, triangles, offset = [], [], 0
         parts = {}
@@ -223,8 +231,10 @@ class CollisionScene:
             kind = collision_types.get(node['id'], {}).get('CollisionType', 0)
             if kind not in (3, 4, 5, 6, 7, 8):
                 continue
-            key = owners[node['id']] if kind in (3,4,5,8) else None
-            if key is not None and key & 65535 > 255:
+            key = owners[node['id']] if kind in _BREAKABLE_TYPES else None
+            if kind in _BREAKABLE_TYPES and key is None:
+                key = -node['id']-1
+            if key is not None and key >= 0 and key & 65535 > 255:
                 raise ValueError('Destructible ID exceeds native 8-bit index')
             added = False
             for batch in batches(comps):

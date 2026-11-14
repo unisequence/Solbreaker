@@ -7,7 +7,8 @@ from .account import pickle_document, variable16
 from .mercury import packed_blob, read_blob, variable8
 from .motion import vehicle_snapshot
 from .destructibles import DestructibleState
-from .sandbox import FAST_RELOAD_SECONDS, TARGET_PLACED, TELEPORTED, advertisement as sandbox_advertisement
+from .sandbox import (FAST_RELOAD_SECONDS, HP_RESTORED, PRACTICE_NOTICE, TARGET_PLACED, TELEPORTED,
+                      advertisement as sandbox_advertisement)
 
 
 AVATAR_ID = 101
@@ -344,10 +345,11 @@ def initial_messages(arena, player):
 
 
 def destructible_state(arena):
-    state = DestructibleState(arena.world.assets.destructibles,entity_base=arena.entity_base+300,
+    assets = arena.world.assets.destructibles
+    state = DestructibleState((key for key in assets if key >= 0),entity_base=arena.entity_base+300,
                              alias_base=len(arena.vehicles))
     for key,(yaw,angle) in arena.destructions.items():
-        state.destroy(arena.world.assets.destructibles[key],yaw,angle)
+        state.destroy(assets[key],yaw,angle)
     return state
 
 
@@ -763,6 +765,20 @@ def event_messages(arena, player, events):
                 result += arena_update(20, pb_blob(6, pb_int(1, entity)))
             if d.get('placed_by') == player.vehicle_id:
                 result += sandbox_advertisement(arena, notice=TARGET_PLACED)
+        elif event.kind == 'practice_clear':
+            entity = event.actor
+            result += b'\x14'+struct.pack('<III6f', entity, arena.space_id, 0, *d['position'], 0., 0., 0.)
+            result += vehicle_property(entity, 3, b'\0\0')
+            result += vehicle_property(entity, 1, b'\0')
+            result += health_changed(entity, 0, 0)
+            result += arena_update(6, pb_blob(6, pb_int(1, entity)+pb_int(2, 0)))
+        elif event.kind == 'sandbox_restore_hp':
+            result += vehicle_property(event.actor, 3, struct.pack('<h', d['health']))
+            result += health_changed(event.actor, d['health'], 0)
+            if own:
+                result += sandbox_advertisement(arena, notice=HP_RESTORED)
+        elif event.kind == 'practice_notice' and own:
+            result += sandbox_advertisement(arena, notice=PRACTICE_NOTICE | (d['notice'] << 11))
         elif event.kind=='ready' and own:
             allied_reload.update(v.entity_id for v in arena.vehicles.values()
                                  if v.team == player.team and v.entity_id != player.vehicle_id)

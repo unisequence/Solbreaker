@@ -5,9 +5,12 @@ import json
 import logging
 from pathlib import Path
 
+from . import __version__
+
 
 def main(argv=None):
     parser = argparse.ArgumentParser(prog='solbreaker', description='Solbreaker tank server')
+    parser.add_argument('--version', action='version', version=f'Solbreaker {__version__}')
     commands = parser.add_subparsers(dest='command', required=True)
     init = commands.add_parser('init', help='Prepare fresh server state from owned game resources')
     init.add_argument('--game', type=Path, required=True)
@@ -17,6 +20,7 @@ def main(argv=None):
     init.add_argument('--vehicle', default='usa/M2_lt')
     init.add_argument('--username', default='admin@solbreaker.local')
     serve = commands.add_parser('serve', help='Run the headless game server')
+    serve.add_argument('--version', action='version', version=f'Solbreaker {__version__}')
     serve.add_argument('--stop-on-stdin', action='store_true', help=argparse.SUPPRESS)
     serve.add_argument('--sandbox', action='store_true', help='Allow sandbox controls in every battle')
     serve.add_argument('--state', type=Path, default=Path('data'))

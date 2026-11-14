@@ -18,8 +18,8 @@ import numpy as np
 from .mesh_files import MeshFiles
 
 LOG = logging.getLogger(__name__)
-# Bump for changes to scene filtering, geometry, terrain, mesh partitioning or OBJ export.
-FORMAT = 1
+# Bump for changes to scene filtering, geometry, destruction IDs or mesh export.
+FORMAT = 4
 DEFAULT_BYTES = 1024 << 20
 KEY = re.compile(r'[0-9a-f]{64}')
 OBJ = re.compile(r'[0-9a-f]{64}\.obj')

@@ -107,7 +107,7 @@ def _geometry_supported(game, definition):
 
 
 @lru_cache(maxsize=64)
-def _stock(game, nation, name):
+def stock_vehicle(game, nation, name):
     # Public loading refuses unsupported mechanics and validates the matching
     # descriptor, ammunition and existence of its own visual/collision assets.
     # Cache failures as well, so an unsupported candidate is not retried in
@@ -203,7 +203,7 @@ def select_bot_roster(game, player_definition, *, enemies, allies, seed):
         nonlocal attempts
         if item.key not in loaded and attempts < MAX_LOAD_ATTEMPTS:
             attempts += 1
-            definition = _stock(game, *item.key)
+            definition = stock_vehicle(game, *item.key)
             # A mismatched/stale list must not silently put another tier or
             # identity into the roster, even when a custom loader is supplied.
             loaded[item.key] = (definition if definition is not None

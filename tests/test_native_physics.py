@@ -294,6 +294,52 @@ class NativePhysicsTests(unittest.TestCase):
             self.assertGreater(pose.position[1], -.12)
             self.assertLess(pose.position[1], .6)
 
+    def test_native_tracks_cross_a_low_riser_but_stop_at_a_wall(self):
+        for height, can_cross in ((.18, True), (.20, True), (.27, True), (.50, False), (1., False)):
+            with self.subTest(height=height):
+                assets = self.assets('rock')
+                assets.vertices = box((-5., 0., 4.), (5., height, 8.))
+                world = self.world(assets)
+                for _ in range(140):
+                    world.move(.09, 0., 200, dt=1/60)
+                pose = world.poses[200]
+                if can_cross:
+                    self.assertGreater(pose.position[2], 10.)
+                else:
+                    self.assertLess(pose.position[2], 2.1)
+
+    def test_native_tracks_cross_a_low_riser_one_track_first(self):
+        for height, can_cross in ((.18, True), (.50, False)):
+            for angle in (-math.pi/4, math.pi/4):
+                with self.subTest(height=height, angle=angle):
+                    assets = self.assets('rock')
+                    assets.vertices = box((-20., 0., 4.), (20., height, 20.))
+                    world = self.world(assets)
+                    pose = world.training_placement(200, 0., 0., angle, stationary=True)
+                    world.relocate_training_body(200, pose)
+                    for _ in range(350):
+                        pose, _ = world.move(.035, 0., 200, dt=1/60)
+                    if can_cross:
+                        self.assertGreater(pose.position[2], 8.)
+                    else:
+                        self.assertLess(pose.position[2], 2.5)
+
+    def test_native_tracks_remove_unregistered_breakable_from_all_queries(self):
+        assets = self.assets('prop')
+        prop = assets.destructibles.pop(7)
+        assets.destructibles[-42] = Destructible(-42, prop.name, prop.kind, prop.health,
+                                                 prop.vertices, prop.triangles)
+        world = self.world(assets)
+        start, end = (0., 1., 3.), (0., 1., 6.)
+        hit, _, _ = world.static_segment(start, end)
+        self.assertEqual(world.breakable_bodies[hit], -42)
+        for _ in range(140):
+            world.move(.09, 0., 200, dt=1/60)
+        self.assertIn(-42, world.destroyed)
+        self.assertIsNone(world.static_segment(start, end)[0])
+        self.assertGreater(world.poses[200].position[2], 8.)
+        self.assertFalse(world.destruction_events[0][0].client_registered)
+
 
 if __name__ == '__main__':
     unittest.main()

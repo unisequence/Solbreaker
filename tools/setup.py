@@ -79,7 +79,7 @@ def install(args):
             if args.skip_dependencies:
                 raise ValueError('--skip-dependencies requires an existing .venv')
             print('Creating Python environment', flush=True)
-            venv.EnvBuilder(with_pip=True).create(environment)
+            venv.EnvBuilder(with_pip=True, symlinks=sys.platform != 'win32').create(environment)
         if not args.skip_dependencies:
             print('Installing Python dependencies', flush=True)
             run([python, ROOT/'tools/install_dependencies.py', '--profile', 'server'])

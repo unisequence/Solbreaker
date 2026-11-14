@@ -48,7 +48,7 @@ UI_RESOURCES = (BASE_HEADER, BASE_LOBBY, BASE_LOBBY_ACTIONS, STATS_ITEM, INVENTO
                 client_battle_settings.FORM, client_battle_settings.ROOM, *client_recon.MARKER_OPACITY)
 STRINGS_EN = "Strings/en.yaml.dvpl"
 STRINGS_RU = "Strings/ru.yaml.dvpl"
-SANDBOX_BINDINGS_VERSION = 8
+SANDBOX_BINDINGS_VERSION = 10
 SANDBOX_BINDING_STRINGS = {
     STRINGS_EN: {'Title': 'Solbreaker Sandbox',
                  'Boost': 'Toggle boost', 'Flight': 'Toggle flight',
@@ -60,7 +60,13 @@ SANDBOX_BINDING_STRINGS = {
                  'Cam0': 'Missile camera off', 'Cam1': 'Missile camera armed',
                  'Load0': 'Fast reload off', 'Load1': 'Fast reload on (0.5 s)',
                  'Spawn': 'Target placed', 'TP': 'Teleport to aim point',
-                 'Moved': 'Teleported'},
+                 'Moved': 'Teleported', 'Heal': 'Restore full HP', 'Healed': 'HP restored',
+                 'Next': 'Cycle training target tank', 'Fire': 'Toggle target return fire',
+                 'Clear': 'Clear training targets',
+                 'Own': 'Target tank: your tank', 'T59': 'Target tank: Type 59',
+                 'KV1': 'Target tank: KV-1', 'PzIV': 'Target tank: Pz. IV',
+                 'Fire0': 'New targets hold fire', 'Fire1': 'New targets return fire',
+                 'Clean': 'Training targets cleared', 'Full': 'This tank has no free target slots'},
     STRINGS_RU: {'Title': 'Песочница Solbreaker',
                  'Boost': 'Включить или выключить форсаж', 'Flight': 'Взлететь или сесть',
                  'Missile': 'Переключить камеру ПТУР', 'Target': 'Поставить мишень на Полигоне',
@@ -71,7 +77,14 @@ SANDBOX_BINDING_STRINGS = {
                  'Cam0': 'Камера ПТУР выключена', 'Cam1': 'Камера ПТУР включится при пуске',
                  'Load0': 'Быстрая перезарядка выключена', 'Load1': 'Быстрая перезарядка включена (0,5 с)',
                  'Spawn': 'Мишень установлена', 'TP': 'Телепорт в точку прицеливания',
-                 'Moved': 'Танк перемещён'},
+                 'Moved': 'Танк перемещён', 'Heal': 'Восстановить прочность',
+                 'Healed': 'Прочность восстановлена',
+                 'Next': 'Выбрать следующий танк-мишень', 'Fire': 'Переключить ответный огонь мишеней',
+                 'Clear': 'Убрать мишени с Полигона',
+                 'Own': 'Мишень — твой танк', 'T59': 'Мишень — Type 59',
+                 'KV1': 'Мишень — КВ-1', 'PzIV': 'Мишень — Pz. IV',
+                 'Fire0': 'Новые мишени не стреляют', 'Fire1': 'Новые мишени отвечают огнём',
+                 'Clean': 'Мишени убраны', 'Full': 'Все мишени этого типа уже стоят'},
 }
 LOCAL_TRAINING_MAP_STRINGS = {
     STRINGS_EN: {"#maps:lagoon:15_lagoon_ln/15_lagoon_ln.sc2": "Lagoon"},

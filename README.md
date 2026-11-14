@@ -86,12 +86,21 @@ game and stop your local server first. The launcher downloads the matching
 GitHub release, checks its SHA-256 and restarts after installing it. Your
 settings, client and server data are kept.
 
-To upgrade from alpha.1, close the old launcher and extract the new archive
-into a separate folder. Copy your old `runtime/manager.json` into the new
-`runtime` folder and keep the old folder if your client or server data lives
-there. Start the new launcher and check the paths in **Settings**. On Linux,
-run `./.venv/bin/python tools/build_native.py` from the new folder after the
-first launcher start if you host a local server.
+**From alpha.1, install the current release manually once.** The alpha.1
+launcher has no updater. You can skip alpha.2 and every intermediate version.
+
+1. Close the game, server and launcher. Extract the current Windows x64 or
+   source archive into a new folder.
+2. If the old folder contains `runtime/manager.json`, copy it to the same
+   location in the new folder. Create `runtime` if needed.
+3. Start the new launcher and check the game, client and server data paths in
+   **Settings**. If there was no settings file, select your existing client
+   and server data folders there. Keep the old folder while any of these paths
+   still point to it. On Linux, if you host a server, run
+   `./.venv/bin/python tools/build_native.py` from the new folder after the
+   first launcher start.
+
+Use **Update** in the new launcher for later releases.
 
 If installation is interrupted, check `runtime/launcher-update.log`. When the
 launcher reports an interrupted replacement, keep the old installation and
@@ -124,6 +133,8 @@ on the host. It does not need Steam or a graphical session.
 
 On Windows, use `setup.ps1 -Game 'D:\Games\CompatibleBuild'` followed by
 `start-server.ps1`. The portable archive supplies the runtime and native libraries.
+See the [dedicated server guide in Russian](docs/SERVER.ru.md#комплект-выделенного-сервера)
+for the dedicated Windows and Linux packages and selective Steam download.
 The initial account is written to `data/private/initial-login.txt`; players can
 also register an email, nickname and password inside the game.
 

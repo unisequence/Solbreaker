@@ -1,9 +1,14 @@
 """Collision startup and bounded static-ray batches."""
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from threading import Event, get_ident
+from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
 from solbreaker.collision import CollisionWorld
+from solbreaker.battle import destructible_state
+from solbreaker.map_catalog import destruction_index_path
 
 
 class NativeStartupTests(unittest.TestCase):
@@ -84,6 +89,22 @@ class StaticRayBatchTests(unittest.TestCase):
             with patch('solbreaker.collision.bullet.rayTestBatch', return_value=[]) as batch:
                 self.world._static_rays(starts, ends)
             self.assertEqual(batch.call_args.kwargs['numThreads'], 1)
+
+    def test_unregistered_props_do_not_create_client_destruction_areas(self):
+        assets = SimpleNamespace(destructibles={-42: None, 0x7f7f0001: None})
+        arena = SimpleNamespace(world=SimpleNamespace(assets=assets), entity_base=0,
+                                vehicles={200: None}, destructions={})
+        self.assertEqual(destructible_state(arena).areas, {0x7f7f: 300})
+
+    def test_map_index_prefers_the_active_scene_tag(self):
+        with TemporaryDirectory() as directory:
+            default = Path(directory) / 'map.lka.dvpl'
+            tagged = default.with_name('map.am1.lka.dvpl')
+            default.touch()
+            self.assertEqual(destruction_index_path(default, 'am1'), default)
+            tagged.touch()
+            self.assertEqual(destruction_index_path(default, 'am1'), tagged)
+            self.assertEqual(destruction_index_path(default, ''), default)
 
 
 if __name__ == '__main__':

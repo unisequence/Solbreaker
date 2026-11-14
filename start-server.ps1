@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([string]$Distribution = 'Ubuntu', [string]$State, [switch]$Owned, [switch]$UseWsl, [switch]$Sandbox)
+param([string]$Distribution = 'Ubuntu', [string]$State, [switch]$Owned, [switch]$UseWsl, [switch]$Sandbox, [switch]$Version)
 $ErrorActionPreference = 'Stop'
 if (-not $State) { $State = Join-Path $PSScriptRoot 'data' }
 if (-not $UseWsl) {
@@ -22,6 +22,7 @@ if (-not $UseWsl) {
     }
     $arguments = @('-u', '-m', 'solbreaker', 'serve', '--state', $State,
                    '--log-file', (Join-Path $State 'server.log'))
+    if ($Version) { $arguments += '--version' }
     if ($Owned) { $arguments += '--stop-on-stdin' }
     if ($Sandbox) { $arguments += '--sandbox' }
     & $python @arguments
@@ -30,6 +31,10 @@ if (-not $UseWsl) {
 $linuxProject = & wsl.exe --distribution $Distribution --exec wslpath -a -u $PSScriptRoot
 if ($LASTEXITCODE -ne 0) { throw 'Cannot find project inside WSL.' }
 $linuxProject = $linuxProject.Trim()
+if ($Version) {
+    & wsl.exe --distribution $Distribution --exec bash "$linuxProject/start-server.sh" --version
+    exit $LASTEXITCODE
+}
 $statePath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($State)
 $linuxState = & wsl.exe --distribution $Distribution --exec wslpath -a -u $statePath
 if ($LASTEXITCODE -ne 0) { throw 'Cannot map the server state into WSL.' }

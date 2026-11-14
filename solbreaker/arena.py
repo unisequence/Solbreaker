@@ -119,6 +119,11 @@ class Arena:
         self.practice_clock_repeats = self.practice and settings.minutes is None
         self.practice_slots = set()
         self.practice_spawned = set()
+        self.practice_active = set()
+        self.practice_selection = 0
+        self.practice_types = {}
+        self.practice_return_fire = False
+        self.practice_gunners = {}
         self.practice_next_spawn = 0.
         self.respawn_at = {}
         self.practice_timer_at = 0.
@@ -328,6 +333,15 @@ class Arena:
                     # mirror without consuming physics or combat randomness.
                     bot_names = random.Random(self.result_id + ':bot-names').sample(
                         [name for name in BOT_NICKNAMES if name.casefold() not in occupied], len(slots))
+                if self.practice:
+                    practice_definitions = {0: own.definition}
+                    if bot_game is not None:
+                        from .bot_roster import stock_vehicle
+                        for choice, (nation, tank, _) in enumerate(sandbox.PRACTICE_TANKS, 1):
+                            stock = stock_vehicle(bot_game, nation, tank)
+                            if stock is not None:
+                                practice_definitions[choice] = stock
+                    practice_choices = tuple(practice_definitions)
                 for index, (team, slot) in enumerate(slots):
                     eid = entity_base+200+len(accounts)+index
                     x,z = training_spawn(map_spec,team,slot)
@@ -337,6 +351,12 @@ class Arena:
                     if not bot_enabled and len(slots) > 1:
                         name += f' {slot+1}'
                     definition = self.bot_roster[index].definition if self.bot_roster else own.definition
+                    if self.practice:
+                        choice = practice_choices[index % len(practice_choices)]
+                        self.practice_types.setdefault(choice, []).append(eid)
+                        definition = practice_definitions[choice]
+                        if choice:
+                            name = sandbox.PRACTICE_TANKS[choice-1][2]
                     actual_descriptor = definition.descriptor if definition is not None else own.descriptor
                     target = self.vehicles[eid] = Vehicle(eid,None,name,team,actual_descriptor,pose)
                     if self.practice:
@@ -438,13 +458,7 @@ class Arena:
                 vehicle.pose = self.world.poses[entity]
                 self._configure_battle_vehicle(vehicle, scene)
                 if entity in self.practice_slots:
-                    # Keep stable entity/physics IDs for the owner mirror.
-                    # Dormant slots are outside both play and wire visibility.
-                    low_x, low_z, _, _ = self.world.assets.bounds
-                    slot = entity-self.entity_base-201
-                    vehicle.pose = Pose((low_x-70., vehicle.pose.position[1], low_z-70.-20.*slot), 0.)
-                    self.world.relocate_training_body(entity, vehicle.pose)
-                    vehicle.health = 0
+                    self._park_practice_target(vehicle)
             self._vehicles_configured = True
         if self.training_bots:
             from .bot_ai import BotDirector
@@ -1618,12 +1632,28 @@ class Arena:
                 or not self.started or self.finished_at or not self.vehicle_for(account_id).alive):
             return
         if self.sandbox_enabled:
+            vehicle = self.vehicle_for(account_id)
             self._sandbox_inputs[account_id] = (self.simulation_time, control)
-            self._set_fast_reload(self.vehicle_for(account_id), bool(control.flags & sandbox.FAST_RELOAD))
+            self._set_fast_reload(vehicle, bool(control.flags & sandbox.FAST_RELOAD))
+            if control.flags & sandbox.RESTORE_HP and vehicle.health < vehicle.max_health:
+                vehicle.health = vehicle.max_health
+                self.emit('sandbox_restore_hp', vehicle.entity_id, health=vehicle.health)
         if self.gravity_mode and control.flags & sandbox.GRAVITY_JUMP:
             self._gravity_jump(self.vehicle_for(account_id))
-        if self.practice and control.flags & sandbox.SPAWN_TARGET:
-            self._spawn_practice_target(self.vehicle_for(account_id))
+        if self.practice:
+            vehicle = self.vehicle_for(account_id)
+            if control.flags & sandbox.NEXT_TARGET:
+                choices = tuple(self.practice_types)
+                self.practice_selection = choices[(choices.index(self.practice_selection)+1) % len(choices)]
+                self.emit('practice_notice', vehicle.entity_id, notice=self.practice_selection)
+            if control.flags & sandbox.TOGGLE_TARGET_FIRE:
+                self.practice_return_fire = not self.practice_return_fire
+                self.emit('practice_notice', vehicle.entity_id, notice=(
+                    sandbox.TARGET_FIRE_ON if self.practice_return_fire else sandbox.TARGET_FIRE_OFF))
+            if control.flags & sandbox.CLEAR_TARGETS:
+                self._clear_practice_targets(vehicle)
+            elif control.flags & sandbox.SPAWN_TARGET:
+                self._spawn_practice_target(vehicle)
         if self.sandbox_enabled and control.flags & sandbox.TELEPORT:
             self._teleport_vehicle(self.vehicle_for(account_id))
 
@@ -1670,9 +1700,10 @@ class Arena:
         if self.world is None or now < self.practice_next_spawn:
             return
         self.practice_next_spawn = now+.4
-        entity = min((ident for ident in self.practice_slots if not self.vehicles[ident].alive),
-                     default=None)
+        entity = next((ident for ident in self.practice_types[self.practice_selection]
+                       if not self.vehicles[ident].alive), None)
         if entity is None:
+            self.emit('practice_notice', player_vehicle.entity_id, notice=sandbox.TARGET_SLOTS_FULL)
             return
         point = player_vehicle.gun.point
         if point is None:
@@ -1680,14 +1711,57 @@ class Arena:
         elif player_vehicle.gun.local:
             point = tuple(a+b for a,b in zip(point, player_vehicle.pose.position))
         x, _, z = point
-        pose = self.world.training_placement(entity, x, z, player_vehicle.pose.yaw)
+        yaw = player_vehicle.pose.yaw
+        if self.practice_return_fire:
+            px, _, pz = player_vehicle.pose.position
+            yaw = math.atan2(px-x, pz-z)
+        pose = self.world.training_placement(entity, x, z, yaw)
         if pose is None:
             return
         new = entity not in self.practice_spawned
         self._restore_vehicle(entity, pose)
+        self.practice_gunners.pop(entity, None)
+        if self.practice_return_fire:
+            self.practice_gunners[entity] = TrainingBot(entity)
         self.practice_spawned.add(entity)
+        self.practice_active.add(entity)
         self.emit('practice_spawn', entity, first=new, position=pose.position,
                   placed_by=player_vehicle.entity_id)
+
+    def _park_practice_target(self, vehicle):
+        entity = vehicle.entity_id
+        low_x, low_z, _, _ = self.world.assets.bounds
+        slot = entity-self.entity_base-201
+        vehicle.pose = Pose((low_x-70., vehicle.pose.position[1], low_z-70.-20.*slot), 0.)
+        self.world.relocate_training_body(entity, vehicle.pose)
+        vehicle.health = vehicle.flags = 0
+        vehicle.speed = 0.
+        vehicle.engine_mode = (0, 0)
+
+    def _clear_practice_targets(self, player_vehicle):
+        if self.world is None:
+            return
+        for entity in sorted(self.practice_active):
+            target = self.vehicles[entity]
+            self._cancel_burst(target)
+            self._stop_fire(target, self.simulation_time, 'practice_clear')
+            self._stop_consumables(target)
+            self._lose_target(entity)
+            if self.recon is not None:
+                self.recon.remove_vehicle(entity)
+                self._recon_camouflage_still.pop(entity, None)
+            self._park_practice_target(target)
+            self.emit('practice_clear', entity, position=target.pose.position)
+        for shot, projectile in tuple(self.projectiles.items()):
+            if projectile.shooter in self.practice_active:
+                self.emit('shot_end', projectile.shooter, shot=shot, point=projectile.position,
+                          guided=projectile.shell.missile is not None)
+                del self.projectiles[shot]
+        self.practice_active.clear()
+        self.practice_gunners.clear()
+        self.practice_next_spawn = 0.
+        self.motion_frame = None
+        self.emit('practice_notice', player_vehicle.entity_id, notice=sandbox.TARGETS_CLEARED)
 
     def _restore_vehicle(self, entity, pose):
         previous = self.vehicles[entity]
@@ -4032,6 +4106,15 @@ class Arena:
             # be advanced over the already completed fixed-step interval.
             for eid, target in bot_targets.items():
                 self._training_bot_fire(self.vehicles[eid],target,now,self.training_bots[eid])
+            if self.practice_gunners:
+                target = self.vehicle_for(next(iter(self.players)))
+                if target.alive and self._player_attached(target):
+                    for entity, gunner in self.practice_gunners.items():
+                        bot = self.vehicles[entity]
+                        if bot.alive:
+                            bot.gun.set_point(gunner.aim_point(target.entity_id, target.pose.position, now), False)
+                            self._aim(bot, dt, before[entity].pose.yaw)
+                            self._training_bot_fire(bot, target, now, gunner)
         for vehicle in self.vehicles.values():
             if not vehicle.burst_pending:
                 continue
@@ -4043,8 +4126,9 @@ class Arena:
         self._advance_base_capture(now)
         if self.world:
             for obj,yaw,angle in self.world.destruction_events:
-                self.destructions[obj.key] = (yaw,angle)
-                self.emit('destruction',key=obj.key,yaw=yaw,angle=angle)
+                if obj.client_registered:
+                    self.destructions[obj.key] = (yaw,angle)
+                    self.emit('destruction',key=obj.key,yaw=yaw,angle=angle)
             self.world.destruction_events.clear()
 
 
