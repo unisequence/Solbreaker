@@ -120,6 +120,7 @@ class Arena:
         self.boss_role_picker = self.big_boss_mode and not solo and room_settings is not None
         self.boss_pending_roles = {}
         self.boss_first_picks = set()
+        self.boss_picker_refresh_at = 0.
         self._boss_game = (bot_game or recon_game) if self.big_boss_mode else None
         self.unlimited_lives |= self.big_boss_mode
         self._gravity_game = bot_game if self.gravity_mode else None
@@ -1697,6 +1698,18 @@ class Arena:
         self.emit('ready',actor=player.vehicle_id,yaw_rate=gun.yaw_rate,pitch_rate=gun.pitch_rate)
         self._start_if_ready(now)
 
+    def _refresh_boss_picker(self, now):
+        # The native HUD and local avatar can initialize after the first packet.
+        if not self.boss_role_picker or self.finished_at or now < self.boss_picker_refresh_at:
+            return
+        self.boss_picker_refresh_at = now + 1.
+        for player in self.players.values():
+            entity = player.vehicle_id
+            picking = (entity in self.respawn_at and entity not in self.boss_pending_roles
+                       if self.started else entity not in self.boss_first_picks)
+            if player.attached and player.loaded and picking:
+                self.emit('boss_picker', entity, state=2)
+
     def _start_if_ready(self, now=None):
         if not self.started and not self.finished_at and all(p.loaded for p in self.players.values() if p.attached):
             now = time.monotonic() if now is None else now
@@ -1713,8 +1726,9 @@ class Arena:
                         if player.attached:
                             role = self.big_boss.roles.get(player.vehicle_id, big_boss.BOSS)
                             self.big_boss.selected.setdefault(player.vehicle_id, role)
-                            self.emit('boss_picker', player.vehicle_id, state=2)
+                    self.boss_picker_refresh_at = now
             if now < self.prebattle_end:
+                self._refresh_boss_picker(now)
                 return
             self.started = now
             self.last_tick = self.started
@@ -2005,7 +2019,7 @@ class Arena:
         healed = min(target.max_health-target.health, round(amount))
         if healed > 0:
             target.health += healed
-            self.emit('health', source.entity_id, target.entity_id, health=target.health)
+            self.emit('health', source.entity_id, target.entity_id, health=target.health, healed=healed)
         if self.big_boss.poison.pop(target.entity_id, None):
             self._emit_boss_vehicle_effects(target)
 
@@ -4399,6 +4413,7 @@ class Arena:
             self.finish(winner, 'supremacy_timeout' if self.supremacy is not None else 'timeout', now)
         if not self.finished_at:
             self._advance_respawns(now)
+            self._refresh_boss_picker(now)
             if self.big_boss is not None:
                 self._advance_boss_roles(now)
             if self.big_boss is not None and self.big_boss.traps:

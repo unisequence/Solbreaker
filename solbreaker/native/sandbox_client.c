@@ -492,6 +492,26 @@ static void sandbox_notice(uint32_t delta, Sandbox *s, uint32_t index) {
     ((Destroy)(0x69a720u + delta))(&text);
 }
 
+__attribute__((section(".late_sandbox"), noinline))
+static void healed_amount(uint32_t delta, Sandbox *s, uint32_t amount) {
+    if (!s || s->thread != thread_id() || !amount || amount > 32767) return;
+    void *controller = s->notice_controller;
+    if (!controller || FIELD(controller, 0) != 0x3851e08u + delta || !FIELD(controller, 0x24)) return;
+    NativeString text = {{'+'}, 1, 15};
+    char reversed[5];
+    unsigned digits = 0;
+    while (amount) {
+        reversed[digits++] = '0' + amount % 10;
+        amount /= 10;
+    }
+    while (digits) text.text[text.size++] = reversed[--digits];
+    text.text[text.size++] = ' ';
+    text.text[text.size++] = 'H';
+    text.text[text.size++] = 'P';
+    typedef void (THISCALL *Show)(void *, const NativeString *, uint32_t);
+    ((Show)(0x1de19b0u + delta))(controller, &text, 0x115);
+}
+
 static void crew_voice(uint32_t delta, Sandbox *s, uint32_t cue) {
     if (!s || s->thread != thread_id() || !s->avatar) return;
     void *context = (void *)FIELD(s->avatar, 0x1f8);
@@ -508,6 +528,10 @@ int sandbox_message(uint32_t delta, const uint32_t *first, const uint32_t *end,
                             const uint32_t *, const uint32_t *);
     if (first && end == first+4 && first[0] == 0x31534654u && first[1] == 0x454c4f52u) {
         boss_picker_message(delta, first);
+        return 1;
+    }
+    if (first && end == first+3 && first[0] == 0x31534654u && first[1] == 0x4c414548u) {
+        healed_amount(delta, state(delta, 0), first[2]);
         return 1;
     }
     if (first && end == first+3 && first[0] == 0x31534654u && first[1] == 0x43494f56u) {
@@ -1136,10 +1160,13 @@ BOSS_UI static void boss_picker_message(uint32_t delta, const uint32_t *message)
     if (!s || (s->thread && s->thread != thread_id()) || message[3] > 2) return;
     if (!s->thread) s->thread = thread_id();
     // Countdown can arrive before the local gun controller binds the Avatar.
-    s->role_token = message[3] ? message[2] : 0;
-    s->role_state = message[3];
-    s->role_keys = 0x3e; /* Require a fresh press after the picker opens. */
-    s->role_sent = s->role_value ? picker_value(s->role_value, delta) : 0;
+    uint32_t token = message[3] ? message[2] : 0;
+    if (s->role_token != token || s->role_state != message[3]) {
+        s->role_token = token;
+        s->role_state = message[3];
+        s->role_keys = 0x3e; /* Require a fresh press after the picker opens. */
+        s->role_sent = s->role_value ? picker_value(s->role_value, delta) : 0;
+    }
     boss_visible(s->role_picker, s->role_state == 2, delta);
     boss_visible(s->stock_boss_panel, s->role_state != 2, delta);
 }

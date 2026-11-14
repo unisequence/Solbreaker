@@ -623,6 +623,11 @@ class SandboxTests(TestCase):
         for account in accounts:
             arena.sandbox_control(account['id'], sandbox.Control(token, 1, sandbox.BOSS_PICK_ROLE, 1, 0, 0, 0))
         self.assertEqual(arena.big_boss.bosses, set(arena.vehicles))
+        self.assertEqual(sum(e.kind == 'boss_picker' and e.data['state'] == 2
+                             for e in arena.events), len(accounts))
+        arena._start_if_ready(2.)
+        self.assertEqual(sum(e.kind == 'boss_picker' and e.data['state'] == 2
+                             for e in arena.events), len(accounts))
         arena._start_if_ready(11.)
         player = arena.players[1]
         tank = arena.vehicle_for(1)
@@ -773,6 +778,11 @@ class SandboxTests(TestCase):
         arena._boss_poison(enemy, ally, 0, 2.)
         arena._advance_boss_roles(4.)
         self.assertEqual((healer.health, ally.health, enemy.health), (520, 540, 500))
+        healed, = (e for e in arena.events if e.kind == 'health' and e.target == ally.entity_id)
+        payload = b'TFS1HEAL' + struct.pack('<I', 40)
+        self.assertIn(payload, event_messages(arena, arena.players[healer.account_id], (healed,)))
+        self.assertIn(payload, event_messages(arena, arena.players[ally.account_id], (healed,)))
+        self.assertNotIn(payload, event_messages(arena, arena.players[enemy.account_id], (healed,)))
         self.assertNotIn(ally.entity_id, boss.poison)
         arena._boss_poison(enemy, ally, 0, 5.)
         shell = Shell(1, 76., 200., (100., 80.), None, None, 500., 0., 500., healing_level=0)

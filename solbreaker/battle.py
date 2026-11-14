@@ -1078,6 +1078,8 @@ def event_messages(arena, player, events):
                                                    hit_effect=d.get('hit_effect'))
             result += vehicle_property(event.target,3,struct.pack('<h',d['health']))
             result += health_changed(event.target,d['health'],event.actor)
+            if (own or event.target == player.vehicle_id) and d.get('healed'):
+                result += b'\x13' + variable8(96, b'\x03TFS1HEAL' + struct.pack('<I', d['healed']) + b'\0')
         elif event.kind=='killed':
             victim = arena.vehicles.get(event.target)
             if own and actor is not None and victim is not None and victim.team != actor.team:
@@ -1179,7 +1181,9 @@ def reconnect_message_parts(arena, player):
         parts.append(period_message(2, max(0., arena.prebattle_end-arena.simulation_time),
                                     battle_seconds=battle_seconds))
     if getattr(arena, 'boss_role_picker', False) and not arena.finished_at:
-        picking = (not arena.started and arena.prebattle_end or player.vehicle_id in arena.respawn_at)
+        entity = player.vehicle_id
+        picking = ((not arena.started and arena.prebattle_end and entity not in arena.boss_first_picks)
+                   or (entity in arena.respawn_at and entity not in arena.boss_pending_roles))
         parts.append(boss_picker_message(arena, 2 if picking else 1))
     for state in own.consumables:
         if state:
