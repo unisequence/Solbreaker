@@ -528,8 +528,10 @@ tools/install_dependencies.py
 tools/launch_gui.pyw
 tools/package_source.py
 tools/refresh_wsl_network.py
+tools/server_depot.py
 tools/setup.py
 tools/setup_state.py
+tools/start-server.cmd
 tools/sync_release_readmes.py
 tools/windows_bundle.py
 tools/windows_python.ps1

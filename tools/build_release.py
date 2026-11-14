@@ -44,17 +44,18 @@ def download(url, path, expected, limit):
         raise ValueError(f'Download differs from pinned SHA-256: {path.name}')
 
 
-def verify_native_source():
+def verify_native_source(*, rebuilt_physics=False):
     paths = ['tools/build_native.py', 'tools/build_contact_queries.py', 'solbreaker/native/contact_queries.c']
     paths += [f'solbreaker/native/{crate}/{name}' for crate in WINDOWS_LIBRARIES
+              if crate != 'physics_core' or not rebuilt_physics
               for name in ('Cargo.toml', 'Cargo.lock', 'abi.h', 'build.rs', 'src')]
     result = subprocess.run(['git', 'diff', '--quiet', WINDOWS_INPUT_COMMIT, '--', *paths], cwd=ROOT)
     if result.returncode:
         raise ValueError('Windows native sources differ from the accepted build. Refresh the reviewed Windows inputs.')
 
 
-def stage_windows(directory, native_archive):
-    verify_native_source()
+def stage_windows(directory, native_archive, *, rebuilt_physics=False):
+    verify_native_source(rebuilt_physics=rebuilt_physics)
     if native_archive is None:
         native_archive = directory/WINDOWS_INPUT_ZIP
         download(WINDOWS_INPUT_URL, native_archive, WINDOWS_INPUT_SHA256, updates.MAX_DOWNLOAD)
@@ -99,24 +100,33 @@ def release_version(tag):
     return tag[1:]
 
 
-def build(tag, output, native_archive):
+def build(tag, output, native_archive, linux_native=None, windows_physics=None):
     version = release_version(tag)
     with tempfile.TemporaryDirectory(prefix='solbreaker-release-') as temporary:
         work = Path(temporary)
-        native = stage_windows(work, native_archive)
+        native = stage_windows(work, native_archive, rebuilt_physics=windows_physics is not None)
         source = work/f'Solbreaker-{version}-source.zip'
         windows = work/f'Solbreaker-{version}-windows-x64.zip'
+        server = work/f'Solbreaker-{version}-server-windows-x64.zip'
         package(source)
-        package(windows, windows_native=native, windows_wheel=work/WHEEL, windows_runtime=work)
-        for archive, kind in ((source, 'source'), (windows, 'windows-x64')):
+        windows_inputs = dict(windows_native=native, windows_wheel=work/WHEEL,
+                              windows_runtime=work, windows_physics=windows_physics)
+        package(windows, **windows_inputs)
+        package(server, **windows_inputs, server_only=True)
+        archives = [(source, 'source'), (windows, 'windows-x64'), (server, 'server-windows-x64')]
+        if linux_native:
+            linux = work/f'Solbreaker-{version}-server-linux-x86_64.zip'
+            package(linux, linux_native=linux_native, server_only=True)
+            archives.append((linux, 'server-linux-x86_64'))
+        for archive, kind in archives:
             if archive.stat().st_size > updates.MAX_DOWNLOAD:
                 raise ValueError(f'Archive exceeds updater limit: {archive.name}')
             updates.unpack(archive, work/kind, kind)
         checksums = work/updates.CHECKSUMS
-        checksums.write_text(''.join(f'{sha256(path)}  {path.name}\n' for path in (source, windows)),
+        checksums.write_text(''.join(f'{sha256(path)}  {path.name}\n' for path, _ in archives),
                              encoding='ascii', newline='\n')
         output.mkdir()
-        for path in (source, windows, checksums):
+        for path in [*(archive for archive, _ in archives), checksums]:
             shutil.copyfile(path, output/path.name)
 
 
@@ -125,5 +135,7 @@ if __name__ == '__main__':
     parser.add_argument('--tag', required=True)
     parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--windows-input', type=Path, help='Local copy of the pinned Windows release archive')
+    parser.add_argument('--linux-native', type=Path, help='Freshly built Linux native crate directory')
+    parser.add_argument('--windows-physics', type=Path, help='Ground controller DLL built from this checkout')
     args = parser.parse_args()
-    build(args.tag, args.output, args.windows_input)
+    build(args.tag, args.output, args.windows_input, args.linux_native, args.windows_physics)

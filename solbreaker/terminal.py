@@ -6,11 +6,13 @@ import sys
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, VerticalScroll
+from textual.css.query import NoMatches
 from textual.screen import ModalScreen
 from textual.widgets import Button, Checkbox, Footer, Header, Input, Label, RichLog, Static, TabbedContent, TabPane
 
-from .management import Manager, Settings, read_log
+from . import __version__
 from .build_info import COMPATIBILITY
+from .management import Manager, Settings, read_log
 
 
 class ExportPath(ModalScreen):
@@ -41,7 +43,7 @@ class ExportPath(ModalScreen):
 
 
 class Terminal(App):
-    TITLE = 'Solbreaker'
+    TITLE = f'Solbreaker {__version__}'
     SUB_TITLE = COMPATIBILITY
     BINDINGS = [('ctrl+q', 'quit', 'Выход'), ('f5', 'refresh_log', 'Журнал сервера')]
     CSS = '''
@@ -167,21 +169,35 @@ class Terminal(App):
                 self.notify(str(error), severity='error')
 
     def refresh_status(self):
+        try:
+            status_line = self.query_one('#status', Static)
+            start = self.query_one('#server', Button)
+            stop = self.query_one('#stop', Button)
+            prepare_maps = self.query_one('#prepare-maps', Button)
+        except NoMatches:
+            # The timer can fire while a modal is open or during screen teardown.
+            return
         status = self.manager.server_status()
-        self.query_one('#status', Static).update('Solbreaker  /  '+status)
+        status_line.update('Solbreaker  /  '+status)
         owned = self.manager.server is not None and self.manager.server.running
-        self.query_one('#server', Button).disabled = owned or self.manager.busy or status not in ('Сервер остановлен', 'Ошибка запуска сервера')
-        self.query_one('#stop', Button).disabled = not owned
-        prepare_maps = self.query_one('#prepare-maps', Button)
+        start.disabled = owned or self.manager.busy or status not in ('Сервер остановлен', 'Ошибка запуска сервера')
+        stop.disabled = not owned
         prepare_maps.display = self.manager.can_prepare_maps
         prepare_maps.disabled = self.manager.busy or status not in (
             'Сервер остановлен', 'Ошибка запуска сервера')
 
     def poll(self):
+        try:
+            log = self.query_one('#log', RichLog)
+            notice = self.query_one('#notice', Static)
+            preparation = self.query_one('#map-preparation', Static)
+        except NoMatches:
+            self.manager.drain()
+            return
         for line in self.manager.drain():
-            self.query_one('#log', RichLog).write(Text(line))
-        self.query_one('#notice', Static).update(self.manager.notice)
-        self.query_one('#map-preparation', Static).update(
+            log.write(Text(line))
+        notice.update(self.manager.notice)
+        preparation.update(
             self.manager.map_preparation_status() if self.manager.settings.local_connection else '')
 
     def action_refresh_log(self):

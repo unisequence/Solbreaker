@@ -9,6 +9,7 @@ import unittest
 class TerminalTests(unittest.IsolatedAsyncioTestCase):
     async def test_compatible_build_is_visible_and_paths_use_neutral_labels(self):
         from textual.widgets import Label
+        from solbreaker import __version__
         from solbreaker.build_info import COMPATIBILITY
         from solbreaker.management import Settings
         from solbreaker.terminal import Terminal
@@ -18,6 +19,7 @@ class TerminalTests(unittest.IsolatedAsyncioTestCase):
             Settings(state=str(root/'data'), client=str(root/'client')).save(config)
             app = Terminal(config)
             async with app.run_test(size=(120, 40)):
+                self.assertEqual(app.title, f'Solbreaker {__version__}')
                 self.assertEqual(app.sub_title, COMPATIBILITY)
                 labels = [str(widget.content) for widget in app.query(Label)]
                 self.assertIn('Папка совместимой сборки', labels)

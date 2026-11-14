@@ -25,7 +25,31 @@ SUPPLY_SELL_PRICE_FACTOR = 1.0
 # Advance whenever the local catalogue gains corrected client-visible entries.
 # Native cache invalidation is revision based: old kind-10 caches fall back to
 # INT_MAX in the ammunition editor when they lack a shell price.
-SHOP_REVISION = 12
+SHOP_REVISION = 13
+
+# Stock Blitz equipment unlock prices by vehicle tier and slot level.
+# https://wargaming.net/support/en/products/wotb/article/15975/
+_EQUIPMENT_SLOT_CREDITS = (
+    (100, 200, 300),
+    (200, 300, 400),
+    (400, 500, 600),
+    (4000, 5000, 6000),
+    (40000, 50000, 60000),
+    (100000, 120000, 140000),
+    (150000, 170000, 190000),
+    (200000, 225000, 250000),
+    (250000, 275000, 300000),
+    (300000, 350000, 400000),
+)
+
+
+def equipment_slot_credits(tier, level):
+    """Price of unlocking one slot, with a zero-based equipment level."""
+    if type(tier) is not int or not 1 <= tier <= len(_EQUIPMENT_SLOT_CREDITS):
+        raise ValueError('Invalid vehicle tier for equipment pricing')
+    if type(level) is not int or not 0 <= level < 3:
+        raise ValueError('Invalid equipment level')
+    return _EQUIPMENT_SLOT_CREDITS[tier - 1][level]
 
 # Stock ServerConfigurationData category prices, in vehicle tier order.
 # The pinned item XML can override these for a particular provision.
@@ -210,11 +234,10 @@ def _research_prices(game):
             'exchangeRate': AMMO_EXCHANGE_RATE,
             **supply_tables,
             # ExtractOptionalDevicesSlotsConfig (0x1aa9c10), called with
-            # optDevSlotsEconomics at 0x1ad45e6. Prices are a local sandbox
-            # rule: unlocks are free, not purported official economy values.
+            # optDevSlotsEconomics at 0x1ad45e6.
             'optDevSlotsEconomics': {'slotsByVehLevel': {
-                tier: [dict(currency='credits', cost=(0, 0)) for _ in range(3)]
-                for tier in range(1, 11)}}}
+                tier: [dict(currency='credits', cost=(credits, 0)) for credits in levels]
+                for tier, levels in enumerate(_EQUIPMENT_SLOT_CREDITS, 1)}}}
 
 
 def synchronized_catalog(command):

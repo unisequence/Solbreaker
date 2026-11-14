@@ -64,7 +64,8 @@ class DependencyTests(unittest.TestCase):
                 text = Path(arguments[arguments.index('-r')+1]).read_text()
                 self.assertTrue(text.startswith('file:///'))
                 self.assertIn('--hash=sha256:', text)
-        with patch.object(dependencies.venv, 'EnvBuilder'), \
+        with patch.object(dependencies.sys, 'version_info', (3, 12)), \
+             patch.object(dependencies.venv, 'EnvBuilder'), \
              patch.object(dependencies, 'pip_command', side_effect=observe):
             dependencies.install_records([record], physics=True)
         self.assertEqual([args[0] for args, kwargs in calls], ['install', 'wheel', 'install'])
@@ -73,6 +74,15 @@ class DependencyTests(unittest.TestCase):
         self.assertEqual(calls[1][1]['python'], builder)
         self.assertIn('--require-hashes', calls[1][0])
         self.assertIn('--no-build-isolation', calls[1][0])
+
+    def test_linux_python311_uses_the_locked_bullet_wheel(self):
+        record = dict(name='pybullet', version='3.2.7', files=[dict(sha256='a'*64)])
+        with patch.object(dependencies.sys, 'platform', 'linux'), \
+             patch.object(dependencies.sys, 'version_info', (3, 11)), \
+             patch.object(dependencies, 'pip_command') as command:
+            dependencies.install_records([record], physics=True)
+        command.assert_called_once()
+        self.assertIn('--only-binary=:all:', command.call_args.args[0])
 
     def test_check_only_never_installs_and_requires_approved_receipt(self):
         with TemporaryDirectory() as temporary:

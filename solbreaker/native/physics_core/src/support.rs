@@ -123,13 +123,24 @@ pub fn fit(
             active.push(index);
         }
     }
-    if plane.iter().any(|v| !v.is_finite())
-        || rows.iter().zip(lower).any(|(row, limit)| {
-            let height = Vector3::from_row_slice(row).dot(&plane);
-            height - limit < -2e-8 * height.abs().max(limit.abs()).max(1.)
-        })
-    {
+    if plane.iter().any(|v| !v.is_finite()) {
         return None;
+    }
+    // Nearly redundant constraints can leave a small infeasible residual
+    // after the bounded active-set solve. Every support row has a unit
+    // intercept, so raising the fitted plane by that residual is feasible.
+    // Never accept a large correction as numerical noise.
+    let deficit = rows
+        .iter()
+        .zip(lower)
+        .map(|(row, limit)| limit - Vector3::from_row_slice(row).dot(&plane))
+        .fold(0., f64::max);
+    if deficit > 0. {
+        if deficit > 1e-4 || rows.iter().any(|row| row[0] != 1.) {
+            return None;
+        }
+        plane[0] += deficit;
+        active.clear();
     }
     Some(Fit {
         plane: [plane[0], plane[1], plane[2]],

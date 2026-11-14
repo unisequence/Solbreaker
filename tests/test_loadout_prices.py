@@ -9,9 +9,9 @@ from unittest.mock import Mock, patch
 
 from solbreaker.account import command_response, pickle_document
 from solbreaker.base import BaseEndpoint
-from solbreaker.catalog import SHOP_REVISION, _loadout_prices, supply_credits
+from solbreaker.catalog import SHOP_REVISION, _loadout_prices, equipment_slot_credits, supply_credits
 from solbreaker.garage import GarageStore
-from solbreaker.loadouts import COMPATIBLE, CONSUMABLE, PROVISION, ItemSpec, LoadoutCatalog
+from solbreaker.loadouts import COMPATIBLE, CONSUMABLE, OPTIONAL_DEVICE, PROVISION, ItemSpec, LoadoutCatalog
 from solbreaker.storage import AccountStore
 
 
@@ -84,3 +84,43 @@ class LoadoutPricesTests(unittest.TestCase):
             self.assertEqual(store.get(1).progress['credits'], 2750)
             self.assertEqual(equip(None), command_response(42, 0))
             self.assertEqual(store.get(1).progress['credits'], 5000)
+
+    def test_equipment_unlock_charges_once_and_keeps_switching_free(self):
+        temporary = TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        store = AccountStore(Path(temporary.name))
+        self.addCleanup(store.close)
+        with store.db:
+            store.db.execute('UPDATE accounts SET inventory=?, progress=? WHERE id=1', (
+                json.dumps(dict(descriptor=(b'\x01\x01' + bytes(13)).hex(), shells=[10, 1])),
+                json.dumps(dict(store.get(1).progress, credits=200001))))
+        garage = GarageStore(store)
+        garage.ensure(1)
+        devices = tuple(ItemSpec(tag, ident, OPTIONAL_DEVICE, None, (), None, ())
+                        for ident, tag in ((1, 'rammer'), (2, 'calibrated')))
+        catalog = LoadoutCatalog(Path('fixture'), devices, (), (), ())
+        progression = SimpleNamespace(garage=garage, prepare=garage.snapshot,
+                                      resolve_type=Mock(return_value=SimpleNamespace(tier=8)))
+        endpoint = SimpleNamespace(progression=progression, progression_catalog={'rev': SHOP_REVISION},
+                                   server=SimpleNamespace(manifest={'game': catalog.game}, event=Mock()),
+                                   require_vehicle_available=Mock(), progression_update=Mock(return_value=b''))
+        client = SimpleNamespace(phase='account', account_created=True, arena_id=None, account_id=1)
+
+        def unlock(level=0, group=0):
+            body = struct.pack('<HHB5i', 42, 130, 5, SHOP_REVISION, 1, level, group, 0)
+            return BaseEndpoint.vehicle_loadout(endpoint, client, 147, body, 42, 130)
+
+        with (patch('solbreaker.loadouts.load_catalog', return_value=catalog),
+              patch('solbreaker.loadouts.vehicle_key', return_value=('fixture', 'tank')),
+              patch.object(LoadoutCatalog, 'vehicle_preset'),
+              patch.object(LoadoutCatalog, 'equipment_slots', return_value=((1, 2),) * 9)):
+            self.assertIn(b'previous levels', unlock(1))
+            self.assertEqual(unlock(), command_response(42, 0))
+            self.assertEqual(unlock(), command_response(42, 0))
+            self.assertIn(b'Not enough credits', unlock(group=1))
+            body = struct.pack('<HHq3i', 42, 133, 1, 0, 0, 1)
+            self.assertEqual(BaseEndpoint.vehicle_loadout(endpoint, client, 141, body, 42, 133),
+                             command_response(42, 0))
+            self.assertEqual(garage.loadout(1, 1)['unlocked'], 1)
+            self.assertEqual(garage.loadout(1, 1)['devices'][0], 'calibrated')
+            self.assertEqual(store.get(1).progress['credits'], 200001 - equipment_slot_credits(8, 0))

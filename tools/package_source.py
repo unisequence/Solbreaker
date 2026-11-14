@@ -26,6 +26,9 @@ CRATES = ('sim_core', 'impact_core', 'armor_query', 'rapier_dynamic', 'physics_c
 SOURCE_CRATES = CRATES
 WINDOWS_LIBRARIES = {crate: 'tfs_'+crate+'.dll' for crate in CRATES}
 WINDOWS_LIBRARIES['physics_core'] = 'solbreaker_physics_core.dll'
+LINUX_LIBRARIES = {crate: f'tfs_{crate}.so' for crate in CRATES}
+LINUX_LIBRARIES.update(rapier_dynamic='libtfs_rapier_dynamic.so',
+                       physics_core='libsolbreaker_physics_core.so')
 WHEEL = 'pybullet-3.2.7-cp312-cp312-win_amd64.whl'
 GAME_CATALOG = 'solbreaker/assets/build-11.21.0.1235_7376187-files.json.gz'
 FORBIDDEN_SUFFIXES = frozenset(('.pem', '.key', '.p12', '.pfx', '.sqlite', '.sqlite3',
@@ -126,13 +129,34 @@ def validate_contents(payloads):
             raise ValueError('Release input matches an original game file: '+name)
 
 
-def package(output, *, windows_native=None, windows_wheel=None, windows_runtime=None):
+def package(output, *, windows_native=None, windows_wheel=None, windows_runtime=None,
+            linux_native=None, server_only=False, windows_physics=None):
     if bool(windows_native) != bool(windows_wheel):
         raise ValueError('Provide both the Windows DLL directory and the Python 3.12 Bullet wheel')
     if windows_runtime and not windows_native:
         raise ValueError('Portable runtime requires the accepted Windows native inputs')
+    if windows_physics and not windows_native:
+        raise ValueError('A rebuilt Windows controller requires the remaining pinned Windows inputs')
+    if linux_native and (windows_native or not server_only):
+        raise ValueError('Linux libraries are only supported in a dedicated Linux package')
+    if server_only and not (windows_runtime or linux_native):
+        raise ValueError('The dedicated package requires native libraries')
     payloads = source_inputs()
     validate_contents(payloads)
+    if server_only:
+        for name in FILES:
+            if name.startswith('launch-gui.'):
+                del payloads[name]
+    if linux_native:
+        binaries = {f'solbreaker/native/{crate}/{name}': read_input(Path(linux_native)/crate/name)
+                    for crate, name in LINUX_LIBRARIES.items()}
+        for name, content in binaries.items():
+            if (content[:7] != b'\x7fELF\x02\x01\x01' or
+                    content[16:20] != b'\x03\x00\x3e\x00'):
+                raise ValueError('Expected a Linux x86-64 shared library: '+name)
+        validate_contents({GAME_CATALOG: payloads[GAME_CATALOG], **binaries})
+        payloads.update(binaries)
+        payloads['runtime/manager.json'] = b'{"reuse_native": true, "play_mode": "local"}\n'
     if windows_native:
         expected = json.loads(payloads['requirements/native-artifacts.json'])['sha256']
         binaries = {'solbreaker/native/'+crate+'/'+filename:
@@ -155,10 +179,18 @@ def package(output, *, windows_native=None, windows_wheel=None, windows_runtime=
             if hashlib.sha256(content).hexdigest() != expected[path.name]:
                 raise ValueError('Native package input differs from accepted SHA-256: '+path.name)
             payloads[name] = content
+        if windows_physics:
+            name = 'solbreaker/native/physics_core/solbreaker_physics_core.dll'
+            controller = read_input(Path(windows_physics))
+            offset = int.from_bytes(controller[60:64], 'little')
+            if controller[:2] != b'MZ' or controller[offset:offset+6] != b'PE\0\0\x64\x86':
+                raise ValueError('Expected an x86-64 Windows ground controller')
+            validate_contents({GAME_CATALOG: payloads[GAME_CATALOG], name: controller})
+            payloads[name] = controller
         payloads['runtime/manager.json'] = (json.dumps(dict(reuse_native=True, play_mode='local', gui_theme='dark'))+'\n').encode()
     if windows_runtime:
         from tools.windows_bundle import payloads as runtime_payloads
-        payloads.update(runtime_payloads(windows_runtime, payloads, read_input))
+        payloads.update(runtime_payloads(windows_runtime, payloads, read_input, server_only=server_only))
     hashes = [hashlib.sha256(content).hexdigest()+'  '+name for name, content in sorted(payloads.items())]
     payloads['SHA256SUMS'] = ('\n'.join(hashes)+'\n').encode()
     output = Path(output)
@@ -186,8 +218,12 @@ def main():
     parser.add_argument('--windows-native', type=Path)
     parser.add_argument('--windows-wheel', type=Path)
     parser.add_argument('--windows-runtime', type=Path, help='Directory of pinned portable CPython and locked Windows wheels')
+    parser.add_argument('--linux-native', type=Path, help='Directory of native crates with freshly built Linux libraries')
+    parser.add_argument('--server-only', action='store_true')
     args = parser.parse_args()
-    print(json.dumps(package(args.output, windows_native=args.windows_native, windows_wheel=args.windows_wheel, windows_runtime=args.windows_runtime)))
+    print(json.dumps(package(args.output, windows_native=args.windows_native,
+                             windows_wheel=args.windows_wheel, windows_runtime=args.windows_runtime,
+                             linux_native=args.linux_native, server_only=args.server_only)))
 
 
 if __name__ == '__main__':

@@ -1,4 +1,5 @@
 """Sandbox negotiation and flight controls through the arena owner."""
+import struct
 from types import SimpleNamespace
 from unittest import TestCase
 from unittest.mock import Mock, patch
@@ -89,6 +90,42 @@ class SandboxTests(TestCase):
         self.assertEqual(vehicle.consumables[0].state_at(1.).state, COOLDOWN)
         self.assertEqual(arena.equipment_state(vehicle), ())
 
+    def test_restore_hp_updates_players_and_requires_sandbox_and_a_living_tank(self):
+        terrain = SimpleNamespace(height=lambda x, z: 0.)
+        arena = Arena([dict(id=1, nickname='One'), dict(id=2, nickname='Two')],
+                      b'', terrain, now=1., solo=False, sandbox_enabled=False)
+        self.addCleanup(arena.close)
+        arena.gravity_mode = True
+        arena.ready(1, 1.)
+        arena.ready(2, 1.)
+        arena.drain_events()
+        vehicle = arena.vehicle_for(1)
+        vehicle.health = 1
+        body = report(sandbox.token(arena), flags=sandbox.RESTORE_HP)
+        control = sandbox.Control.decode(body[len(sandbox.PREFIX):-1])
+        arena.sandbox_control(1, control)
+        self.assertEqual(vehicle.health, 1)
+        self.assertEqual(arena.drain_events(), [])
+
+        arena.sandbox_enabled = True
+        arena.sandbox_control(1, control)
+        self.assertEqual(vehicle.health, vehicle.max_health)
+        events = arena.drain_events()
+        self.assertEqual([event.kind for event in events], ['sandbox_restore_hp'])
+        notice = sandbox.advertisement(arena, notice=sandbox.HP_RESTORED)
+        for player_id in (1, 2):
+            result = event_messages(arena, arena.players[player_id], events)
+            self.assertIn(vehicle_property(vehicle.entity_id, 3, struct.pack('<h', vehicle.health)), result)
+            self.assertIn(health_changed(vehicle.entity_id, vehicle.health, 0), result)
+            self.assertEqual(notice in result, player_id == 1)
+
+        arena.sandbox_control(1, control)
+        self.assertEqual(arena.drain_events(), [])
+        vehicle.health = 0
+        arena.sandbox_control(1, control)
+        self.assertEqual(vehicle.health, 0)
+        self.assertEqual(arena.drain_events(), [])
+
     def test_practice_starts_empty_and_keeps_running_past_the_clock(self):
         terrain = SimpleNamespace(height=lambda x, z: 0.)
         arena = Arena([dict(id=1, nickname='Pilot')], b'', terrain, now=1., sandbox_enabled=True)
@@ -109,6 +146,50 @@ class SandboxTests(TestCase):
         arena.leave(1, reason='leave')
         self.assertTrue(arena.finished_at)
         self.assertEqual(arena.results(), [])
+
+    def test_practice_target_selection_fire_and_clear_reuse_the_same_slot(self):
+        terrain = SimpleNamespace(height=lambda x, z: 0.)
+        arena = Arena([dict(id=1, nickname='Pilot')], b'', terrain, now=1., sandbox_enabled=True)
+        self.addCleanup(arena.close)
+        arena.ready(1, 1.)
+        arena.drain_events()
+        player = arena.vehicle_for(1)
+        entity = min(arena.practice_slots)
+        alternate = entity + 1
+        arena.practice_types = {0: [entity], 1: [alternate]}
+        world = Mock(assets=SimpleNamespace(bounds=(0., 0., 100., 100.)))
+        arena.world = world
+        pose = Pose((30., 1., 35.), 0.)
+        world.training_placement.return_value = pose
+
+        def action(flags):
+            arena.sandbox_control(1, sandbox.Control(sandbox.token(arena), 1, flags, 0, 0., 0., 0.))
+
+        def restore(ident, placement):
+            vehicle = arena.vehicles[ident]
+            vehicle.pose = placement
+            vehicle.health = 280
+
+        with patch.object(arena, 'aim_hit', return_value=(None, pose.position)), \
+             patch.object(arena, '_restore_vehicle', side_effect=restore):
+            action(sandbox.NEXT_TARGET | sandbox.TOGGLE_TARGET_FIRE | sandbox.SPAWN_TARGET)
+            self.assertEqual(arena.practice_selection, 1)
+            self.assertEqual(set(arena.practice_gunners), {alternate})
+            self.assertTrue(arena.vehicles[alternate].alive)
+            self.assertFalse(arena.vehicles[entity].alive)
+            self.assertTrue(next(e for e in arena.drain_events() if e.kind == 'practice_spawn').data['first'])
+
+            action(sandbox.CLEAR_TARGETS)
+            self.assertFalse(arena.vehicles[alternate].alive)
+            self.assertFalse(arena.practice_gunners)
+            self.assertNotEqual(arena.vehicles[alternate].pose, pose)
+            self.assertIn('practice_clear', [e.kind for e in arena.drain_events()])
+            self.assertEqual(arena.vehicle_for(1), player)
+
+            action(sandbox.TOGGLE_TARGET_FIRE | sandbox.SPAWN_TARGET)
+            self.assertTrue(arena.vehicles[alternate].alive)
+            self.assertFalse(arena.practice_gunners)
+            self.assertFalse(next(e for e in arena.drain_events() if e.kind == 'practice_spawn').data['first'])
 
     def test_training_room_waits_for_last_player_even_if_one_team_leaves(self):
         terrain = SimpleNamespace(height=lambda x, z: 0.)

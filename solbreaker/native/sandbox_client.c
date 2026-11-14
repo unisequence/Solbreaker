@@ -15,11 +15,18 @@
 #define GRAVITY_JUMP 64u
 #define FAST_RELOAD 128u
 #define TELEPORT 256u
+#define NEXT_TARGET 512u
+#define TOGGLE_TARGET_FIRE 1024u
+#define CLEAR_TARGETS 2048u
+#define RESTORE_HP 4096u
+#define PRACTICE_ACTIONS (NEXT_TARGET | TOGGLE_TARGET_FIRE | CLEAR_TARGETS)
+#define ONE_SHOT_ACTIONS (SPAWN_TARGET | GRAVITY_JUMP | TELEPORT | PRACTICE_ACTIONS | RESTORE_HP)
 /* The pinned keyboard registry uses 0 through 0x32 for stock actions. */
 #define FIRST_SANDBOX_ACTION 0x33u
-#define SANDBOX_ACTION_COUNT 7u
-#define VISIBLE_SANDBOX_ACTIONS 6u
+#define SANDBOX_ACTION_COUNT 11u
+#define VISIBLE_SANDBOX_ACTIONS 10u
 #define TELEPORT_KEY (1u << 5)
+#define RESTORE_HP_KEY (1u << 9)
 #define JUMP_KEY (1u << VISIBLE_SANDBOX_ACTIONS)
 #define SANDBOX_KEYS (JUMP_KEY - 1u)
 #define ABILITY_ONE_ACTION 7u /* Native Consumables4 / ABILITY 1. */
@@ -43,6 +50,8 @@ static const NativeString binding_names[] = {
     {"SolBoost", 8, 15}, {"SolFlight", 9, 15}, {"SolMissile", 10, 15},
     {"SolTarget", 9, 15}, {"SolJump", 7, 15}, {"SolReload", 9, 15},
     {"SolTeleport", 11, 15},
+    {"SolNextTank", 11, 15}, {"SolTargetFire", 13, 15}, {"SolClear", 8, 15},
+    {"SolHeal", 7, 15},
 };
 static const NativeString binding_captions[][2] = {
     {{"Local/SbBoost", 13, 15}, {"", 0, 15}},
@@ -52,8 +61,12 @@ static const NativeString binding_captions[][2] = {
     {{"Local/SbJump", 12, 15}, {"", 0, 15}},
     {{"Local/SbReload", 14, 15}, {"", 0, 15}},
     {{"Local/SbTP", 10, 15}, {"", 0, 15}},
+    {{"Local/SbNext", 12, 15}, {"", 0, 15}},
+    {{"Local/SbFire", 12, 15}, {"", 0, 15}},
+    {{"Local/SbClear", 13, 15}, {"", 0, 15}},
+    {{"Local/SbHeal", 12, 15}, {"", 0, 15}},
 };
-static const uint8_t visible_bindings[] = {0, 1, 2, 3, 5, 6};
+static const uint8_t visible_bindings[] = {0, 1, 2, 3, 5, 6, 7, 8, 9, 10};
 
 typedef struct { float x, y, z; } Vector;
 typedef struct { Vector position, target; } CameraPose;
@@ -125,11 +138,15 @@ static int read_setting(uint32_t delta, const char *path, void *data, uint32_t s
 }
 
 static int read_bindings(uint32_t delta, SavedBindings *data) {
-    data->keys[5] = data->keys[6] = (SavedKey){0};
-    return (read_setting(delta, bindings_path, data, sizeof(*data)) ||
-            read_setting(delta, bindings_path, data, sizeof(*data) - sizeof(SavedKey)) ||
-            read_setting(delta, bindings_path, data, sizeof(*data) - 2*sizeof(SavedKey)))
-           && data->magic == BINDINGS_MAGIC;
+    static const uint8_t saved_counts[] = {SANDBOX_ACTION_COUNT, 10, 7, 6, 5};
+    for (unsigned index = 5; index < SANDBOX_ACTION_COUNT; index++)
+        data->keys[index] = (SavedKey){0};
+    for (unsigned index = 0; index < sizeof(saved_counts); index++) {
+        if (read_setting(delta, bindings_path, data,
+                         sizeof(data->magic) + saved_counts[index]*sizeof(SavedKey)))
+            return data->magic == BINDINGS_MAGIC;
+    }
+    return 0;
 }
 
 static int write_setting(uint32_t delta, const char *path, const char *temp,
@@ -174,8 +191,8 @@ static void seed_bindings(uint32_t delta, void *layout, int restore) {
         uint32_t binding = visible_bindings[index];
         uint32_t action = FIRST_SANDBOX_ACTION + binding;
         if (!get_binding(delta, layout, action).device) {
-            /* Native keyboard device, Numpad 1 through 6, key-down phase. */
-            KeyBinding key = {0x400, 0x4a + index, 0, 9};
+            /* Native keyboard device, Numpad 1 through 9 then 0. */
+            KeyBinding key = {0x400, binding == 10 ? 0x49 : 0x4a + index, 0, 9};
             if (have_saved && saved.keys[binding].key && saved.keys[binding].key < 0x7f
                     && saved.keys[binding].modifiers < 16) {
                 key.key = saved.keys[binding].key;
@@ -251,7 +268,7 @@ void THISCALL sandbox_binding_menu(void *controller, void *page, const ActionVec
     Original original = (Original)(0x01c0c700u + delta);
     uint32_t ids[64];
     unsigned count = actions->end - actions->begin;
-    if (device != 0x400 || columns != 3 || count > 58) {
+    if (device != 0x400 || columns != 3 || count > 64-VISIBLE_SANDBOX_ACTIONS) {
         original(controller, page, actions, device, columns);
         return;
     }
@@ -259,8 +276,8 @@ void THISCALL sandbox_binding_menu(void *controller, void *page, const ActionVec
     if (layout) seed_bindings(delta, layout, 1);
     for (unsigned index = 0; index < VISIBLE_SANDBOX_ACTIONS; index++)
         ids[index] = FIRST_SANDBOX_ACTION + visible_bindings[index];
-    for (unsigned index = 0; index < count; index++) ids[6+index] = actions->begin[index];
-    ActionVector combined = {ids, ids+6+count, ids+64};
+    for (unsigned index = 0; index < count; index++) ids[VISIBLE_SANDBOX_ACTIONS+index] = actions->begin[index];
+    ActionVector combined = {ids, ids+VISIBLE_SANDBOX_ACTIONS+count, ids+64};
     original(controller, page, &combined, device, columns);
 }
 
@@ -433,6 +450,11 @@ static void sandbox_notice(uint32_t delta, Sandbox *s, uint32_t index) {
         {"Local/SbLoad0", 13, 15}, {"Local/SbLoad1", 13, 15},
         {"Local/SbSpawn", 13, 15},
         {"Local/SbMoved", 13, 15},
+        {"Local/SbOwn", 11, 15}, {"Local/SbT59", 11, 15},
+        {"Local/SbKV1", 11, 15}, {"Local/SbPzIV", 12, 15},
+        {"Local/SbFire0", 13, 15}, {"Local/SbFire1", 13, 15},
+        {"Local/SbClean", 13, 15}, {"Local/SbFull", 12, 15},
+        {"Local/SbHealed", 14, 15},
     };
     void *controller = s->notice_controller;
     void *localization = (void *)FIELD(0x471eea0u + delta, 0);
@@ -483,19 +505,25 @@ int sandbox_message(uint32_t delta, const uint32_t *first, const uint32_t *end,
         if (s && s->thread == thread_id() && s->owner && end == first+3
                 && (second == second_end || (second && second_end == second+1)) && first[2]) {
             uint32_t capabilities = second == second_end ? 15 : second[0];
-            if (capabilities & (64 | 256)) {
+            if (capabilities & (64 | 256 | 1024 | 0x8000)) {
                 if (s->token == first[2]) {
                     if ((capabilities & 64) && (s->allowed_keys & 8))
                         sandbox_notice(delta, s, 8);
                     if ((capabilities & 256) && (s->allowed_keys & TELEPORT_KEY))
                         sandbox_notice(delta, s, 9);
+                    if ((capabilities & 1024) && (s->allowed_keys & 0x1c0))
+                        sandbox_notice(delta, s, 10 + ((capabilities >> 11) & 7));
+                    if ((capabilities & 0x8000) && (s->allowed_keys & RESTORE_HP_KEY))
+                        sandbox_notice(delta, s, 18);
                 }
                 return 1;
             }
             s->token = first[2];
             s->allowed_keys = (capabilities & 15) | ((capabilities & 16) ? JUMP_KEY : 0)
                               | ((capabilities & 32) ? 16 : 0)
-                              | ((capabilities & 128) ? TELEPORT_KEY : 0);
+                              | ((capabilities & 128) ? TELEPORT_KEY : 0)
+                              | ((capabilities & 512) ? 0x1c0 : 0)
+                              | ((capabilities & 0x4000) ? RESTORE_HP_KEY : 0);
             s->last_report = 0;
         }
         return 1;
@@ -568,6 +596,8 @@ static void poll_controls(uint32_t delta, Sandbox *s, uint32_t now) {
     }
     if (changes & JUMP_KEY) s->pending_actions |= GRAVITY_JUMP;
     if (changes & TELEPORT_KEY) s->pending_actions |= TELEPORT;
+    /* The four Numpad 7–0 action bits follow the order of their binding bits. */
+    s->pending_actions |= (changes << 3) & (PRACTICE_ACTIONS | RESTORE_HP);
     uint32_t flags = s->toggles & (BOOST | FLIGHT | FAST_RELOAD);
     if ((flags & FLIGHT) && key(0x20) < 0) flags |= ASCEND;
     if ((flags & FLIGHT) && key(0x11) < 0) flags |= DESCEND;
@@ -591,11 +621,11 @@ static void poll_controls(uint32_t delta, Sandbox *s, uint32_t now) {
         clear_view(s);
     }
     flags |= s->pending_actions;
-    uint32_t interval = (flags & (MISSILE_VIEW | SPAWN_TARGET | GRAVITY_JUMP | TELEPORT)) ? 55 : 170;
+    uint32_t interval = (flags & (MISSILE_VIEW | ONE_SHOT_ACTIONS)) ? 55 : 170;
     if ((flags || s->sent_flags) && (!s->last_report || now-s->last_report >= interval)) {
         s->last_report = now ? now : 1;
         if (send_control(delta, s, flags, direction)) {
-            s->sent_flags = flags & ~(SPAWN_TARGET | GRAVITY_JUMP | TELEPORT);
+            s->sent_flags = flags & ~ONE_SHOT_ACTIONS;
             s->pending_actions = 0;
         }
     }

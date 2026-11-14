@@ -61,6 +61,7 @@ def map_team_capacity(map_id):
 # tree stays intact: its canopy obscured the native camera behind this slot.
 _LOCAL_SPAWN_ADJUSTMENTS = {
     "pliego": {(1, 3): ((69.106453, 239.036133), (61.106453, 239.036133))},
+    "milbase_04": {(1, 5): ((-213.999298, -49.183872), (-213.999298, -50.183872))},
 }
 
 
@@ -162,6 +163,16 @@ def training_map_catalog(game):
                 raise ValueError(f'Weather map ID {ident} is already assigned')
             result[ident] = key
     return result
+
+
+def destruction_index_path(path, tag):
+    """Resolve the tagged index used by the client before its default index."""
+    suffix = ".lka.dvpl"
+    if tag and path.name.endswith(suffix):
+        tagged = path.with_name(path.name.removesuffix(suffix) + f".{tag}{suffix}")
+        if tagged.is_file():
+            return tagged
+    return path
 
 
 def load_map_spec(game, key="rudniki"):
@@ -267,8 +278,7 @@ def _load_map_spec(game, key):
     lka_relative = lka_paths.get(tag) if isinstance(lka_paths, dict) else None
     if (lka_relative is None and isinstance(lka_paths, dict)
             and (set(lka_paths) == {""} or key == "lumber_01")):
-        # Mines labels its active destruction state rd0 in the scene, while
-        # its single TerrainData LKA path is the empty/default tag.
+        # Some scenes declare only a default path and ship tagged files beside it.
         lka_relative = lka_paths[""]
     mkm_relative = terrain.get("tdc.mkmPath")
     effects_relative = terrain.get("tdc.mapEffectsPath")
@@ -285,6 +295,8 @@ def _load_map_spec(game, key):
 
     lka_path, mkm_path, effects_path = map(terrain_path,
         (lka_relative, mkm_relative, effects_relative))
+    if lka_relative == lka_paths.get(""):
+        lka_path = destruction_index_path(lka_path, tag)
     for path in (lka_path, mkm_path, effects_path):
         if not path.is_file():
             raise ValueError(f"Pinned map resource is missing: {path.name}")

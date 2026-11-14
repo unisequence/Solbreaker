@@ -1017,7 +1017,7 @@ class GarageStore:
         return self._run(account_id, operation_id, request, action)
 
     def unlock_device_slot(self, account_id, inventory_id, slot, *, credits_cost=0, operation_id=None,
-                           device_tag=None):
+                           device_tag=None, require_previous_levels=False):
         _int(inventory_id, 'inventory_id', low=1)
         if type(slot) is not int or not 0 <= slot <= 8:
             raise ValueError('slot must be an integer in 0..8')
@@ -1028,6 +1028,8 @@ class GarageStore:
                        credits_cost=credits_cost)
         if device_tag is not None:
             request['device_tag'] = device_tag
+        if require_previous_levels:
+            request['require_previous_levels'] = True
 
         def action(ctx):
             self._require(ctx)
@@ -1035,6 +1037,9 @@ class GarageStore:
             current = self._loadout(account_id, inventory_id)
             if current['unlocked'] >> slot & 1:
                 return
+            required = (1 << (slot // 3 * 3)) - 1
+            if require_previous_levels and current['unlocked'] & required != required:
+                raise ValueError('Unlock all slots of the previous levels first')
             ctx.charge(credits_cost)
             current['unlocked'] |= 1 << slot
             current['devices'][slot] = device_tag

@@ -159,11 +159,23 @@ def unpack(archive, payload, kind):
         files = manifest(raw.decode('utf-8'))
         if set(members) != set(files) | {CHECKSUMS}:
             raise ValueError('ZIP files differ from the release checksum manifest')
-        if kind == 'windows-x64':
-            required = {'launch-gui.ps1', 'launch-gui.vbs', f'{PORTABLE}/python.exe',
-                        f'{PORTABLE}/pythonw.exe', f'{PORTABLE}/solbreaker-bundle.json'}
+        if kind in ('windows-x64', 'server-windows-x64'):
+            required = {f'{PORTABLE}/python.exe', f'{PORTABLE}/solbreaker-bundle.json'}
+            if kind == 'server-windows-x64':
+                required.update({'setup.ps1', 'start-server.ps1', 'tools/start-server.cmd',
+                                 'launch-tui.cmd', 'tools/server_depot.py'})
+            else:
+                required.update({'launch-gui.ps1', 'launch-gui.vbs', f'{PORTABLE}/pythonw.exe'})
         else:
-            required = {'launch-gui.sh'}
+            if kind == 'server-linux-x86_64':
+                required = {'setup.sh', 'start-server.sh', 'launch-tui.sh', 'tools/server_depot.py',
+                            'solbreaker/native/sim_core/tfs_sim_core.so',
+                            'solbreaker/native/impact_core/tfs_impact_core.so',
+                            'solbreaker/native/armor_query/tfs_armor_query.so',
+                            'solbreaker/native/rapier_dynamic/libtfs_rapier_dynamic.so',
+                            'solbreaker/native/physics_core/libsolbreaker_physics_core.so'}
+            else:
+                required = {'launch-gui.sh'}
             if any(name.startswith((PORTABLE+'/', 'wheels/')) for name in files):
                 raise ValueError('Unexpected Windows runtime in the source package')
         if not required.issubset(files):

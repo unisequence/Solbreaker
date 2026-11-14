@@ -20,7 +20,7 @@ jobs:
   package:
     needs: ci
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
@@ -28,11 +28,44 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
-          python-version: '3.12'
+          python-version: '3.11'
+      - name: Build dedicated Linux libraries
+        run: |
+          rustup toolchain install 1.85.0 --profile minimal
+          export CARGO_TARGET_DIR="$RUNNER_TEMP/cargo-target"
+          RUSTUP_TOOLCHAIN=1.85.0 python tools/build_native.py --jobs 2
+      - name: Build Windows ground controller from the same sources
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64-posix
+          rustup target add --toolchain 1.85.0 x86_64-pc-windows-gnu
+          export CARGO_TARGET_DIR="$RUNNER_TEMP/cargo-target"
+          export CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc-posix
+          RUSTFLAGS="-C link-arg=-static-libgcc" cargo +1.85.0 build --release --locked \
+            --jobs 2 --target x86_64-pc-windows-gnu --manifest-path solbreaker/native/physics_core/Cargo.toml
+          objdump -p "$CARGO_TARGET_DIR/x86_64-pc-windows-gnu/release/solbreaker_physics_core.dll" > "$RUNNER_TEMP/windows-imports.txt"
+          if grep -Ei 'DLL Name: (libgcc|libwinpthread|libstdc\+\+)' "$RUNNER_TEMP/windows-imports.txt"; then
+            exit 1
+          fi
       - name: Build and verify release archives
         run: |
           git merge-base --is-ancestor HEAD origin/main
-          python tools/build_release.py --tag "$GITHUB_REF_NAME" --output "$RUNNER_TEMP/solbreaker-release"
+          # Cargo retains a hard link into target/release/deps. The packer requires a unique file.
+          cp "$RUNNER_TEMP/cargo-target/x86_64-pc-windows-gnu/release/solbreaker_physics_core.dll" \
+            "$RUNNER_TEMP/solbreaker_physics_core.dll"
+          python tools/build_release.py --tag "$GITHUB_REF_NAME" --output "$RUNNER_TEMP/solbreaker-release" \
+            --linux-native solbreaker/native \
+            --windows-physics "$RUNNER_TEMP/solbreaker_physics_core.dll"
+      - name: Test the extracted Linux server bundle
+        working-directory: ${{ runner.temp }}
+        run: |
+          unzip "solbreaker-release/Solbreaker-${GITHUB_REF_NAME#v}-server-linux-x86_64.zip" -d dedicated
+          cd dedicated/Solbreaker
+          python -m venv .venv
+          .venv/bin/python tools/install_dependencies.py --profile tui
+          .venv/bin/python -c 'from tools.setup_state import verify_native; verify_native()'
+          ./start-server.sh --version
+          .venv/bin/python -m unittest tests.test_terminal
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: solbreaker-release
@@ -51,17 +84,33 @@ jobs:
       - name: Test the bundled Windows runtime
         shell: pwsh
         run: |
-          $archives = @(Get-ChildItem -Filter '*-windows-x64.zip')
-          if ($archives.Count -ne 1) { throw 'Expected one Windows archive' }
+          $archives = @(Get-ChildItem -Filter '*-windows-x64.zip' | Where-Object Name -NotLike '*-server-windows-x64.zip')
+          $serverArchives = @(Get-ChildItem -Filter '*-server-windows-x64.zip')
+          if ($archives.Count -ne 1 -or $serverArchives.Count -ne 1) { throw 'Expected both Windows archives' }
           $archive = $archives[0]
           Expand-Archive -LiteralPath $archive.FullName -DestinationPath $env:RUNNER_TEMP
           Set-Location (Join-Path $env:RUNNER_TEMP Solbreaker)
           $env:QT_QPA_PLATFORM = 'offscreen'
+          $version = & ./tools/start-server.cmd -Version
+          if ($LASTEXITCODE -ne 0 -or $version -notmatch '^Solbreaker \d+\.\d+\.\d+') {
+            throw "Server launcher did not report its version: $version"
+          }
           foreach ($profile in @('server', 'gui', 'tui')) {
             & ./runtime/python/python.exe tools/install_dependencies.py --profile $profile --check
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
           & ./runtime/python/python.exe -m unittest tests.test_native_windows tests.test_native_physics tests.test_collision_queries
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $dedicated = Join-Path $env:RUNNER_TEMP dedicated
+          Expand-Archive -LiteralPath $serverArchives[0].FullName -DestinationPath $dedicated
+          Set-Location (Join-Path $dedicated Solbreaker)
+          $serverVersion = & ./tools/start-server.cmd -Version
+          if ($LASTEXITCODE -ne 0 -or $serverVersion -ne $version) { throw 'Dedicated server version mismatch' }
+          foreach ($profile in @('server', 'tui')) {
+            & ./runtime/python/python.exe tools/install_dependencies.py --profile $profile --check
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          & ./runtime/python/python.exe -m unittest tests.test_native_windows tests.test_terminal
           exit $LASTEXITCODE
 
   publish:
@@ -95,7 +144,9 @@ jobs:
             options+=(--prerelease)
           fi
           gh release create "$GITHUB_REF_NAME" "${options[@]}" \
-            "Solbreaker-$version-source.zip" "Solbreaker-$version-windows-x64.zip" SHA256SUMS
+            "Solbreaker-$version-source.zip" "Solbreaker-$version-windows-x64.zip" \
+            "Solbreaker-$version-server-windows-x64.zip" \
+            "Solbreaker-$version-server-linux-x86_64.zip" SHA256SUMS
 
   sync-readmes:
     needs: publish

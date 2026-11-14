@@ -11,6 +11,14 @@ BOOST, FLIGHT, ASCEND, DESCEND, MISSILE_VIEW, SPAWN_TARGET = (1, 2, 4, 8, 16, 32
 GRAVITY_JUMP = 64
 FAST_RELOAD = 128
 TELEPORT = 256
+NEXT_TARGET, TOGGLE_TARGET_FIRE, CLEAR_TARGETS = 512, 1024, 2048
+PRACTICE_ACTIONS = NEXT_TARGET | TOGGLE_TARGET_FIRE | CLEAR_TARGETS
+RESTORE_HP = 4096
+PRACTICE_TANKS = (
+    ('china', 'Ch01_Type59', 'Type 59'),
+    ('ussr', 'KV1', 'KV-1'),
+    ('germany', 'PzIV', 'Pz. IV'),
+)
 FAST_RELOAD_SECONDS = .5
 SANDBOX_KEYS = 0x0f
 GRAVITY_KEY = 0x10
@@ -18,6 +26,11 @@ FAST_RELOAD_KEY = 0x20
 TARGET_PLACED = 0x40
 TELEPORT_KEY = 0x80
 TELEPORTED = 0x100
+PRACTICE_KEYS = 0x200
+PRACTICE_NOTICE = 0x400
+RESTORE_HP_KEY = 0x4000
+HP_RESTORED = 0x8000
+TARGET_FIRE_OFF, TARGET_FIRE_ON, TARGETS_CLEARED, TARGET_SLOTS_FULL = range(4, 8)
 INPUT_LEASE = .85
 BOOST_POWER = 2.4
 BOOST_SPEED = 1.75
@@ -33,7 +46,11 @@ def advertisement(arena, *, notice=0):
     capabilities = (SANDBOX_KEYS | FAST_RELOAD_KEY if arena.sandbox_enabled else 0) | (
         GRAVITY_KEY if getattr(arena, 'gravity_mode', False) is True else 0)
     if arena.sandbox_enabled:
-        capabilities |= TELEPORT_KEY
+        capabilities |= TELEPORT_KEY | RESTORE_HP_KEY
+    if getattr(arena, 'practice', False):
+        capabilities |= PRACTICE_KEYS
+    else:
+        capabilities &= ~0x08
     capabilities |= notice
     second = b'\1' + struct.pack('<I', capabilities) if capabilities else b'\0'
     return b'\x13' + variable8(96, b'\x03TFS1SBOX' + struct.pack('<I', token(arena)) + second)
@@ -94,7 +111,8 @@ class Control:
             raise ValueError('Invalid sandbox control size')
         control = cls(*INPUT.unpack(data))
         length = math.hypot(control.x, control.y, control.z)
-        if (control.flags & ~511 or not math.isfinite(length) or length > 10000.
+        if (control.flags & ~(511 | PRACTICE_ACTIONS | RESTORE_HP)
+                or not math.isfinite(length) or length > 10000.
                 or control.flags & MISSILE_VIEW and (not control.shot or length < .01)):
             raise ValueError('Invalid sandbox control')
         return control

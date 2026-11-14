@@ -32,12 +32,14 @@ def compatible_wheel(name):
                            or (match[2] == 'abi3' and int(match[1]) <= 312)))
 
 
-def records(lock):
-    return sum([lock['groups'][group] for group in
-                ('bootstrap', 'base', 'numpy-legacy', 'gui', 'tui')], []) + [lock['native_windows_physics']]
+def records(lock, *, server_only=False):
+    groups = ('bootstrap', 'base', 'numpy-legacy', 'tui')
+    if not server_only:
+        groups += ('gui',)
+    return sum([lock['groups'][group] for group in groups], []) + [lock['native_windows_physics']]
 
 
-def payloads(directory, source, read_input):
+def payloads(directory, source, read_input, *, server_only=False):
     """Only exact hash-locked archives become runtime files. Never copy a live environment."""
     directory = Path(directory)
     archive = read_input(directory/RUNTIME['filename'])
@@ -73,7 +75,7 @@ def payloads(directory, source, read_input):
     lock = json.loads(source['requirements/lock.json'])
     installed = {}
     wheel_inputs = []
-    for record in records(lock):
+    for record in records(lock, server_only=server_only):
         candidates = [directory/item['filename'] for item in record['files']
                       if compatible_wheel(item['filename']) and (directory/item['filename']).is_file()]
         if len(candidates) != 1:

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.0-alpha.8
+
+- Improve track support when crossing low ledges. Resolve the map's active
+  destruction index so supported props break and disappear in clients.
+- In the solo sandbox, cycle target tanks, enable return fire for new targets
+  and clear the range. A separate binding restores your vehicle to full HP.
+- Charge equipment unlock prices by vehicle tier and equipment level.
+- Add dedicated Linux and Windows server archives with a TUI and a file list
+  for downloading the pinned server resources. Show the version in the TUI.
+
 ## 0.1.0-alpha.7 — 2026-11-13
 
 - Choose sunset or fog variants of Mines, Falls Creek and Vineyards in
