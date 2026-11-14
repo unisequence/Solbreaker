@@ -238,6 +238,7 @@ class Aiming:
     pitch_transition: float = .4
     # Native gun+16c/+170: envelope before equipment, then its own pair deltas.
     packed_limits: tuple | None = None
+    muzzle_offset: tuple = (0., 0., 0.)
 
     @property
     def packed_pitch_limits(self):
@@ -950,6 +951,11 @@ def _load_vehicle(game: Path, nation, name, configuration, allow_movable=False):
         raise ValueError('Missing vehicle resourcesPath mapping')
     visual_asset = _asset_base(game/'Data/3d', paths, 'blitzModelPath', 'Tanks')
     collision_asset = _asset_base(game/'Data/3d/Tanks', paths, 'collisionMesh', 'CollisionMeshes')
+    muzzle_offset = parameters.get('solbreakerMuzzleOffset', (0., 0., 0.)) if name.startswith('SB_') else (0., 0., 0.)
+    if (not isinstance(muzzle_offset, (list, tuple)) or len(muzzle_offset) != 3
+            or any(type(value) not in (int, float) or not math.isfinite(value)
+                   or abs(value) > 30 for value in muzzle_offset)):
+        raise ValueError('Invalid Workshop muzzle offset')
     definition = VehicleDefinition(nation,nation_id,name,int(listing.findtext('id')),
         describe(hull,0),describe(chassis,ci),describe(turret,ti),describe(gun,gi),
         describe(engine,ei),describe(fuel,fi),describe(radio,ri),hp,
@@ -959,7 +965,8 @@ def _load_vehicle(game: Path, nation, name, configuration, allow_movable=False):
             scalar(chassis,'brakeForce'),scalar(engine,'power')),
         Aiming(tp,numbers(turret,'gunPosition',3),pitch,
             math.radians(scalar(turret,'rotationSpeed')),math.radians(scalar(gun,'rotationSpeed')),
-            scalar(gun,'aimingTime'),sectors.get('back'),yaw_limits,sectors.get('front'),transition),
+            scalar(gun,'aimingTime'),sectors.get('back'),yaw_limits,sectors.get('front'),transition,
+            muzzle_offset=tuple(muzzle_offset)),
         Weapon(int(scalar(gun,'maxAmmo')),clip,interval,scalar(gun,'reloadTime'),tuple(shells),ammunition,
                pump_times,burst_count,burst_interval),
         collision_asset,visual_asset,

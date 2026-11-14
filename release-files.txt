@@ -1,8 +1,8 @@
 # Reviewed source release inputs; local state and build products are excluded.
-.github/hooks/pre-push
 .github/ISSUE_TEMPLATE/bug_report.yml
 .github/ISSUE_TEMPLATE/config.yml
 .github/ISSUE_TEMPLATE/feature_request.yml
+.github/hooks/pre-push
 .github/workflows/ci.yml
 .github/workflows/release.yml
 .gitignore
@@ -19,6 +19,8 @@ docs/INSTALL.ru.md
 docs/NATIVE_PHYSICS.md
 docs/SERVER.ru.md
 docs/SOURCES.md
+docs/TANK_WORKSHOP.md
+docs/TANK_WORKSHOP.ru.md
 examples/network-public.toml
 launch-gui.cmd
 launch-gui.ps1
@@ -330,8 +332,8 @@ solbreaker/catalog.py
 solbreaker/certificate_authorities.py
 solbreaker/cipher.py
 solbreaker/cli.py
-solbreaker/client_atmosphere.py
 solbreaker/client_atgm_aim.py
+solbreaker/client_atmosphere.py
 solbreaker/client_battle_settings.py
 solbreaker/client_bot_mode.py
 solbreaker/client_branding.py
@@ -355,10 +357,10 @@ solbreaker/dava_scene.py
 solbreaker/desktop.py
 solbreaker/desktop_depot.py
 solbreaker/desktop_i18n.py
-solbreaker/discovery.py
 solbreaker/destructibles.py
 solbreaker/dev_map.py
 solbreaker/diagnostics.py
+solbreaker/discovery.py
 solbreaker/drive_jobs.py
 solbreaker/drive_replica.py
 solbreaker/drive_workers.py
@@ -455,8 +457,8 @@ solbreaker/results.py
 solbreaker/revision.py
 solbreaker/rooms.py
 solbreaker/roster.py
-solbreaker/scene_quality.py
 solbreaker/sandbox.py
+solbreaker/scene_quality.py
 solbreaker/server.py
 solbreaker/server_identity.py
 solbreaker/setup_progress.py
@@ -479,6 +481,19 @@ solbreaker/vehicle_data.py
 solbreaker/vehicles.py
 solbreaker/windows_profile_patch.py
 solbreaker/windows_shortcut.py
+solbreaker/workshop/__init__.py
+solbreaker/workshop/blender_import.py
+solbreaker/workshop/dava_export.py
+solbreaker/workshop/glb.py
+solbreaker/workshop/gui.py
+solbreaker/workshop/i18n.py
+solbreaker/workshop/install.py
+solbreaker/workshop/models.py
+solbreaker/workshop/mounting.py
+solbreaker/workshop/package.py
+solbreaker/workshop/parts.py
+solbreaker/workshop/project.py
+solbreaker/workshop/running_gear.py
 start-server.ps1
 start-server.sh
 tests/__init__.py
@@ -496,8 +511,8 @@ tests/test_discovery.py
 tests/test_launcher_stdin.py
 tests/test_loadout_prices.py
 tests/test_login_preferences.py
-tests/test_map_cache.py
 tests/test_management.py
+tests/test_map_cache.py
 tests/test_missiles.py
 tests/test_native_build.py
 tests/test_native_physics.py
@@ -512,9 +527,10 @@ tests/test_server_identity.py
 tests/test_setup.py
 tests/test_static_visibility.py
 tests/test_steam_depot.py
+tests/test_tank_workshop.py
 tests/test_terminal.py
-tests/test_training_room_bots.py
 tests/test_token_capacity.py
+tests/test_training_room_bots.py
 tests/test_updates.py
 tests/test_windows_bundle.py
 tests/test_windows_python.py

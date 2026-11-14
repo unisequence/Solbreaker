@@ -1477,6 +1477,38 @@ class BaseEndpoint(asyncio.DatagramProtocol):
     def send_join_failure(self, addr, client, reason):
         self.send(addr, client, b"\x13" + account_method(24, bytes([reason]) + packed_blob(b"")))
 
+    def workshop_drive(self, addr, client):
+        type_cd = getattr(self.server, 'workshop_drive', None)
+        if type_cd is None or client.account_revision is None or client.reconnect_replay:
+            return
+        from ipaddress import ip_address
+        if not (ip_address(addr[0]).is_loopback or addr[0] == self.server.network.listen_base.host):
+            return
+        self.server.workshop_drive = None
+
+        def enter():
+            if self.clients.get(addr) is not client or client.phase != 'account' or client.arena_id:
+                return
+            try:
+                from .training_config import TrainingConfig
+                snapshot = self.progression.prepare(client.account_id)
+                vehicle = next((item for item in snapshot['vehicles'] if item['type_cd'] == type_cd), None)
+                if vehicle is None:
+                    from .tech_tree import load_inventory_catalog
+                    key = next(item.key for item in load_inventory_catalog(self.game) if item.type_cd == type_cd)
+                    self.progression.grant(client.account_id, key)
+                    vehicle = next(item for item in self.progression.prepare(client.account_id)['vehicles']
+                                   if item['type_cd'] == type_cd)
+                    self.send(addr, client, b'\x13' + self.progression_update(client))
+                self.start_battle(addr, client, vehicle['id'], game_mode=1, training=TrainingConfig())
+            except (BattleRefused, ValueError, StopIteration) as exc:
+                self.server.event('workshop_drive_failed', reason=str(exc))
+                self.send_join_failure(addr, client, self.JOIN_WRONG_VEHICLE)
+            else:
+                self.server.event('workshop_drive_started', type_cd=type_cd)
+
+        asyncio.get_running_loop().call_later(.5, enter)
+
     def start_shared(self, account_ids, teams=(1,2), map_id=None, *, bot_counts=(0, 0),
                      room_mode='encounter', room_settings=None):
         """Attach independent sessions to one authoritative world."""
@@ -2157,6 +2189,10 @@ class BaseEndpoint(asyncio.DatagramProtocol):
                             continue
                         if request_id == 202:
                             # The native reserved ID 202 means NO_RESPONSE.
+                            # Returning profiles can skip the map-download report,
+                            # but still send the hangar initialization command.
+                            if command_id == 1001 and client.phase == 'account':
+                                self.workshop_drive(addr, client)
                             continue
                         if kind == 140 and command_id == 100:
                             previous = struct.unpack_from("<q", body, 4)[0]
@@ -2249,6 +2285,8 @@ class BaseEndpoint(asyncio.DatagramProtocol):
                                 and client.phase == 'account' and client.account_revision is not None):
                             client.phase = 'battle_pending'
                             self.send(addr, client, b'\x04\0')
+                        if command_id == 11210 and client.phase == 'account':
+                            self.workshop_drive(addr, client)
                 if kind == 9 and client.phase == "battle_pending":
                     arena = self.arenas.get(client.arena_id)
                     if getattr(arena, 'owner_backed', False):

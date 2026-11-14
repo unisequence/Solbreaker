@@ -16,7 +16,7 @@ if ! .venv/bin/python tools/install_dependencies.py --profile gui --check; then
     .venv/bin/python tools/install_dependencies.py --profile gui
 fi
 status=0
-SOLBREAKER_RELEASE_LAUNCHER=1 .venv/bin/python -m solbreaker gui "$@" || status=$?
+SOLBREAKER_RELEASE_LAUNCHER= .venv/bin/python -m solbreaker gui "$@" || status=$?
 if [[ "$status" != 42 ]]; then
     exit "$status"
 fi

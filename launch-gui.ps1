@@ -50,7 +50,7 @@ $pythonw = Join-Path (Split-Path -Parent $python) 'pythonw.exe'
 if (-not (Test-Path -LiteralPath $pythonw)) { throw 'pythonw.exe is missing from the Python environment.' }
 $entry = Join-Path $PSScriptRoot 'tools\launch_gui.pyw'
 $arguments = '"' + $entry + '" "' + $Config + '"'
-$env:SOLBREAKER_RELEASE_LAUNCHER = '1'
+$env:SOLBREAKER_RELEASE_LAUNCHER = ''
 $gui = Start-Process -FilePath $pythonw -ArgumentList $arguments -WorkingDirectory $PSScriptRoot -Wait -PassThru
 if ($gui.ExitCode -ne 42) { exit $gui.ExitCode }
 

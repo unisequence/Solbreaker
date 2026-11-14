@@ -100,7 +100,19 @@ def ensure_lab(lab):
     for original in (source,source/'Data',game,game/'Data'):
         if original.exists() and (os.path.samefile(client,original) or os.path.samefile(data,original)):
             raise ValueError('Lab client directories must not alias source/view directories')
-    if game.is_relative_to(lab):
+    if game.is_relative_to(lab) and manifest.get('tank_workshop_view') is not None:
+        # Workshop server views retain the external pinned executable and
+        # version resource. Client directories are checked separately above.
+        from .build_info import BUILD_SHA256
+        from .resource_source import validate_snapshot
+        if (game.parent != lab/'tank-views' or game.name != manifest['tank_workshop_view']
+                or not game.name.startswith('view-') or linked(lab/'tank-views')
+                or manifest.get('exe_sha256') != BUILD_SHA256 or 'source_game' not in manifest
+                or not os.path.samefile(game/'wotblitz.exe', source/'wotblitz.exe')
+                or not os.path.samefile(game/'Data/version.txt.dvpl', source/'Data/version.txt.dvpl')):
+            raise ValueError('Invalid Workshop resource view')
+        validate_snapshot(manifest)
+    elif game.is_relative_to(lab):
         # Supported overlays retain their external immutable snapshot as
         # source_game. Do not accept an arbitrary directory merely because it
         # was labelled a private view in editable lab metadata.

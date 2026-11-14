@@ -37,7 +37,7 @@ LOG = logging.getLogger("solbreaker")
 
 
 class LocalServer:
-    def __init__(self, lab: Path, *, sandbox=False):
+    def __init__(self, lab: Path, *, sandbox=False, workshop_drive=None):
         from .diagnostics import install
         self.diagnostics = install()
         self.lab = lab
@@ -57,6 +57,14 @@ class LocalServer:
         from .tls import server_context
         self.http_tls_context = server_context(lab, self.manifest, self.network)
         validate_snapshot(self.manifest)
+        self.workshop_drive = workshop_drive
+        if workshop_drive is not None:
+            if not sandbox or workshop_drive & 15 != 1:
+                raise ValueError('Workshop test drive requires a sandbox and a vehicle ID')
+            from .tech_tree import load_inventory_catalog
+            if not any(vehicle.type_cd == workshop_drive and '/SB_' in vehicle.key
+                       for vehicle in load_inventory_catalog(Path(self.manifest['game']))):
+                raise ValueError('Workshop test vehicle is absent from the server')
         from .sim_native import backend_status
         from .drive_workers import configured_workers
         self.simulation_backend = backend_status()
@@ -364,8 +372,8 @@ class LoginEndpoint(asyncio.DatagramProtocol):
             self.transport.sendto(encode_reply(packet, request_id, reply), addr)
 
 
-async def serve(lab: Path, *, sandbox=False):
-    server = LocalServer(lab, sandbox=sandbox)
+async def serve(lab: Path, *, sandbox=False, workshop_drive=None):
+    server = LocalServer(lab, sandbox=sandbox, workshop_drive=workshop_drive)
     transports = []
     try:
         udp, _ = await open_datagram(lambda: LoginEndpoint(server),
@@ -406,7 +414,7 @@ async def serve(lab: Path, *, sandbox=False):
             server.event('stopped')
 
 
-async def serve_cli(lab: Path, *, stop_on_stdin=False, sandbox=False):
+async def serve_cli(lab: Path, *, stop_on_stdin=False, sandbox=False, workshop_drive=None):
     """Drain owned server state on SIGTERM or an optional private stdin pipe.
 
     A daemon reader avoids platform-specific asyncio pipe/signal APIs. It is
@@ -478,7 +486,7 @@ async def serve_cli(lab: Path, *, stop_on_stdin=False, sandbox=False):
     try:
         from .storage import account_access
         with account_access(lab / 'private'):
-            await serve(lab, sandbox=sandbox)
+            await serve(lab, sandbox=sandbox, workshop_drive=workshop_drive)
     except asyncio.CancelledError:
         if not requested:
             raise

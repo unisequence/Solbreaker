@@ -21,6 +21,11 @@ from .storage import account_access
 
 def launch_client(lab, *, auto_login=None, profile=None, url=None, lighting=None):
     with client_configuration_access(lab):
+        root = Path(lab).resolve(strict=True)
+        if (root/'client/Data.before-workshop').exists():
+            from .workshop.install import recover_client_data
+            require_executable_idle(root/'client/wotblitz.exe')
+            recover_client_data(root)
         lab, manifest = ensure_lab(lab)
         executable = lab/'client/wotblitz.exe'
         require_executable_idle(executable)

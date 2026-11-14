@@ -24,6 +24,8 @@ include the game client or its assets; you need your own compatible copy.
 Setup creates a separate client and applies build-pinned executable and UI
 adapters. Their scope and validation are described in [Client patches](docs/CLIENT_PATCHES.md).
 
+This Workshop preview includes a tank editor. Start with the [Workshop guide](docs/TANK_WORKSHOP.md).
+
 ## Start playing
 
 ### Windows x64

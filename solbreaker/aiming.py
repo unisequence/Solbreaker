@@ -27,6 +27,7 @@ class GunAim:
         self.yaw_limits = (-math.pi,math.pi)
         self.front_limits = None
         self.PACKED_MIN, self.PACKED_MAX = self.MIN_PITCH,self.MAX_PITCH
+        self.muzzle_offset = (0., 0., 0.)
         if config is not None:
             self.TURRET, self.GUN = config.turret_position, config.gun_position
             self.MIN_PITCH, self.MAX_PITCH = config.pitch_limits
@@ -36,6 +37,7 @@ class GunAim:
             self.front_limits = config.front_limits
             self.LIMIT_BLEND = config.pitch_transition
             self.PACKED_MIN, self.PACKED_MAX = config.packed_pitch_limits
+            self.muzzle_offset = getattr(config, 'muzzle_offset', self.muzzle_offset)
         self.yaw = self.pitch = 0.0
         self.desired_yaw = self.desired_pitch = 0.0
         self.point = None
@@ -158,6 +160,10 @@ class GunAim:
         tx, ty, tz = self.TURRET
         x, y, z = tx+c*gx+s*gz, ty+gy, tz-s*gx+c*gz
         origin = np.asarray(position)+rot @ (x,y,z)
-        direction = rot @ (math.sin(self.yaw)*math.cos(self.pitch), -math.sin(self.pitch),
-                           math.cos(self.yaw)*math.cos(self.pitch))
+        cp, sp = math.cos(self.pitch), math.sin(self.pitch)
+        direction = rot @ (s*cp, -sp, c*cp)
+        dx, dy, dz = self.muzzle_offset
+        if dx or dy or dz:
+            up, forward = cp*dy-sp*dz, sp*dy+cp*dz
+            origin += rot @ (c*dx+s*forward, up, -s*dx+c*forward)
         return tuple(map(float,origin)), tuple(map(float,direction))
