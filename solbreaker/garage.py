@@ -361,6 +361,12 @@ class GarageStore:
                 PRIMARY KEY(account_id,inventory_id),
                 FOREIGN KEY(account_id,inventory_id) REFERENCES garage_vehicles(account_id,inventory_id)
                     ON DELETE CASCADE)''',
+            '''CREATE TABLE IF NOT EXISTS garage_camouflage (
+                account_id INTEGER NOT NULL, inventory_id INTEGER NOT NULL,
+                camouflage INTEGER NOT NULL,
+                PRIMARY KEY(account_id,inventory_id),
+                FOREIGN KEY(account_id,inventory_id) REFERENCES garage_vehicles(account_id,inventory_id)
+                    ON DELETE CASCADE)''',
             # Native ammunition preferences. A row also marks the inventory as using the paid
             # exchange: `free` tracks trusted grants for configuration-conservation
             # checks only. All owned shells retain their native cash resale value.
@@ -435,6 +441,8 @@ class GarageStore:
                         (account_id,))]
         prefs = {r['inventory_id']: r for r in self.db.execute(
             'SELECT * FROM garage_ammo_prefs WHERE account_id=?', (account_id,))}
+        paints = dict(self.db.execute(
+            'SELECT inventory_id,camouflage FROM garage_camouflage WHERE account_id=?', (account_id,)))
         for v in vehicles:
             if v['id'] in loadouts:
                 v['loadout'] = loadouts[v['id']]
@@ -443,6 +451,8 @@ class GarageStore:
             if row is not None:
                 v.update(ammo_layouts=json.loads(row['layouts']),
                          ammo_free=json.loads(row['free']))
+            if v['id'] in paints:
+                v['camouflage'] = paints[v['id']]
         type_xp = {v['type_cd']: v['xp'] for v in vehicles}
         for r in self.db.execute('SELECT type_cd,xp FROM garage_type_xp WHERE account_id=?', (account_id,)):
             if r['type_cd'] in type_xp:
@@ -451,6 +461,22 @@ class GarageStore:
         return dict(selected_id=profile['selected_id'], free_xp=profile['free_xp'],
                     researched=research, vehicles=vehicles,
                     type_xp=[dict(type_cd=k, xp=type_xp[k]) for k in sorted(type_xp)])
+
+    def set_camouflage(self, account_id, inventory_id, camouflage):
+        _int(camouflage, 'camouflage')
+
+        def action(ctx):
+            self._vehicle(ctx, inventory_id)
+            # Keep an explicit zero after removal so inventory deltas can
+            # clear a paint in an existing native cache.
+            changed = self.db.execute(
+                'INSERT INTO garage_camouflage VALUES (?,?,?) '
+                'ON CONFLICT(account_id,inventory_id) DO UPDATE SET camouflage=excluded.camouflage '
+                'WHERE camouflage != excluded.camouflage',
+                (account_id, inventory_id, camouflage))
+            ctx.changed = bool(changed.rowcount)
+
+        self._run(account_id, None, {}, action)
 
     # -- transaction machinery -----------------------------------------
     def _run(self, account_id, operation_id, request, action):

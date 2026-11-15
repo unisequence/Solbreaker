@@ -4,13 +4,23 @@ from pathlib import Path
 
 from .vehicles import stock_m2, stock_ammo
 
+TRAINING_RETURN = 'Local/BattleSettings/ReturnToBattle'
+
+
+def game_mode_descriptions(training_return):
+    return {
+        1: {'description': TRAINING_RETURN if training_return else 'Local/TargetDescription'},
+        7: {'description': TRAINING_RETURN if training_return else 'Local/BotsDescription'},
+    }
+
 
 @lru_cache(maxsize=2)
 def vehicle_descriptor(game):
     return stock_m2(Path(game))
 
 
-def account_snapshot(previous_revision, game, progress, inventory=None, *, garage=None):
+def account_snapshot(previous_revision, game, progress, inventory=None, *, garage=None,
+                     training_return=False):
     """Full bootstrap when previous_revision is None; otherwise a cache delta."""
     if garage is not None:
         inventory = next((v for v in garage['vehicles'] if v['id'] == garage['selected_id']), None)
@@ -25,8 +35,10 @@ def account_snapshot(previous_revision, game, progress, inventory=None, *, garag
                     "visibleStartTime": 0, "visibleFinishTime": 4102444800}
              for mode, name in ((1, "regular"), (2, "training"),
                                 (6, "tutorial"), (7, "rating"))}
-    modes[1].update(titleString="Local/TargetTitle", description="Local/TargetDescription")
-    modes[7].update(titleString="Local/BotsTitle", description="Local/BotsDescription")
+    modes[1]['titleString'] = 'Local/TargetTitle'
+    modes[7]['titleString'] = 'Local/BotsTitle'
+    for mode, fields in game_mode_descriptions(training_return).items():
+        modes[mode].update(fields)
     snapshot = {"prevRev": previous_revision, "rev": progress["revision"],
             "stats": {"credits": progress["credits"], "gold": progress.get("gold", 0), "freeXP": 0, "slots": 5,
                       "diary": bytes.fromhex(progress.get('diary', ''))},
@@ -44,6 +56,10 @@ def account_snapshot(previous_revision, game, progress, inventory=None, *, garag
             'serialized': {v['id']: bytes.fromhex(v['descriptor']) for v in vehicles},
             'shells': {v['id']: v['shells'] for v in vehicles},
             'settings': {v['id']: v['ammo_settings'] for v in vehicles if 'ammo_settings' in v},
+            # The hangar reads the terrain slot when rendering a vehicle.
+            # Publish all-season paint for winter, summer and desert.
+            'camos': {v['id']: [v['camouflage']] * 3 + [0, 0, 0]
+                      for v in vehicles if 'camouflage' in v},
             # Native layout keys are typed compact turret/gun descriptors;
             # signed shell CDs retain the per-shell currency choice, even at0.
             'shellsLayout': {v['id']: {

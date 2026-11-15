@@ -150,6 +150,7 @@ class SweepCache:
         self._angles = {}
         self._translations = {}
         self._samples = {}
+        self._target_bounds = None
 
     def check(self, before, after):
         if self.before is not before or self.after is not after:
@@ -161,6 +162,20 @@ class SweepCache:
             entry = (old, new, _quaternion_angle(old.orientation, new.orientation))
             self._angles[entity] = entry
         return entry[2]
+
+    def candidates(self, world, projectile, dt):
+        bounds = _shell_bounds(projectile, dt)
+        if bounds is None:
+            return None
+        if self._target_bounds is None:
+            self._target_bounds = {
+                entity: _swept_target_bounds(world.assets_for(entity).armor, old, self.after[entity])
+                for entity, old in self.before.items() if entity in self.after
+            }
+        return tuple(entity for entity, target in self._target_bounds.items()
+                     if entity != projectile.shooter
+                     and (target is None or all(a <= d and c <= b
+                          for (a, b), (c, d) in zip(bounds, target))))
 
     def sample(self, entity, old, new, fraction):
         key = (entity, id(old), id(new), type(fraction), fraction, struct.pack('<d',fraction))
@@ -290,6 +305,7 @@ class Projectile:
     # state that produced an Impact while the projectile itself remains live.
     target_armor_state: MovableArmorStateSnapshot | None = None
     last_external_frame: tuple | None = None
+    trace_effect: int | None = None
 
     def __post_init__(self):
         if (self.target_armor_state is not None and
@@ -331,6 +347,38 @@ class Projectile:
 _AXIS_F64 = np.dtype('float64')
 
 
+def _swept_target_bounds(model, before, after):
+    # The hull-centred sphere covers every attitude and turret position.
+    # Its centre moves linearly between the two snapshots.
+    if type(model) is not ArmorModel:
+        return None
+    radius = model.radius
+    first, last = before.pose.position, after.pose.position
+    if not 0 <= radius < 1e6 or not all(abs(value) < 1e6 for value in (*first, *last)):
+        return None
+    radius += 1e-5
+    return tuple((min(a, b)-radius, max(a, b)+radius) for a, b in zip(first, last))
+
+
+def _shell_bounds(projectile, dt):
+    # A ballistic segment is a parabola. All sampled chords lie inside
+    # its axis bounds, including the apex if it occurs during this step.
+    x, y, z = projectile.position
+    vx, vy, vz = projectile.velocity
+    gravity = projectile.shell.gravity
+    dy = vy*dt
+    drop = .5*gravity*dt*dt
+    end_x, end_z = x + vx*dt, z + vz*dt
+    if not all(abs(value) < 1e6 for value in (x, y, z, end_x, end_z, dy, drop)):
+        return None
+    end_y = y + dy - drop
+    ys = [y, end_y]
+    if gravity and 0 < vy/gravity < dt:
+        ys.append(y + .5*vy*(vy/gravity))
+    return ((min(x, end_x), max(x, end_x)), (min(ys), max(ys)),
+            (min(z, end_z), max(z, end_z)))
+
+
 def _axis_sweep_input_ok(start,delta,limit):
     return (type(start) is np.ndarray and type(delta) is np.ndarray
         and start.shape==delta.shape==(3,) and start.dtype==delta.dtype==_AXIS_F64
@@ -347,7 +395,6 @@ def _axis_sweep_miss(cache,center,shift,start,delta,limit,model):
     radius=model.__dict__.get('radius')
     if type(radius) not in (float,int,np.float64):return False
     if not 0.<=radius<1e6:return False
-    radius,limit=float(radius),float(limit)
     memo=getattr(cache,'_axis_ranges',None)
     if memo is None:cache._axis_ranges=memo={}
     key=id(center),id(shift)
@@ -364,10 +411,10 @@ def _axis_sweep_miss(cache,center,shift,start,delta,limit,model):
     # greatly exceeds accumulated binary64 endpoint/norm rounding here.
     # This widens only this optional prefilter; the old sphere test is
     # still evaluated for every survivor, with its original radius.
-    bound=radius+1e-5
+    bound=float(radius)+1e-5
     c,d=data[2:4]
     for axis in (0,2,1):
-        p=float(start[axis]);v=float(delta[axis])-d[axis]
+        p=start[axis];v=delta[axis]-d[axis]
         first=p-c[axis];last=(p+v*limit)-c[axis]
         if (first>bound and last>bound) or (first< -bound and last< -bound):
             return True
@@ -375,7 +422,7 @@ def _axis_sweep_miss(cache,center,shift,start,delta,limit,model):
 
 
 def armor_contacts(world, projectile, start, delta, before, after, left, right, limit,
-                   *, sweep_cache=None):
+                   *, sweep_cache=None, candidates=None):
     """Return sorted contacts as fractions of this shell segment, not ray range."""
     if not 0 <= left <= 1 or not 0 <= right <= 1:
         raise ValueError('Invalid interpolation fraction')
@@ -384,9 +431,14 @@ def armor_contacts(world, projectile, start, delta, before, after, left, right, 
         fraction_key = (type(left),type(right),left,right,struct.pack('<2d',left,right))
     contacts = []
     axis_ok = type(sweep_cache) is SweepCache and _axis_sweep_input_ok(start,delta,limit)
-    for entity,old in before.items():
+    if axis_ok:
+        axis_start = tuple(map(float, start))
+        axis_delta = tuple(map(float, delta))
+        axis_limit = float(limit)
+    for entity in before if candidates is None else candidates:
         if entity == projectile.shooter:
             continue
+        old = before[entity]
         model = world.assets_for(entity).armor
         new = after[entity]
         # The spherical broadphase depends only on translation. Use the exact
@@ -401,7 +453,8 @@ def armor_contacts(world, projectile, start, delta, before, after, left, right, 
         # Freeze the target at its initial position and subtract its translation
         # from the shell segment. This detects crossing even if neither endpoint
         # overlaps the tank. Use midpoint orientation to bound rotation error.
-        if axis_ok and _axis_sweep_miss(sweep_cache,center,displacement,start,delta,limit,model):
+        if axis_ok and _axis_sweep_miss(sweep_cache, center, displacement,
+                                       axis_start, axis_delta, axis_limit, model):
             continue
         relative = delta-displacement
         length = _vector_length(relative)
@@ -450,16 +503,25 @@ def _missile_velocity(projectile, position, velocity, target, dt):
     return direction*speed
 
 
-def advance(projectile, world, before, after, dt, rng, *, sweep_cache=None, missile_target=None):
+def advance(projectile, world, before, after, dt, rng, *, sweep_cache=None, missile_target=None,
+            prop_contact=None):
     """Advance one shell over this world step; return only an actual contact/end."""
     # A free rigid body can rotate far faster than a tracked hull.  Keep the
     # same time cap for gravity and translational sweep, plus a strictly bound
     # angular cap for the midpoint armor samples.
-    if sweep_cache is not None:
+    candidates = None
+    if world is not None and projectile.shell.missile is None:
+        # Only targets that can overlap this trajectory justify smaller
+        # angular steps. Guided missiles keep their original steering cadence.
+        sweep_cache = sweep_cache if sweep_cache is not None else SweepCache(before, after)
+        sweep_cache.check(before, after)
+        candidates = sweep_cache.candidates(world, projectile, dt)
+    elif sweep_cache is not None:
         sweep_cache.check(before,after)
     max_turn = max((sweep_cache.angle(entity,before[entity],after[entity]) if sweep_cache is not None
                     else _quaternion_angle(before[entity].orientation,after[entity].orientation)
-                    for entity in before if entity != projectile.shooter and entity in after), default=0.)
+                    for entity in (before if candidates is None else candidates)
+                    if entity != projectile.shooter and entity in after), default=0.)
     query_options = {'sweep_cache':sweep_cache} if sweep_cache is not None else {}
     count = max(1,math.ceil(dt/MAX_STEP),math.ceil(max_turn/MAX_ROTATION_STEP))
     h = dt/count
@@ -482,7 +544,7 @@ def advance(projectile, world, before, after, dt, rng, *, sweep_cache=None, miss
         limit = wall_fraction*range_fraction
         if world:
             for fraction,target,hit,relative_direction in armor_contacts(world,projectile,start,delta,before,after,
-                                                      i/count,(i+1)/count,limit,**query_options):
+                                                      i/count,(i+1)/count,limit,candidates=candidates,**query_options):
                 tangent = velocity+acceleration*(h*fraction)
                 tangent /= np.linalg.norm(tangent)
                 # Contact data keeps its historical compact tuple shape for
@@ -532,7 +594,10 @@ def advance(projectile, world, before, after, dt, rng, *, sweep_cache=None, miss
             # substep. A tank immediately behind it must not be skipped.
             contact_velocity = velocity+acceleration*(h*limit)
             direction = contact_velocity/np.linalg.norm(contact_velocity)
-            world.destroy(world.breakable_bodies[body],tuple(direction[::2]))
+            key = world.breakable_bodies[body]
+            lateral = tuple(map(float, direction[::2]))
+            if world.destroy(key, lateral) and prop_contact is not None:
+                prop_contact(key, lateral, projectile.time+h*limit)
             projectile.penetration.prop_factor *= .95
             projectile.position = tuple(point)
             projectile.velocity = tuple(map(float,contact_velocity))
@@ -545,7 +610,7 @@ def advance(projectile, world, before, after, dt, rng, *, sweep_cache=None, miss
                 segment_after = {entity:interpolate(old,after[entity],(i+1)/count)
                                  for entity,old in before.items() if entity in after}
                 impact = advance(projectile,world,segment_before,segment_after,remainder,rng,
-                                 missile_target=missile_target)
+                                 missile_target=missile_target, prop_contact=prop_contact)
                 if impact is not None:
                     return impact
             continue

@@ -7,9 +7,9 @@ import pickle
 import struct
 import time
 
-from .arena import Arena
+from .arena import Arena, TrainingSpawnUnavailable
 from .training_config import RoomBattleSettings
-from .arena_commands import apply_input, decode_input
+from .arena_commands import apply_at_tick, decode_input
 from .arena_owner import (AddressedPayload, Command, CommandRejected, HandlerOutput,
                           MotionPayload, SettlementData, SettlementRecord, SpawnData)
 from .battle import (event_messages, initial_messages, motion_messages, present_vehicles,
@@ -18,14 +18,15 @@ from .collision import CollisionScene
 from .map_catalog import load_map_spec
 from .map_cache import MapCache
 from .sim_native import runtime_status
+from .sandbox import training_reentry_enabled
 from .terrain import MapTerrain
-from .vehicle_data import load_vehicle
+from .vehicle_data import VehicleDefinition, load_vehicle
 
 _KINDS = {'ready': 135, 'control': 145, 'aim': 149, 'aim_entity': 16, 'aim_entity_local': 17, 'fire': 138,
           'autoaim': 13, 'autoaim_point': 18, 'aim_angles': 148, 'consumable': 20, 'select_shell': 147}
 
 
-def snapshot(arena: Arena, events=(), *, account_id=None) -> bytes:
+def snapshot(arena: Arena, events=(), *, account_id=None, training_error=None) -> bytes:
     """Versioned parent observation, not a resumable physics checkpoint."""
     vehicles = (sorted(arena.vehicles.items()) if account_id is None else
                 ((arena.players[account_id].vehicle_id, arena.vehicle_for(account_id)),))
@@ -61,6 +62,9 @@ def snapshot(arena: Arena, events=(), *, account_id=None) -> bytes:
         # mirror as a full snapshot at this boundary.
         state['flags'] = tuple((eid, v.flags) for eid, v in sorted(arena.vehicles.items()))
     else:
+        state['training_reentry'] = training_reentry_enabled(arena)
+        if training_error is not None:
+            state['training_error'] = training_error
         if getattr(arena, 'practice', False):
             state['practice_spawned'] = tuple(sorted(arena.practice_spawned))
         capture = getattr(arena, 'base_capture', None)
@@ -72,12 +76,23 @@ def snapshot(arena: Arena, events=(), *, account_id=None) -> bytes:
     return pickle.dumps(state, protocol=5)
 
 
+@dataclass(frozen=True, slots=True)
+class TrainingTank:
+    inventory_id: int
+    definition: VehicleDefinition
+    shells: tuple
+    consumables: tuple
+    scene_settings: dict
+    camouflage: int = 0
+
+
 class GameArenaHandler:
-    def __init__(self, arena: Arena, scene: CollisionScene, *, compact_inputs=False):
+    def __init__(self, arena: Arena, scene: CollisionScene, *, compact_inputs=False, game=None):
         if type(compact_inputs) is not bool:
             raise ValueError('invalid compact input observation setting')
         self.arena = arena
         self.scene = scene
+        self.game = game
         self._joined = set(arena.players)
         self._reconnecting = set()
         self._closed = False
@@ -104,6 +119,16 @@ class GameArenaHandler:
             player = self.arena.players[command.account_id]
             if player.inventory_id is not None and self.arena.vehicle_for(command.account_id).loadout_shells is None:
                 raise CommandRejected('missing immutable ammunition snapshot')
+        if command.op in ('training_park', 'training_swap'):
+            account = command.account_id
+            player = self.arena.players[account]
+            parked = account in self.arena.hangar_players
+            if (not training_reentry_enabled(self.arena) or not player.attached
+                    or not self.arena.training_tank_available(account)):
+                raise CommandRejected('Training return is unavailable')
+            if (command.op == 'training_park' and (parked or not player.loaded)
+                    or command.op == 'training_swap' and not parked):
+                raise CommandRejected('Invalid training player state')
         if command.op.startswith('recon_'):
             player = self.arena.players[command.account_id]
             if self.arena.recon is None:
@@ -126,7 +151,7 @@ class GameArenaHandler:
                 motion_messages(self.arena, self.arena.players[account], frame) if frame is not None else b'')
                 for account in recipients)
             return HandlerOutput(self.arena.result_id, b'', (), motions=motions)
-        active = sorted(self._joined)
+        active = sorted(self._joined - self.arena.hangar_players)
         if command.op in ('spawn', 'reconnect'):
             player = self.arena.players[command.account_id]
             reconnect = command.op == 'reconnect'
@@ -149,6 +174,8 @@ class GameArenaHandler:
                 self.arena._start_if_ready(command.at)
                 return HandlerOutput(self.arena.result_id, snapshot(self.arena), outgoing)
             return HandlerOutput(self.arena.result_id, self._observation(command), ())
+        if command.account_id in self.arena.hangar_players and (command.op in _KINDS or command.op == 'sandbox'):
+            return HandlerOutput(self.arena.result_id, self._observation(command), ())
         if command.op in ('motion', 'motion_light'):
             frame = self.arena.motion_frame if self.arena.started else None
             # Parent owns tick_sync, per-client cadence, spawn and transport.
@@ -169,16 +196,29 @@ class GameArenaHandler:
             from .recon_snapshot import RosterVehicle, build_recon_snapshot
             from .recon_wire import encode
             sequence = struct.unpack('<I', command.payload)[0]
+            player = self.arena.players[command.account_id]
+            timeline = getattr(self.arena, 'time_stop', None)
+            battle_id = uuid.UUID(self.arena.result_id)
+            if timeline is not None:
+                private = timeline.recon_snapshot(player.vehicle_id, battle_id, sequence)
+                if private is not None:
+                    return HandlerOutput(self.arena.result_id, snapshot(self.arena), (), recon=encode(private))
             roster = tuple(RosterVehicle(vehicle.entity_id, vehicle.team, vehicle.alive)
-                           for _, vehicle in present_vehicles(self.arena))
-            observer = self.arena.players[command.account_id].vehicle_id
+                           for _, vehicle in present_vehicles(self.arena, player))
             payload = encode(build_recon_snapshot(
-                self.arena.recon, roster, observer,
-                battle_id=uuid.UUID(self.arena.result_id), sequence=sequence,
+                self.arena.recon, roster, player.vehicle_id,
+                battle_id=battle_id, sequence=sequence,
                 now=self.arena.simulation_time))
             return HandlerOutput(self.arena.result_id, snapshot(self.arena), (), recon=payload)
         if command.op == 'step':
             self.arena.step(command.at, deadline=command.deadline)
+        elif command.op == 'training_park':
+            self.arena.reserve_training_seat(command.account_id)
+            active.remove(command.account_id)
+        elif command.op == 'training_swap':
+            error = self._swap_training_tank(command)
+            if error is not None:
+                return HandlerOutput(self.arena.result_id, snapshot(self.arena, training_error=error), ())
         elif command.op == 'flush':
             pass
         elif command.op in ('leave', 'disconnect'):
@@ -187,17 +227,15 @@ class GameArenaHandler:
         elif command.op == 'sandbox':
             from .sandbox import Control
             self.arena.sandbox_control(command.account_id, Control.decode(command.payload))
+        elif command.op == 'time_stop_cancel':
+            self.arena.cancel_time_stop(command.account_id)
+            self.arena.vehicle_for(command.account_id).flags = 0
         elif command.op in _KINDS:
             input_at = command.at if command.op == 'ready' else self.arena.last_tick
             decoded = decode_input(command.account_id, _KINDS[command.op], command.payload, input_at)
             if decoded is None:
                 raise ValueError('unsupported arena input')
-            previous = self.arena._input_only
-            self.arena._input_only = True
-            try:
-                apply_input(self.arena, decoded)
-            finally:
-                self.arena._input_only = previous
+            apply_at_tick(self.arena, decoded)
         else:
             raise ValueError('unsupported arena operation')
         events = self.arena.drain_events()
@@ -227,6 +265,35 @@ class GameArenaHandler:
             settlement = None
         return HandlerOutput(self.arena.result_id, self._observation(command,events),
                              tuple(outgoing), settlement=settlement)
+
+    def _swap_training_tank(self, command):
+        tank = pickle.loads(command.payload)
+        if type(tank) is not TrainingTank or type(tank.inventory_id) is not int or tank.inventory_id <= 0:
+            raise ValueError('Invalid training tank recipe')
+        arena = self.arena
+        account = command.account_id
+        current = arena.world.assets_for(arena.players[account].vehicle_id)
+        scene = current
+        if current.definition != tank.definition:
+            try:
+                scene = current.for_vehicle(self.game, tank.definition)
+                GameArenaFactory._configure(scene, tank.scene_settings)
+                scene.prepare(arena.terrain)
+            except (ValueError, OSError):
+                if scene is not current:
+                    scene.close()
+                return 'The selected tank resources could not be loaded'
+        try:
+            arena.reenter_training(account, scene, tank.shells, tank.consumables,
+                                   camouflage=tank.camouflage)
+        except TrainingSpawnUnavailable as exc:
+            if scene is not current:
+                scene.close()
+            return str(exc)
+        arena.training_swappers.add(account)
+        arena.players[account].inventory_id = tank.inventory_id
+        self._reconnecting.add(account)
+        return None
 
     def close(self) -> None:
         if self._closed:
@@ -342,7 +409,7 @@ class GameArenaFactory:
             for resource in scenes:
                 resource.close()
             raise
-        handler = GameArenaHandler(arena, SceneGroup(scenes), compact_inputs=compact)
+        handler = GameArenaHandler(arena, SceneGroup(scenes), compact_inputs=compact, game=self.game)
         navigation = getattr(arena.bot_director, 'navigation', None)
         handler.startup_metrics = dict(scene_ms=scene_ms, roster_ms=roster_ms,
             navigation_ms=getattr(arena, 'navigation_build_ms', 0.),

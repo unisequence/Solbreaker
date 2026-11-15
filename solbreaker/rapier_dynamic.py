@@ -49,6 +49,10 @@ class RapierDynamic:
         self.library.tfs_rapier_step.restype = C.c_int32
         self.library.tfs_rapier_deactivate.argtypes = [C.c_void_p, C.c_uint32]
         self.library.tfs_rapier_deactivate.restype = C.c_int32
+        self._sensor_enabled = getattr(self.library, 'tfs_rapier_sensor_enabled', None)
+        if self._sensor_enabled is not None:
+            self._sensor_enabled.argtypes = [C.c_void_p, C.c_uint32, C.c_bool]
+            self._sensor_enabled.restype = C.c_int32
         self.library.tfs_rapier_destroy.argtypes = [C.c_void_p, C.c_char_p]
         self.library.tfs_rapier_destroy.restype = None
         self.library.tfs_rapier_close.argtypes = [C.c_void_p]
@@ -123,6 +127,15 @@ class RapierDynamic:
             raise RuntimeError(f'Rapier velocity update failed: {result}')
 
     @_serialized
+    def replace_vehicle(self, vehicle):
+        self._require_open()
+        replace = self.library.tfs_rapier_replace_vehicle
+        replace.argtypes = [C.c_void_p, C.c_char_p]
+        replace.restype = C.c_int32
+        if replace(self.handle, json.dumps(vehicle, allow_nan=False).encode()):
+            raise RuntimeError('Rapier vehicle replacement failed')
+
+    @_serialized
     def sync(self, rows):
         self._require_open()
         if self.library.tfs_rapier_sync(self.handle, json.dumps(rows, allow_nan=False).encode()) != 0:
@@ -145,6 +158,12 @@ class RapierDynamic:
         self._require_open()
         if self.library.tfs_rapier_deactivate(self.handle, entity) != 0:
             raise RuntimeError('Rapier dynamic deactivation failed')
+
+    @_serialized
+    def set_sensor_enabled(self, entity, enabled):
+        self._require_open()
+        if self._sensor_enabled is not None and self._sensor_enabled(self.handle, entity, enabled):
+            raise RuntimeError('Rapier sensor update failed')
 
     @_serialized
     def static_rays(self, starts, ends):

@@ -17,9 +17,12 @@ LABEL_KEY = '#solbreaker:MotionBlur'
 
 
 def battle_framebuffer(source):
+    from .client_time_stop import patch_hud
+
     document = yaml.safe_load(dvpl.decode(source))
     patch_boss_screen(document)
     root, = document['Prototypes']
+    patch_hud(root)
     scene, = (node for node in _walk(root) if node.get('class') == 'UI3DView' and node.get('name') == 'Scene')
     scene['components'].setdefault('SceneComponent', {})['drawToFramebuffer'] = True
     return dvpl.encode(yaml.safe_dump(document, sort_keys=False).encode())
@@ -33,7 +36,8 @@ def motion_blur_shader(source):
     # includes are read from the player's installation.
     shader = shader.replace(b'\r\n', b'\n')
     shader = shader.replace(b'uniform sampler2D tex;', b'''uniform sampler2D tex;
-[material][a] property float4 solbreakerCameraBlur = float4(0.0, 0.0, 0.0, 0.0);''')
+[material][a] property float4 solbreakerCameraBlur = float4(0.0, 0.0, 0.0, 0.0);
+[material][a] property float4 solbreakerTemporalGlitch = float4(0.0, 0.0, 0.0, 0.0);''')
     shader = shader.replace(b'#if COLOR_GRADING\n    half3 graded', b'''    float2 travel = solbreakerCameraBlur.xy;
     if (dot(travel, travel) > 0.00000000125)
     {
@@ -44,6 +48,40 @@ def motion_blur_shader(source):
             tex2D(tex, clamp(uv + travel * 0.75, 0.0, 1.0)) +
             tex2D(tex, clamp(uv + travel, 0.0, 1.0));
         output.color.rgb = output.color.rgb * 0.28 + trail.rgb * 0.18;
+    }
+    float temporal = solbreakerCameraBlur.z;
+    if (temporal > 0.0001)
+    {
+        float brightness = dot(output.color.rgb, float3(0.2126, 0.7152, 0.0722));
+        float3 stillFrame = brightness * float3(0.77, 0.98, 1.12);
+        float2 centered = input.uv * 2.0 - float2(1.0, 1.0);
+        float rim = smoothstep(0.32, 1.42, dot(centered, centered));
+        output.color.rgb = lerp(output.color.rgb, stillFrame, temporal)
+                         + float3(0.10, 0.35, 0.44) * rim * solbreakerCameraBlur.w;
+    }
+
+    float radius = solbreakerTemporalGlitch.z;
+    if (radius > 0.0001)
+    {
+        float phase = abs(solbreakerTemporalGlitch.w);
+        float attack = smoothstep(0.0, 0.18, phase);
+        float decay = 1.0 - smoothstep(0.18, 1.0, phase);
+        float envelope = solbreakerTemporalGlitch.w < 0.0 ? decay * decay : attack * decay;
+        float2 local = (input.uv - solbreakerTemporalGlitch.xy) / radius;
+        local.y *= 1.65;
+        float mask = 1.0 - smoothstep(0.15, 1.0, dot(local, local));
+        if (mask > 0.0)
+        {
+            float row = local.y * 5.0 + floor(phase * 6.0) * 0.67;
+            float stripe = step(0.54, row - floor(row));
+            float split = min(0.009, radius * 0.11) * envelope * (0.4 + 0.6 * stripe);
+            float2 shift = float2(split * (2.0 * stripe - 1.0), 0.0);
+            float3 left = tex2D(tex, clamp(input.uv - shift, 0.0, 1.0)).rgb;
+            float3 right = tex2D(tex, clamp(input.uv + shift, 0.0, 1.0)).rgb;
+            float3 channels = float3(left.r, right.g, right.b);
+            float3 color = lerp(float3(0.31, 0.04, 0.18), float3(0.02, 0.21, 0.31), stripe);
+            output.color.rgb = lerp(output.color.rgb, channels + color, mask * envelope * 0.64);
+        }
     }
 
 #if COLOR_GRADING

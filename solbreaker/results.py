@@ -37,14 +37,15 @@ def snapshot(arena, account_id, credits=None):
             defense_points=math.floor(getattr(v, 'defense_points', 0.) + 1e-8),
             life_time=max(0,int((v.death_at or arena.finished_at)-arena.started))))
         participant = arena.players.get(v.account_id)
-        if participant is not None and participant.inventory_id is not None:
+        if (participant is not None and participant.inventory_id is not None
+                and v.account_id not in getattr(arena, 'training_swappers', ())):
             vehicles[-1].update(xp=reward.vehicle_xp, free_xp=reward.free_xp)
     report = dict(unique_id=arena.unique_id, account_id=account_id,
         vehicle_id=player.vehicle_id, team=player.team,
         arena_type=getattr(arena, 'client_map_id', arena.map_id), bonus_type=2,
         created=int(arena.created_at), duration=max(0, int(arena.finished_at-arena.started)),
         winner=arena.winner, reason=arena.finish_reason, credits=credits, vehicles=vehicles)
-    if player.inventory_id is not None:
+    if player.inventory_id is not None and account_id not in getattr(arena, 'training_swappers', ()):
         own = next(v for v in vehicles if v['entity_id']==player.vehicle_id)
         report.update(inventory_id=player.inventory_id, vehicle_xp=own['xp'], free_xp=own['free_xp'])
     return report

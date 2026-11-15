@@ -1,8 +1,4 @@
-"""Serializable player inputs for an arena owner.
-
-Decoding and application are separate so a future arena process can consume
-commands in their original order. The current server applies them immediately.
-"""
+"""Decode and apply player inputs for both arena schedulers."""
 from dataclasses import dataclass
 import struct
 
@@ -51,9 +47,14 @@ def apply_input(arena, command):
     """Apply one decoded command using the established Arena methods."""
     if command is None:
         return
+    timeline = getattr(arena, 'time_stop', None)
+    if timeline is not None and timeline.accept(command):
+        return
     account, action, args, now = command.account_id, command.action, command.arguments, command.now
     if action == 'ready':
         arena.ready(account, now)
+    elif action == 'sandbox':
+        arena.sandbox_control(account, *args)
     elif action == 'control':
         arena.control(account, *args, now)
     elif action in ('autoaim', 'autoaim_point'):
@@ -81,3 +82,13 @@ def apply_input(arena, command):
         arena.select_shell(account, *args, now=now)
     else:
         raise ValueError('Unknown arena command')
+
+
+def apply_at_tick(arena, command):
+    """Apply input on the current simulation clock without running physics."""
+    previous = arena._input_only
+    arena._input_only = True
+    try:
+        apply_input(arena, command)
+    finally:
+        arena._input_only = previous

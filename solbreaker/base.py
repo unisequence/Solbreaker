@@ -21,11 +21,12 @@ from .account import spa_token_response
 from .account import random_queue_message
 from .account import account_update, account_sync_response
 from .mercury import packed_blob, read_blob
-from .profile import account_snapshot
+from .profile import account_snapshot, game_mode_descriptions
 from .catalog import synchronized_catalog, maps_configuration
 from .battle import (initial_messages, spawn_batches, reconnect_batches, motion_messages, event_messages,
-                     dispatch_input, battle_hints_message, ammo_message, avatar_method)
+                     battle_hints_message, ammo_message, avatar_method)
 from .arena import ArenaManager
+from .arena_commands import apply_at_tick, decode_input
 from .vehicle_data import VehicleConfiguration
 from .terrain import MapTerrain
 from .map_catalog import WEATHER_MAPS, load_map_spec, training_map_catalog
@@ -83,6 +84,11 @@ class ClientSession:
     ammo_operation_serial: int = 0
     ammo_last_request: tuple | None = None
     reconnect_replay: bool = False
+    training_swap_refresh_at: float = 0.
+    training_hangar_sync: bool = False
+    training_reentry_at: float = 0.
+    training_swap_pending: bool = False
+    training_swap_inventory: int | None = None
     sandbox_input: tuple | None = None
     _packet_cipher: PacketCipher | None = field(default=None, init=False, repr=False, compare=False)
 
@@ -117,6 +123,7 @@ class ReconnectLease:
     account_id: int
     arena_id: str
     expires_at: float
+    choose_tank: bool = False
 
 
 # Kept for callers of the original transport-only class name.
@@ -196,6 +203,9 @@ class BaseEndpoint(asyncio.DatagramProtocol):
     # Give HTTP/UDP callbacks a turn between batches of complete 60 Hz steps.
     # One individually expensive step can exceed this wall budget.
     SIMULATION_BUDGET = .008
+    INPUTS_PER_SESSION = 64
+    INPUTS_PER_TICK = 64
+    INPUTS_PER_ARENA = 1024
     # Native ready can precede a blocking map/hangar render-resource load.
     # The bounded grace belongs to entity replacement, not regular traffic.
     ENTITY_LOAD_GRACE = 45.
@@ -203,6 +213,7 @@ class BaseEndpoint(asyncio.DatagramProtocol):
     # its authenticated owner has had a chance to create a fresh BaseApp
     # session.  This is deliberately independent of packet retry timeouts.
     RECONNECT_GRACE = 90.
+    TRAINING_HANGAR_GRACE = 120.
     FAULT_RETRY = 5.
 
     @cached_property
@@ -722,6 +733,10 @@ class BaseEndpoint(asyncio.DatagramProtocol):
             self.reconnects = {}
         return self.reconnects
 
+    def choosing_training_tank(self, account_id):
+        lease = self._reconnects().get(account_id)
+        return bool(lease and lease.choose_tank)
+
     @staticmethod
     def _transport_loss(reason):
         return reason in {'idle timeout', 'reliable send window exceeded',
@@ -738,6 +753,9 @@ class BaseEndpoint(asyncio.DatagramProtocol):
         # burst, crew or vehicle state.  Those belong to the arena, not UDP.
         if getattr(arena, 'owner_backed', False):
             self.owner_service.stop_control(arena, client.account_id)
+        elif getattr(arena, 'time_stop_enabled', False):
+            arena.cancel_time_stop(client.account_id)
+            self.flush_arena(arena)
         vehicle.flags = 0
         vehicle.last_input = arena.simulation_time
         self._reconnects()[client.account_id] = ReconnectLease(
@@ -759,6 +777,9 @@ class BaseEndpoint(asyncio.DatagramProtocol):
         if (arena is None or arena.building or arena.closed or arena.retiring
                 or player is None or not player.attached):
             self._reconnects().pop(client.account_id, None)
+            return False
+        if lease.choose_tank:
+            # A reconnect to the garage keeps the reserved seat selectable.
             return False
         self._reconnects().pop(client.account_id, None)
         client.arena_id = arena.result_id
@@ -784,10 +805,11 @@ class BaseEndpoint(asyncio.DatagramProtocol):
         for account_id, lease in list(self._reconnects().items()):
             if only_account is not None and account_id != only_account:
                 continue
-            if only_account is None and now < lease.expires_at:
+            arena = self.arenas.get(lease.arena_id)
+            if (only_account is None and now < lease.expires_at
+                    and not (lease.choose_tank and (arena is None or arena.finished_at))):
                 continue
             self._reconnects().pop(account_id, None)
-            arena = self.arenas.get(lease.arena_id)
             if arena is not None and account_id in arena.players:
                 try:
                     if getattr(arena, 'owner_backed', False):
@@ -800,10 +822,23 @@ class BaseEndpoint(asyncio.DatagramProtocol):
                         self.arenas.remove_if_empty(arena)
                 except Exception as exc:
                     self._quarantine_arena(arena, 'reconnect_expiry', exc, now)
-            try:
-                self.rooms.leave(account_id, disconnected=True)
-            except Exception as exc:
-                self._report_fault('reconnect_room_cleanup', exc, account_id=account_id)
+            if not lease.choose_tank or not any(c.account_id == account_id for c in self.clients.values()):
+                try:
+                    self.rooms.leave(account_id, disconnected=True)
+                except Exception as exc:
+                    self._report_fault('reconnect_room_cleanup', exc, account_id=account_id)
+            elif lease.choose_tank:
+                for addr, client in tuple(self.clients.items()):
+                    if (client.account_id == account_id and client.phase == 'account'
+                            and client.account_revision is not None):
+                        rev = client.account_revision
+                        try:
+                            self.send(addr, client, b'\x13' + account_update({
+                                'prevRev': rev, 'rev': rev,
+                                'cache': {'gameModes': game_mode_descriptions(False)},
+                            }))
+                        except ChannelOverflow:
+                            self._disconnect_client(addr, 'reliable send window exceeded')
             self.server.event('battle_reconnect_expired', account_id=account_id,
                               arena_id=lease.arena_id)
 
@@ -829,7 +864,7 @@ class BaseEndpoint(asyncio.DatagramProtocol):
                         arena, 'Participant disconnected during owner startup')
                 else:
                     self.loading.cancel(arena,'Participant disconnected during world construction')
-            elif self._transport_loss(reason):
+            elif self._transport_loss(reason) and not getattr(client, 'training_swap_pending', False):
                 held = self._reserve_reconnect(client, arena, time.monotonic())
             if not held and not arena.building:
                 self._reconnects().pop(client.account_id, None)
@@ -841,7 +876,8 @@ class BaseEndpoint(asyncio.DatagramProtocol):
                     if arena.finished_at:
                         self.rooms.sync()
                     self.arenas.remove_if_empty(arena)
-        if client and not held:
+        lease = self._reconnects().get(client.account_id) if client else None
+        if client and not held and not (lease and lease.choose_tank):
             try:
                 self.rooms.leave(client.account_id,disconnected=True)
             except Exception as exc:
@@ -923,6 +959,7 @@ class BaseEndpoint(asyncio.DatagramProtocol):
                 self._retry_faulted_result(arena, fault, now)
                 continue
             try:
+                self._apply_arena_inputs(arena, deadline)
                 arena.step(now, deadline=deadline)
                 self.flush_arena(arena)
                 if arena.result_id in self.arena_faults:
@@ -988,6 +1025,37 @@ class BaseEndpoint(asyncio.DatagramProtocol):
                 except (ValueError, OSError, KeyError, TypeError) as exc:
                     self.server.event("local_rpc_rejected", reason=str(exc))
                     path.rename(path.with_suffix(".rejected"))
+
+    def queue_arena_input(self, addr, client, arena, command):
+        if command is None or arena.retiring or arena.closed:
+            return
+        identity = id(client)
+        if (arena.pending_input_counts[identity] >= self.INPUTS_PER_SESSION
+                or len(arena.pending_inputs) >= self.INPUTS_PER_ARENA):
+            raise ChannelOverflow('Battle input queue exceeded')
+        arena.pending_inputs.append((addr, client, command))
+        arena.pending_input_counts[identity] += 1
+
+    def _apply_arena_inputs(self, arena, deadline):
+        pending = arena.pending_inputs
+        for _ in range(self.INPUTS_PER_TICK):
+            if not pending or time.monotonic() >= deadline:
+                break
+            addr, client, command = pending.popleft()
+            identity = id(client)
+            arena.pending_input_counts[identity] -= 1
+            if not arena.pending_input_counts[identity]:
+                del arena.pending_input_counts[identity]
+            if (self.clients.get(addr) is not client or client.arena_id != arena.result_id
+                    or client.phase != 'battle' or client.reconnect_replay
+                    or not arena.players[client.account_id].attached):
+                continue
+            try:
+                if command.action == 'ready' and not arena.players[client.account_id].loaded:
+                    client.load_grace_until = time.monotonic() + self.ENTITY_LOAD_GRACE
+                apply_at_tick(arena, command)
+            except (ValueError, struct.error) as exc:
+                self.server.event('base_rejected', reason=str(exc))
 
     def flush_arena(self, arena):
         events = arena.drain_events()
@@ -1154,6 +1222,19 @@ class BaseEndpoint(asyncio.DatagramProtocol):
         if not client.pending and now-client.last_reliable_sent>=2:
             self.send_packet(addr,client,b'',reliable=True)
         arena = self.arenas.get(client.arena_id)
+        if arena and client.battle_spawned:
+            from .sandbox import change_tank_message, training_reentry_enabled
+            player = arena.players[client.account_id]
+            refresh = getattr(client, 'training_swap_refresh_at', 0.)
+            if (now >= refresh and client.reliable_window_used < 200
+                    and getattr(self, 'progression', None) is not None
+                    and not client.reconnect_replay and player.loaded and training_reentry_enabled(arena)):
+                self.send(addr, client, change_tank_message(arena))
+                # Native ResetEntities can clear the previous capability.
+                client.training_swap_refresh_at = now + 2.
+                if not refresh:
+                    self.server.event('training_swap_advertised', account_id=client.account_id,
+                                      arena_id=arena.result_id)
         if getattr(arena, 'owner_backed', False):
             if client.battle_spawned:
                 if not arena.started:
@@ -1299,9 +1380,15 @@ class BaseEndpoint(asyncio.DatagramProtocol):
             self.send_packet(addr, client, chunk, acks if index == 0 else (),
                              (first, last) if len(chunks) > 1 else None,reliable=reliable)
 
-    def require_vehicle_available(self, account_id, inventory_id):
+    def require_vehicle_available(self, account_id, inventory_id, *, excluding=None):
+        if inventory_id is not None and any(client.account_id == account_id
+                and getattr(client, 'training_swap_inventory', None) == inventory_id
+                for client in self.clients.values()):
+            raise ValueError('This vehicle is entering a training battle')
         # Leaving a running arena detaches the session, not its vehicle or ammo.
         for arena in self.arenas.arenas.values():
+            if arena is excluding:
+                continue
             player = arena.players.get(account_id)
             if (player is not None and player.inventory_id == inventory_id
                     and (not arena.finished_at or (arena.started
@@ -1429,6 +1516,7 @@ class BaseEndpoint(asyncio.DatagramProtocol):
                                               stored.get('loadout'), **crew)
                 from .consumables import resolve_loadout
                 account.update(inventory_id=stored['id'],shells=tuple(stored['shells']),
+                               camouflage=stored.get('camouflage', 0),
                                consumables=resolve_loadout(self.server.manifest['game'], definition, stored.get('loadout'),
                                                            **crew))
                 options.update(collision_scene=self.scene_for_vehicle(definition, spec.map_id),
@@ -1541,7 +1629,8 @@ class BaseEndpoint(asyncio.DatagramProtocol):
                 account_id = account['id']
                 stored = self.progression.selected_inventory(account_id)
                 self.require_vehicle_available(account_id, stored['id'])
-                account.update(inventory_id=stored['id'],shells=tuple(stored['shells']))
+                account.update(inventory_id=stored['id'],shells=tuple(stored['shells']),
+                               camouflage=stored.get('camouflage', 0))
                 definition = self.progression.battle_definition(stored['descriptor'], stored['shells'])
                 from .loadout_effects import apply_definition
                 crew = self.crew_metadata(definition)
@@ -1585,14 +1674,15 @@ class BaseEndpoint(asyncio.DatagramProtocol):
         state = self.progression.prepare(client.account_id)
         progress = self.server.accounts.get(client.account_id).progress
         update = account_snapshot(client.account_revision,self.server.manifest['game'],
-                                  progress,garage=state)
+                                  progress, garage=state,
+                                  training_return=self.choosing_training_tank(client.account_id))
         # AccountData's recursive delta merge (146eab0) removes a key for None
         # (146edb8 -> 1481230); omission alone leaves old inventory entries intact.
         # A full snapshot already excludes removed vehicles; tombstones are
         # meaningful only when merging into an existing native cache.
         if client.account_revision is not None:
             for inventory_id in removed:
-                for key in ('serialized','shells','eqs','prov','settings','shellsLayout'):
+                for key in ('serialized','shells','eqs','prov','settings','shellsLayout','camos'):
                     update['inventory'][1][key][inventory_id] = None
             for type_cd in removed_types:
                 update['stats']['optDeviceSlots'][type_cd] = None
@@ -1833,6 +1923,7 @@ class BaseEndpoint(asyncio.DatagramProtocol):
             client.arena_id,client.phase = arena.result_id,'battle_building'
             client.battle_spawned = False
             client.battle_hints_at = 0.
+            client.training_swap_refresh_at = 0.
             client.result_sent = False
             client.reconnect_replay = False
         if hasattr(self,'loading'):
@@ -1910,12 +2001,113 @@ class BaseEndpoint(asyncio.DatagramProtocol):
         loader = self.owner_service if getattr(arena, 'owner_backed', False) else self.loading
         loader.withdraw_loading_player(arena, client)
 
+    def training_hangar(self, addr, client, arena):
+        from .sandbox import training_reentry_enabled
+        player = arena.players.get(client.account_id)
+        if (not training_reentry_enabled(arena) or self.progression is None
+                or client.phase != 'battle' or not player or not player.attached or not player.loaded
+                or client.training_swap_pending or getattr(client, 'owner_leave_pending', False)):
+            return
+        if getattr(arena, 'owner_backed', False):
+            self.owner_service.training_park(addr, client, arena)
+            return
+        if not arena.training_tank_available(client.account_id):
+            return
+        now = time.monotonic()
+        arena.reserve_training_seat(client.account_id)
+        self._open_training_hangar(addr, client, arena, now)
+        self.flush_arena(arena)
+
+    def _open_training_hangar(self, addr, client, arena, now):
+        self._reconnects()[client.account_id] = ReconnectLease(
+            client.account_id, arena.result_id, now + self.TRAINING_HANGAR_GRACE, choose_tank=True)
+        if (transport := getattr(self, 'recon_transport', None)) is not None:
+            transport.revoke(client)
+        client.training_hangar_sync = True
+        client.account_created = False
+        client.account_revision = None
+        client.sandbox_input = None
+        self._reset_to_hangar(addr, client)
+        self.server.event('training_seat_reserved', account_id=client.account_id,
+                          arena_id=arena.result_id, grace_seconds=self.TRAINING_HANGAR_GRACE)
+
+    def resume_training(self, addr, client, inventory_id):
+        lease = self._reconnects().get(client.account_id)
+        if not lease or not lease.choose_tank:
+            return False
+        if client.training_swap_pending:
+            return True
+        now = time.monotonic()
+        arena = self.arenas.get(lease.arena_id)
+        from .sandbox import training_reentry_enabled
+        if now >= lease.expires_at or arena is None or not training_reentry_enabled(arena):
+            self._expire_reconnects(now, only_account=client.account_id)
+            raise BattleRefused('The reserved training battle is no longer available')
+        owner = getattr(arena, 'owner_backed', False)
+        if not owner and (client.account_id not in arena.hangar_players
+                          or not arena.training_tank_available(client.account_id)):
+            raise ValueError('No reserved training seat')
+        gear = self.progression
+        stored = gear._owned_vehicle(gear.prepare(client.account_id), inventory_id)
+        self.require_vehicle_available(client.account_id, inventory_id, excluding=arena)
+        from .loadout_effects import apply_definition
+        from .consumables import resolve_loadout
+        definition = gear.battle_definition(stored['descriptor'], stored['shells'])
+        crew = self.crew_metadata(definition)
+        loadout = stored.get('loadout')
+        definition = apply_definition(self.game, definition, loadout, **crew)
+        consumables = resolve_loadout(self.game, definition, loadout, **crew)
+        camouflage = stored.get('camouflage', 0)
+        if owner:
+            self.owner_service.training_swap(addr, client, arena, lease, stored['id'],
+                                             definition, tuple(stored['shells']), tuple(consumables),
+                                             camouflage=camouflage)
+            return True
+        try:
+            scene = self.scene_for_vehicle(definition, arena.map_id)
+            arena.reenter_training(client.account_id, scene, tuple(stored['shells']),
+                                   tuple(consumables), camouflage=camouflage)
+        except OSError as exc:
+            raise BattleRefused('The selected tank resources could not be loaded') from exc
+        arena.training_swappers.add(client.account_id)
+        self.flush_arena(arena)
+        self._enter_training_battle(addr, client, arena, inventory_id, definition, now)
+        return True
+
+    def _enter_training_battle(self, addr, client, arena, inventory_id, definition, now):
+        arena.players[client.account_id].inventory_id = inventory_id
+        self._reconnects().pop(client.account_id, None)
+        client.arena_id = arena.result_id
+        client.phase = 'battle_pending'
+        client.reconnect_replay = True
+        client.training_reentry_at = now
+        client.battle_spawned = False
+        client.battle_hints_at = 0.
+        client.last_sync_tick = -1
+        client.sandbox_input = None
+        client.training_swap_refresh_at = 0.
+        client.load_grace_until = now + self.ENTITY_LOAD_GRACE
+        self.server.event('training_reentered', account_id=client.account_id, arena_id=arena.result_id,
+                          vehicle_id=arena.players[client.account_id].vehicle_id,
+                          vehicle=f'{definition.nation}/{definition.name}')
+        self.send(addr, client, b'\x04\0')
+
+    def training_reentry_ready(self, client, arena):
+        if client.training_reentry_at:
+            self.server.event('training_reentry_ready', account_id=client.account_id,
+                              arena_id=arena.result_id,
+                              duration_ms=round((time.monotonic() - client.training_reentry_at) * 1000))
+            client.training_reentry_at = 0.
+            client.reconnect_replay = False
+
     def return_to_hangar(self, addr, client):
         recon_transport = getattr(self, 'recon_transport', None)
         if recon_transport is not None:
             recon_transport.revoke(client)
         arena = self.arenas.get(client.arena_id)
         if not arena:
+            return
+        if getattr(client, 'training_swap_pending', False):
             return
         if arena.building:
             if arena.room_settings is not None:
@@ -1935,18 +2127,23 @@ class BaseEndpoint(asyncio.DatagramProtocol):
             return
         arena.leave(client.account_id,reason='leave')
         self.flush_arena(arena)
+        if arena.finished_at:
+            self.rooms.sync()
+        self.arenas.remove_if_empty(arena)
+        self._reset_to_hangar(addr, client)
+
+    def _reset_to_hangar(self, addr, client):
         client.arena_id = None
         client.arena_spawn_at = 0
         client.battle_spawned = False
         client.battle_hints_at = 0.
+        client.training_swap_refresh_at = 0.
         client.reconnect_replay = False
+        client.training_reentry_at = 0.
         client.phase = "account_pending"
         client.load_grace_until = time.monotonic()+self.ENTITY_LOAD_GRACE
         client.clock_start = time.monotonic()
         client.last_sync_tick = -1
-        if arena.finished_at:
-            self.rooms.sync()
-        self.arenas.remove_if_empty(arena)
         self.send(addr, client, b"\x04\0")
 
     def send_packet(self, addr, client, body, acks=(), fragment=None, *, reliable=True):
@@ -1996,8 +2193,8 @@ class BaseEndpoint(asyncio.DatagramProtocol):
             else:
                 packet = parse_packet(data, prefix=True)
             self.handle_elements(addr, client, packet)
-        except ChannelOverflow:
-            self._disconnect_client(addr, "reliable send window exceeded")
+        except ChannelOverflow as exc:
+            self._disconnect_client(addr, str(exc) or "reliable send window exceeded")
         except (ValueError, struct.error) as exc:
             self.server.event("base_rejected", reason=str(exc), size=len(data))
         except Exception as exc:
@@ -2087,7 +2284,8 @@ class BaseEndpoint(asyncio.DatagramProtocol):
                         recon_transport.receive(addr, client, body, time.monotonic())):
                     continue
                 if arena:
-                    if (client.phase=='battle' and kind==135 and not body
+                    if (getattr(arena, 'owner_backed', False) and
+                            client.phase=='battle' and kind==135 and not body
                             and not arena.players[client.account_id].loaded):
                         # The client can acknowledge world load before its last
                         # blocking render-resource stage. Only the first ready
@@ -2106,9 +2304,10 @@ class BaseEndpoint(asyncio.DatagramProtocol):
                                 for batch in reconnect_batches(arena, arena.players[client.account_id]):
                                     self.send(addr, client, batch)
                                 client.reconnect_replay = False
+                                self.training_reentry_ready(client, arena)
                         else:
-                            dispatch_input(arena,client.account_id,kind,body)
-                            self.flush_arena(arena)
+                            command = decode_input(client.account_id, kind, body, time.monotonic())
+                            self.queue_arena_input(addr, client, arena, command)
                     if self.clients.get(addr) is not client:
                         return
                 if client.phase == "battle" and 2 <= kind <= 254:
@@ -2155,6 +2354,11 @@ class BaseEndpoint(asyncio.DatagramProtocol):
                             # native mode/map options still apply per request.
                             inventory_id = requested_inventory if self.progression is not None else None
                             try:
+                                try:
+                                    if self.resume_training(addr, client, inventory_id):
+                                        continue
+                                except ValueError as exc:
+                                    raise BattleRefused(str(exc)) from exc
                                 self.start_battle(addr, client, inventory_id, map_id,
                                                   game_mode=game_mode)
                             except BattleRefused as exc:
@@ -2176,12 +2380,13 @@ class BaseEndpoint(asyncio.DatagramProtocol):
                             # A newly created native Account needs full-sync
                             # observers, including saved hangar selection.
                             # prevRev=0 still means delta in client 11.21.
+                            full_sync = client.account_revision is None and not client.training_hangar_sync
                             response = account_sync_response(request_id,
-                                account_snapshot(None if client.account_revision is None else previous,
-                                    self.server.manifest["game"],
-                                    progress,
-                                    inventory, garage=garage))
+                                account_snapshot(None if full_sync else previous,
+                                    self.server.manifest["game"], progress, inventory, garage=garage,
+                                    training_return=self.choosing_training_tank(client.account_id)))
                             client.account_revision = progress['revision']
+                            client.training_hangar_sync = False
                             client.report_scan_at = time.monotonic()+1
                         elif command_id == 109 and self.progression is not None:
                             response = self.vehicle_ammo(client,kind,body,request_id)
@@ -2268,7 +2473,7 @@ class BaseEndpoint(asyncio.DatagramProtocol):
                         self.send(addr,client,b"\x02"+bytes([UPDATE_HZ])+b"\x03"
                             +struct.pack('<I',game_tick(time.monotonic(),arena.epoch))
                             +initial_messages(arena,arena.players[client.account_id]))
-                        client.arena_spawn_at = time.monotonic() + 2
+                        client.arena_spawn_at = time.monotonic() + (.25 if client.training_reentry_at else 2.)
                     self.server.event("avatar_creation_sent")
                 elif kind == 9 and (not client.account_created or client.phase == "account_pending"):
                     client.account_created = True
@@ -2279,7 +2484,8 @@ class BaseEndpoint(asyncio.DatagramProtocol):
                     # retained room and restore the corresponding roster.
                     client.native_room_id = client.native_room_version = None
                     account = self.server.accounts.get(client.account_id).identity()
-                    room = None if client.reconnect_replay else self.rooms.current(client.account_id)
+                    room = (None if client.reconnect_replay or self.choosing_training_tank(client.account_id)
+                            else self.rooms.current(client.account_id))
                     room_id = int(room.id, 16) if room else 0
                     self.send(addr, client, b"\x02" + bytes([UPDATE_HZ]) + b"\x03"
                               + struct.pack("<I", game_tick(time.monotonic(), client.clock_start))

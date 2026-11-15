@@ -130,23 +130,36 @@ impl World {
             }
         }
         for row in fixture["entities"].as_array().unwrap() {
-            let id = entity_id(&row["id"]);
-            let position = isometry(vec3(&row["initial_position"]), &quat(&row["initial_orientation"]));
-            assert!(!world.definitions.contains_key(&id), "duplicate entity id");
-            let scalar_mass = row["mass"].as_f64().unwrap();
-            assert!(scalar_mass.is_finite() && scalar_mass > 0., "invalid mass");
-            assert!(vec3(&row["inertia"]).iter().all(|v| *v > 0.), "invalid inertia");
-            let mass = MassProperties::new(vec3(&row["center_of_mass"]).into(),
-                row["mass"].as_f64().unwrap(), vec3(&row["inertia"]));
-            world.definitions.insert(id, EntityDefinition {
-                mass, parts: row["parts"].clone(),
-            });
-            let sensor = world.bodies.insert(RigidBodyBuilder::kinematic_position_based()
-                .position(position).build());
-            world.sensors.insert(id, sensor);
-            world.add_parts(id, sensor, &world.definitions[&id].parts.clone());
+            assert!(!world.definitions.contains_key(&entity_id(&row["id"])), "duplicate entity id");
+            world.install_vehicle(row);
         }
         world
+    }
+
+    fn install_vehicle(&mut self, row: &Value) {
+        let id = entity_id(&row["id"]);
+        assert!(!self.dynamic.contains_key(&id), "active dynamic vehicle");
+        let position = isometry(vec3(&row["initial_position"]), &quat(&row["initial_orientation"]));
+        let scalar_mass = row["mass"].as_f64().unwrap();
+        assert!(scalar_mass.is_finite() && scalar_mass > 0., "invalid mass");
+        assert!(vec3(&row["inertia"]).iter().all(|v| *v > 0.), "invalid inertia");
+        let mass = MassProperties::new(vec3(&row["center_of_mass"]).into(),
+            row["mass"].as_f64().unwrap(), vec3(&row["inertia"]));
+        if let Some(handle) = self.sensors.remove(&id) {
+            for collider in self.bodies[handle].colliders() {
+                self.collider_entities.remove(collider);
+            }
+            self.bodies.remove(handle, &mut self.islands, &mut self.colliders,
+                &mut self.impulse_joints, &mut self.multibody_joints, true);
+        }
+        self.definitions.insert(id, EntityDefinition {
+            mass, parts: row["parts"].clone(),
+        });
+        let sensor = self.bodies.insert(RigidBodyBuilder::kinematic_position_based()
+            .position(position).build());
+        self.sensors.insert(id, sensor);
+        self.add_parts(id, sensor, &self.definitions[&id].parts.clone());
+        self.query_dirty = true;
     }
 
     fn add_parts(&mut self, id: u32, handle: RigidBodyHandle, parts: &Value) {
@@ -253,6 +266,16 @@ impl World {
                 self.bodies[*sensor].set_position(position, true);
             }
         }
+    }
+
+    fn sensor_enabled(&mut self, id: u32, enabled: bool) -> i32 {
+        let Some(handle) = self.sensors.get(&id) else { return 1; };
+        if self.dynamic.contains_key(&id) {
+            return 1;
+        }
+        self.bodies[*handle].set_enabled(enabled);
+        self.query_dirty = true;
+        0
     }
 
     fn step(&mut self, dt: f64) -> Value {
@@ -451,6 +474,15 @@ pub extern "C" fn tfs_rapier_set_velocity(world: *mut World, id: u32,
 }
 
 #[no_mangle]
+pub extern "C" fn tfs_rapier_replace_vehicle(world: *mut World, row: *const c_char) -> i32 {
+    let Ok(row) = catch_unwind(AssertUnwindSafe(|| serde_json::from_str::<Value>(input(row)))) else {
+        return -2;
+    };
+    let Ok(row) = row else { return -2; };
+    guarded(world, |world| { world.install_vehicle(&row); 0 })
+}
+
+#[no_mangle]
 pub extern "C" fn tfs_rapier_sync(world: *mut World, rows: *const c_char) -> i32 {
     // Parse/validate before touching World; malformed input does not poison it.
     let parsed = catch_unwind(AssertUnwindSafe(|| {
@@ -485,6 +517,11 @@ pub extern "C" fn tfs_rapier_step(world: *mut World, dt: f64, output: *mut c_cha
 #[no_mangle]
 pub extern "C" fn tfs_rapier_deactivate(world: *mut World, id: u32) -> i32 {
     guarded(world, |world| world.deactivate(id))
+}
+
+#[no_mangle]
+pub extern "C" fn tfs_rapier_sensor_enabled(world: *mut World, id: u32, enabled: bool) -> i32 {
+    guarded(world, |world| world.sensor_enabled(id, enabled))
 }
 
 #[no_mangle]
@@ -576,6 +613,24 @@ mod tests {
             "center_of_mass": [0.,0.,0.], "inertia": [1.,1.,1.],
             "parts": [{"kind": "box", "offset": [0.,0.,0.], "half_extents": [1.,1.,1.]}]
         }]}))
+    }
+
+    #[test]
+    fn suspended_sensor_is_absent_from_dynamic_contacts_until_restored() {
+        let mut w = world();
+        w.install_vehicle(&json!({
+            "id": 201, "initial_position": [0.,6.8,0.],
+            "initial_orientation": [0.,0.,0.,1.], "mass": 10.,
+            "center_of_mass": [0.,0.,0.], "inertia": [1.,1.,1.],
+            "parts": [{"kind": "box", "offset": [0.,0.,0.], "half_extents": [1.,1.,1.]}]
+        }));
+        assert_eq!(tfs_rapier_sensor_enabled(&mut w, 200, false), 0);
+        assert_eq!(w.activate(201, Vector::new(0.,6.8,0.), &[0.,0.,0.,1.],
+                              Vector::new(0.,-1.,0.), Vector::zeros()), 0);
+        assert!(w.step(1./240.)["contacts"].as_array().unwrap().is_empty());
+        assert_eq!(tfs_rapier_sensor_enabled(&mut w, 200, true), 0);
+        assert!(w.step(1./240.)["contacts"].as_array().unwrap().iter()
+            .any(|contact| contact["other"]["id"] == 200));
     }
 
     #[test]

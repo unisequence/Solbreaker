@@ -6,6 +6,9 @@ All other BattleButton prerequisites stay in the original prototype.
 """
 from contextlib import contextmanager
 from contextvars import ContextVar
+from copy import deepcopy
+
+from .profile import TRAINING_RETURN
 
 _CURRENT_HANGAR = ContextVar('tfs_bot_mode_current_hangar', default=True)
 _APPEARANCE = ContextVar('tfs_bot_mode_appearance', default='native')
@@ -14,10 +17,15 @@ BOT_MODE = 'eGameMode.Rating'
 BOT_DESCRIPTION = 'Local/BotsDescription'
 
 
-def _bot_mode(prefix):
+def _mode_description(prefix, key):
     description = prefix+'.gameModeOptions.description'
-    return (prefix+'.gameMode == '+BOT_MODE+' and ('+description+' == "'+BOT_DESCRIPTION+
-            '" or '+description+' == localize("'+BOT_DESCRIPTION+'"))')
+    return f'({description} == "{key}" or {description} == localize("{key}"))'
+
+
+def _bot_mode(prefix):
+    return (f'{prefix}.gameMode == {BOT_MODE} and '
+            f'({_mode_description(prefix, BOT_DESCRIPTION)} or '
+            f'{_mode_description(prefix, TRAINING_RETURN)})')
 
 
 CARD_BOT_MODE = _bot_mode('mode')
@@ -27,6 +35,7 @@ ORIGINAL_VEHICLE_GATE = ('not isNull(selectedTank) and selectedTank.allowedForGa
 LOCAL_VEHICLE_GATE = ('not isNull(selectedTank) and (('+SELECTED_BOT_MODE+') or '
                       '(selectedTank.allowedForGameMode and not selectedTank.needsTopMastery '
                       'and not selectedTank.needsTopModules))')
+TRAINING_RETURN_ACTIVE = _mode_description('session.gameModesAccountModel.mode', TRAINING_RETURN)
 BADGE_NAME = 'LocalBotsModeBadge'
 MODE_ICON = '~res:/Gfx/Shared/icons/icon_game-mode_realistic_colored'
 ORIGINAL_CELL_BLOCKED = ('showStatus and (broken or locked or (soloOrSquad and '
@@ -132,6 +141,25 @@ def patch_battle_button(document):
         raise ValueError('Unsupported local bot mode button icon')
     icons[0]['bindings'][0][1] = 'when localBotsMode -> "'+MODE_ICON+'", battleTypeSprite'
     icons[0].setdefault('children', []).append(_native_label('localBotsMode'))
+    components = root['components']
+    components['UIDataParamsComponent']['params'].append(
+        ['bool', 'localTrainingReturn', 'false', 'false'])
+    label, = [row for row in components['UIDataLocalBindingsComponent']['data']
+              if row[1] == 'buttonText']
+    repair, normal = label[2].rsplit(', ', 1)
+    label[2] = f'{repair}, localTrainingReturn -> localize("{TRAINING_RETURN}"), {normal}'
+    battle, = [node for node in _walk(root) if node.get('name') == 'BattleWrapper']
+    content, = [node for node in battle['children'] if node.get('name') == 'Content']
+    layers = content['children']
+    active, = [node for node in layers if node.get('name') == 'ActiveBg']
+    disabled, = [node for node in layers if node.get('name') == 'DisabledBg']
+    blue = deepcopy(disabled)
+    blue['name'] = 'TrainingReturnBg'
+    blue.pop('classes')
+    blue['components']['Background']['gradient'] = '~res:/Gfx/UI/CommonUIElements/Button/blue_gradient'
+    blue['bindings'] = [['visible', 'isEnabled and localTrainingReturn']]
+    active['bindings'] = [['visible', 'isEnabled and not localTrainingReturn']]
+    layers.insert(layers.index(disabled), blue)
     return True
 
 
@@ -158,6 +186,7 @@ def patch_hangar(document):
         root['children'].append(_flat_badge(condition))
     else:
         calls[0]['args']['localBotsMode'] = SELECTED_BOT_MODE
+        calls[0]['args']['localTrainingReturn'] = TRAINING_RETURN_ACTIVE
 
 
 def _mode_param(root):

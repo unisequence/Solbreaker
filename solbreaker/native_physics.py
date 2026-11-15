@@ -53,47 +53,49 @@ def fixture(world):
         key = world.breakable_bodies.get(body)
         static.append(dict(body=body, path=world._mesh_body_paths[body], key=key,
             kind='breakable' if key is not None else 'terrain' if body in world.terrain_bodies else 'map'))
-    entities = []
-    for entity, pose in world.poses.items():
-        if not world._has_suspension(entity):
-            raise ValueError(f'Native physics requires separate track colliders for vehicle {entity}')
-        assets = world.assets_for(entity)
-        parts = []
-        proxies = getattr(assets, 'contact_proxies', None)
-        if proxies:
-            for part in proxies:
-                row = dict(name=part.name, kind=part.kind,
-                    turret=part.name == assets.turret_node,
-                    offset=tuple(assets.definition.aiming.turret_position)
-                           if part.name == assets.turret_node else (0., 0., 0.))
-                if part.kind == 'prism':
-                    row['path'] = assets.mesh_files.mesh(part.vertices)
-                elif part.kind == 'box':
-                    row.update(center=part.center, half_extents=part.half_extents)
-                else:
-                    raise ValueError('Unsupported native query proxy')
-                parts.append(row)
-        else:
-            parts = [dict(name=name, kind='prism', path=assets.mesh_files.mesh(vertices),
-                turret=name == assets.turret_node,
-                offset=tuple(assets.definition.aiming.turret_position)
-                       if name == assets.turret_node else (0., 0., 0.))
-                for name, vertices in assets.tank_shapes]
-        layout = world._support_layout(entity)
-        ground = dict(a=layout.a.tolist(), b=layout.b.tolist(), p=layout.p.tolist(),
-            weights=layout.weight.tolist(), patch=layout.patch, clearance=world._hull_clearance(entity),
-            slope=assets.max_slope, support_span=min(assets.support), bounds=tuple(assets.bounds),
-            components=[(low.tolist(), high.tolist()) for _, low, high in world._component_bounds(entity)],
-            track_links=list(world.track_links[entity]),
-            tracks=[dict(span=(low, high), z=zs.tolist(), y=ys.tolist())
-                    for low, high, zs, ys in layout.tracks])
-        entities.append(dict(id=entity, body=world.bodies[entity],
-            position=pose.position, orientation=quaternion(pose.yaw, pose.pitch, pose.roll),
-            parts=parts, ground=ground))
+    entities = [vehicle_fixture(world, entity, pose) for entity, pose in world.poses.items()]
     terrain = world.terrain
     return dict(static=static, entities=entities, terrain=dict(size=terrain.size,
         heights=list(terrain.heights), origin=(terrain.MIN, terrain.MIN_Z),
         dimensions=(terrain.WIDTH, terrain.DEPTH), vertical=(terrain.HEIGHT_MIN, terrain.HEIGHT)))
+
+
+def vehicle_fixture(world, entity, pose):
+    if not world._has_suspension(entity):
+        raise ValueError(f'Native physics requires separate track colliders for vehicle {entity}')
+    assets = world.assets_for(entity)
+    parts = []
+    proxies = getattr(assets, 'contact_proxies', None)
+    if proxies:
+        for part in proxies:
+            row = dict(name=part.name, kind=part.kind,
+                turret=part.name == assets.turret_node,
+                offset=tuple(assets.definition.aiming.turret_position)
+                       if part.name == assets.turret_node else (0., 0., 0.))
+            if part.kind == 'prism':
+                row['path'] = assets.mesh_files.mesh(part.vertices)
+            elif part.kind == 'box':
+                row.update(center=part.center, half_extents=part.half_extents)
+            else:
+                raise ValueError('Unsupported native query proxy')
+            parts.append(row)
+    else:
+        parts = [dict(name=name, kind='prism', path=assets.mesh_files.mesh(vertices),
+            turret=name == assets.turret_node,
+            offset=tuple(assets.definition.aiming.turret_position)
+                   if name == assets.turret_node else (0., 0., 0.))
+            for name, vertices in assets.tank_shapes]
+    layout = world._support_layout(entity)
+    ground = dict(a=layout.a.tolist(), b=layout.b.tolist(), p=layout.p.tolist(),
+        weights=layout.weight.tolist(), patch=layout.patch, clearance=world._hull_clearance(entity),
+        slope=assets.max_slope, support_span=min(assets.support), bounds=tuple(assets.bounds),
+        components=[(low.tolist(), high.tolist()) for _, low, high in world._component_bounds(entity)],
+        track_links=list(world.track_links[entity]),
+        tracks=[dict(span=(low, high), z=zs.tolist(), y=ys.tolist())
+                for low, high, zs, ys in layout.tracks])
+    return dict(id=entity, body=world.bodies[entity],
+        position=pose.position, orientation=quaternion(pose.yaw, pose.pitch, pose.roll),
+        parts=parts, ground=ground)
 
 
 def library_path():
@@ -134,6 +136,10 @@ def load_library():
 class NativePhysics:
     def __init__(self, world):
         self.library = load_library()
+        self._sensor_enabled = getattr(self.library, 'solbreaker_physics_sensor_enabled', None)
+        if self._sensor_enabled is not None:
+            self._sensor_enabled.argtypes = [C.c_void_p, C.c_uint32, C.c_bool]
+            self._sensor_enabled.restype = C.c_int32
         self._lock = threading.RLock()
         self._output = C.create_string_buffer(4*1024*1024)
         self.handle = self.library.solbreaker_physics_create(
@@ -164,6 +170,17 @@ class NativePhysics:
             if size < 0:
                 raise RuntimeError(f'Native physics query failed ({size}): {self.error()}')
             return json.loads(self._output.raw[:size])
+
+    def replace_vehicle(self, world, entity, pose):
+        self.query(operation='replace_vehicle', vehicle=vehicle_fixture(world, entity, pose))
+        self._sensor_states.pop(entity, None)
+
+    def set_sensor_enabled(self, entity, enabled):
+        with self._lock:
+            if self._sensor_enabled is not None:
+                status = self._sensor_enabled(self.handle, entity, enabled)
+                if status:
+                    raise RuntimeError(f'Native sensor update failed ({status}): {self.error()}')
 
     def sync(self, world):
         with self._lock:

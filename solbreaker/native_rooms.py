@@ -435,7 +435,8 @@ class NativeRooms:
                        if fnmatchcase(r.title.casefold(),pattern or '*')]
                 self.reply(client,request,data=found)
                 room=self.manager.current(client.account_id)
-                if room and client.native_room_id!=room.id:
+                choosing_tank = getattr(self.endpoint, 'choosing_training_tank', lambda _: False)
+                if room and client.native_room_id!=room.id and not choosing_tank(client.account_id):
                     # Account recreation after a battle clears ClientPrebattle.
                     # The player remains in their own hangar until this request.
                     self.attach(client,room)

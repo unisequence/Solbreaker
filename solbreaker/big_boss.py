@@ -1,4 +1,5 @@
 """Big Boss roles, tickets and Blast Wave tuning."""
+from dataclasses import replace
 import math
 import random
 from typing import NamedTuple
@@ -19,6 +20,7 @@ BLAST_RADIUS = 50.
 BLAST_DAMAGE = .10
 BLAST_REFERENCE_MASS = 25000.
 BLAST_BASE_SPEED = 44.
+LIGHT_BLAST_AIR_DAMPING = .0017
 CLIENT_GAME_MODE = 27
 # Vehicle.publicStateModifiers key. The client maps this to particle extra 23.
 BOSS_AURA_MODIFIER = 129
@@ -54,6 +56,11 @@ BOMB_RADIUS = 50.
 BOMB_DAMAGE = (.20, .30, .30, .40, .50)
 BOMB_MOBILITY = (1.15, 1.25, 1.25, 1.35, 1.40)
 TRAP_MAX_SPEED = 18.
+TRAP_EDGE_WIDTH = 10.
+TRAP_RESPONSE = 8.
+TRAP_DRIVE_SPEED_FACTOR = .35
+TRAP_DRIVE_SPEED_CAP = 5.
+TRAP_TURN_FACTOR = .55
 # The pinned client defines per-level specs. Other modes do not load these slots.
 ROLE_ACTIVE = {
     role: tuple(ConsumableSpec(f'{tag}L{level+1}', base+level,
@@ -81,6 +88,21 @@ GRAVITON_INPUT_IDS = frozenset(spec.ident for spec in ROLE_ACTIVE[GRAVITON])
 ROLE_EFFECTS = frozenset(spec.compact_id for role in (BOMBER, REGENERATOR)
                          for spec in ROLE_ACTIVE[role])
 HEAL_SHOT_EFFECTS = tuple(((53+level) << 8) | 0xfd for level in range(5))
+
+
+def role_shell(shell, role, level, *, poisoned=False):
+    if role == REGENERATOR:
+        return replace(shell, healing_level=level)
+    if role == CATALYST:
+        return replace(shell, damage=shell.damage*CATALYST_DAMAGE[level],
+                       poison_level=level if poisoned else None)
+    return shell
+
+
+def megashot(shell):
+    return replace(shell, kind='ARMOR_PIERCING', railgun=True,
+                   damage=shell.damage*MEGASHOT_DAMAGE, speed=MEGASHOT_SPEED,
+                   gravity=0., missile=None, effect_index=MEGASHOT_EFFECT)
 
 
 class Poison(NamedTuple):
@@ -186,28 +208,7 @@ class BigBoss:
         return 1. - TRAP_SHIELD[self.levels[entity]] if self.roles.get(entity) == GRAVITON else 1.
 
     def pull(self, team, position, mass):
-        """Combine signed directions, then amplify overlapping allied fields."""
-        dx = dz = strength = 0.
-        count = 0
-        for trap in self.traps:
-            if trap.team == team or math.dist(trap.center, position) >= TRAP_RADIUS[trap.level]:
-                continue
-            x, z = trap.center[0]-position[0], trap.center[2]-position[2]
-            distance = math.hypot(x, z)
-            # Slow near the centre so the hull does not oscillate across it.
-            speed = TRAP_MASS[trap.level] / 10. * min(1., distance / 4.)
-            if distance > 0.:
-                dx += speed * x / distance
-                dz += speed * z / distance
-            strength += speed
-            count += 1
-        if not count:
-            return None
-        speed = min(TRAP_MAX_SPEED, strength * 1.7**(count-1) *
-                    min(1.5, math.sqrt(BLAST_REFERENCE_MASS / max(mass, 1.))))
-        if not strength:
-            return (0., 0.)
-        return dx / strength * speed, dz / strength * speed
+        return gravity_pull(self.traps, team, position, mass)
 
     def destroyed(self, vehicle):
         entity = vehicle.entity_id
@@ -226,6 +227,35 @@ class BigBoss:
         return 1 if first > second else 2 if second > first else 0
 
 
+def gravity_pull(traps, team, position, mass):
+    """Combine signed directions, then amplify overlapping allied fields."""
+    dx = dz = strength = overlap = 0.
+    for trap in traps:
+        if trap.team == team:
+            continue
+        depth = TRAP_RADIUS[trap.level] - math.dist(trap.center, position)
+        if depth <= 0.:
+            continue
+        x, z = trap.center[0]-position[0], trap.center[2]-position[2]
+        distance = math.hypot(x, z)
+        # Slow near the centre so the hull does not oscillate across it.
+        speed = TRAP_MASS[trap.level] / 10. * min(1., distance / 4.)
+        coverage = min(1., depth / TRAP_EDGE_WIDTH)
+        speed *= coverage
+        if distance > 0.:
+            dx += speed * x / distance
+            dz += speed * z / distance
+        strength += speed
+        overlap += coverage
+    if not overlap:
+        return None
+    speed = min(TRAP_MAX_SPEED, strength * 1.7**max(0., overlap-1.) *
+                min(1.5, math.sqrt(BLAST_REFERENCE_MASS / max(mass, 1.))))
+    if not strength:
+        return (0., 0.)
+    return dx / strength * speed, dz / strength * speed
+
+
 def blast_impulse(origin, position, mass, yaw, vehicle_class=None):
     dx, dy, dz = (target-source for source, target in zip(origin, position))
     distance = math.hypot(dx, dy, dz)
@@ -238,6 +268,15 @@ def blast_impulse(origin, position, mass, yaw, vehicle_class=None):
     heavy = (vehicle_class == 'heavyTank'
              or vehicle_class not in ('lightTank', 'mediumTank') and mass >= 55000.)
     if heavy:
+        speed *= 1.2
         return (x * speed, 0., z * speed), None
+    # Light hulls carry much farther on a close hit. Keep rotation tied to
+    # the original impulse so the extra range does not multiply tumble speed.
     spin = speed * .14
-    return (x * speed, speed * .36, z * speed), (z * spin, 0., -x * spin)
+    if vehicle_class == 'lightTank':
+        speed *= 2.45
+        lift = .55
+    else:
+        speed *= 1.4
+        lift = .42
+    return (x * speed, speed * lift, z * speed), (z * spin, 0., -x * spin)

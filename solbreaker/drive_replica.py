@@ -85,6 +85,7 @@ class ReplicaAssets:
     # Disabling flight-shape prewarming is intentional: every flight path is
     # rejected before it can construct or activate a dynamic body.
     _convex_shapes: object = None
+    armor: object = None
 
     def prepare_terrain(self, terrain):
         return self.terrain_paths
@@ -152,7 +153,7 @@ def _definition(source):
     return result
 
 
-def build_spec(world):
+def build_spec(world, *, include_armor=False):
     """Snapshot reusable geometry without serializing live native resources."""
     if world.closed or world.closing or not world.build_ready:
         raise ValueError('Drive replica requires a complete live collision world')
@@ -191,8 +192,9 @@ def build_spec(world):
             dict(source.destructibles), tuple(source.tank_shapes), source.turret_node,
             tuple(source.hull_center), tuple(source.support), source.max_slope,
             source.forward_speed, source.reverse_speed, source.rotation_speed,
-            _definition(source.definition), tuple(source.bounds),
-            PreparedMeshes(meshes, partitions), terrain_paths, proxies)
+            source.definition if include_armor else _definition(source.definition), tuple(source.bounds),
+            PreparedMeshes(meshes, partitions), terrain_paths, proxies,
+            armor=getattr(source, 'armor', None) if include_armor else None)
         assets_by_id[id(source)] = replica
     for entity in world.poses:
         replicas[entity] = assets_by_id[id(world.assets_for(entity))]

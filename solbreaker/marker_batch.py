@@ -67,7 +67,8 @@ def try_markers(arena, vehicles, arena_methods):
         hit=world._static_ray(origin,end)
         limit=distance*hit[2] if hit[0]>=0 else distance
         rays.append((origin,direction,end,hit,limit))
-    targets=list(world.poses.items())
+    suspended = world.suspended_entities
+    targets = [(entity, pose) for entity, pose in world.poses.items() if entity not in suspended]
     sphere_rows=[]
     for entity,pose in targets:
         model=world.assets_for(entity).armor

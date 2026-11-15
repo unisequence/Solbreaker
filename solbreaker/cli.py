@@ -70,12 +70,23 @@ def main(argv=None):
     backup = commands.add_parser('backup-state', help='Back up offline accounts, progress and server keys')
     backup.add_argument('--state', type=Path, default=Path('data'))
     backup.add_argument('--output', type=Path, required=True)
+    camouflage = commands.add_parser('camouflage', help='List or change paint with the server stopped')
+    camouflage.add_argument('--state', type=Path, default=Path('data'))
+    camouflage.add_argument('--account-id', type=int)
+    target = camouflage.add_mutually_exclusive_group()
+    target.add_argument('--vehicle', type=int, help='Garage inventory ID (defaults to selected tank)')
+    target.add_argument('--vehicles', action='store_true', help='List garage inventory IDs')
+    paint = camouflage.add_mutually_exclusive_group()
+    paint.add_argument('--set', metavar='PAINT')
+    paint.add_argument('--clear', action='store_true')
     importing = commands.add_parser('import-connection', help='Import a server connection file or fetch it by URL')
     importing.add_argument('--lab', type=Path, required=True)
     origin = importing.add_mutually_exclusive_group(required=True)
     origin.add_argument('--connection', type=Path)
     origin.add_argument('--url')
     args = parser.parse_args(argv)
+    if args.command == 'camouflage' and args.vehicles and (args.set is not None or args.clear):
+        camouflage.error('--vehicles cannot be combined with --set or --clear')
     try:
         if args.command in ('gui', 'tui'):
             try:
@@ -96,6 +107,10 @@ def main(argv=None):
         elif args.command == 'backup-state':
             from .management_tasks import backup_state
             result = backup_state(args.state, args.output)
+        elif args.command == 'camouflage':
+            from .camouflage import configure
+            result = configure(args.state, args.account_id, args.vehicle,
+                               paint=args.set, clear=args.clear, vehicles=args.vehicles)
         elif args.command == 'import-connection':
             from .management_tasks import import_connection
             result = import_connection(args.lab, profile=args.connection, url=args.url)

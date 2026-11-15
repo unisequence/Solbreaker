@@ -142,6 +142,8 @@ class DynamicBody:
     stationary_time: float = 0.
     stationary_anchor: tuple = None
     contact_friction: float = .8
+    restore_air_damping: bool = False
+    terrain_points: np.ndarray | None = None
 
 
 @dataclass(frozen=True)
@@ -504,6 +506,8 @@ class CollisionWorld:
     # broad-phase update and the next.  This remains opt-in with 6DOF; the
     # established kinematic drive does not call Bullet stepping.
     DYNAMIC_MAX_STEP = 1. / 240.
+    DYNAMIC_LINEAR_DAMPING = .015
+    DYNAMIC_DEEP_TERRAIN_OVERLAP = .75
     # A later collision after a real gap starts a new fall-impact episode.
     DYNAMIC_FALL_GAP_STEPS = 60
     # Explicit local impact-layer parameters. They are arena-wide sandbox
@@ -590,6 +594,7 @@ class CollisionWorld:
         self.motion = {}
         self.dynamic_bodies = {}
         self.pending_dynamics = {}
+        self.suspended_entities = set()
         self._rapier = None
         self._dynamic_backend = (os.environ.get('SOLBREAKER_DYNAMIC_BACKEND', 'bullet')
                                  if dynamic_backend is None else dynamic_backend)
@@ -849,8 +854,6 @@ class CollisionWorld:
         self._rapier = RapierDynamic(self._prepare_rapier_fixture(static_only=static_only))
 
     def _prepare_rapier_fixture(self, *, static_only=False):
-        from .physics_proxy import swept_turret
-
         static = []
         static_bodies = self.map_bodies | self.terrain_bodies
         if not static_bodies.issubset(self._mesh_body_paths):
@@ -860,33 +863,37 @@ class CollisionWorld:
             key = self.breakable_bodies.get(body)
             kind = 'breakable' if key is not None else ('terrain' if body in self.terrain_bodies else 'map')
             static.append(dict(path=path, kind=kind, key=key, body=body))
-        entities = []
-        for entity, pose in ({} if static_only else self.poses).items():
-            assets = self.assets_for(entity)
-            parts = []
-            for source in assets.contact_proxies:
-                part = swept_turret(source) if source.name == assets.turret_node else source
-                offset = np.asarray(assets.definition.aiming.turret_position
-                                    if source.name == assets.turret_node else (0., 0., 0.), dtype=float)
-                row = dict(kind=part.kind, offset=(offset+np.asarray(
-                    (0., 0., 0.) if part.kind == 'prism' else part.center)).tolist())
-                if part.kind == 'prism':
-                    row['path'] = assets.mesh_files.mesh(part.vertices)
-                elif part.kind == 'box':
-                    row['half_extents'] = list(part.half_extents)
-                else:
-                    row['radius'] = part.radius
-                    row['length'] = part.length
-                parts.append(row)
-            properties = self._dynamic_mass_properties(entity, self.gun_angles[entity][0])
-            entities.append(dict(id=entity, initial_position=pose.position,
-                initial_orientation=quaternion(pose.yaw, pose.pitch, pose.roll),
-                mass=properties.mass, center_of_mass=properties.center_of_mass,
-                inertia=properties.inertia_diagonal, parts=parts))
+        entities = [] if static_only else [self._rapier_vehicle(entity, pose)
+                                           for entity, pose in self.poses.items()]
         with tempfile.NamedTemporaryFile(mode='w', suffix='.json', prefix='tfs-rapier-', delete=False) as stream:
             json.dump(dict(static=static, entities=entities), stream)
             self._rapier_fixture = stream.name
         return self._rapier_fixture
+
+    def _rapier_vehicle(self, entity, pose):
+        from .physics_proxy import swept_turret
+
+        assets = self.assets_for(entity)
+        parts = []
+        for source in assets.contact_proxies:
+            part = swept_turret(source) if source.name == assets.turret_node else source
+            offset = np.asarray(assets.definition.aiming.turret_position
+                                if source.name == assets.turret_node else (0., 0., 0.), dtype=float)
+            row = dict(kind=part.kind, offset=(offset+np.asarray(
+                (0., 0., 0.) if part.kind == 'prism' else part.center)).tolist())
+            if part.kind == 'prism':
+                row['path'] = assets.mesh_files.mesh(part.vertices)
+            elif part.kind == 'box':
+                row['half_extents'] = list(part.half_extents)
+            else:
+                row['radius'] = part.radius
+                row['length'] = part.length
+            parts.append(row)
+        properties = self._dynamic_mass_properties(entity, self.gun_angles[entity][0])
+        return dict(id=entity, initial_position=pose.position,
+            initial_orientation=quaternion(pose.yaw, pose.pitch, pose.roll),
+            mass=properties.mass, center_of_mass=properties.center_of_mass,
+            inertia=properties.inertia_diagonal, parts=parts)
 
     def _static_rays(self, starts, ends, *, _single=False):
         """Map/terrain/breakable rays. Vehicle armor keeps its exact model."""
@@ -1124,6 +1131,25 @@ class CollisionWorld:
             bullet.setCollisionFilterGroupMask(body, link, group, mask,
                                                 physicsClientId=self.cid)
 
+    def set_tracked_presence(self, entity, present):
+        """Remove or restore a grounded hull in both contact backends."""
+        if present == (entity not in self.suspended_entities):
+            return
+        if entity in self.dynamic_bodies or entity in self.pending_dynamics:
+            raise ValueError('Changing vehicle presence requires a stationary sensor')
+        for backend in (self._native_physics, self._rapier):
+            if backend is not None:
+                backend.set_sensor_enabled(entity, present)
+        body = self.bodies[entity]
+        if present:
+            self._sensor_filter(entity, _TRACKED_GROUP, _DYNAMIC_GROUP)
+            self.body_entities[body] = entity
+            self.suspended_entities.remove(entity)
+        else:
+            self._sensor_filter(entity, 0, 0)
+            del self.body_entities[body]
+            self.suspended_entities.add(entity)
+
     def _dynamic_shape(self, entity):
         """Compound convex hulls from the selected vehicle's collision mesh.
 
@@ -1235,7 +1261,7 @@ class CollisionWorld:
                                        assets.turret_node)
 
     @staticmethod
-    def _pose_from_quaternion(position, orientation, reference=None):
+    def _pose_from_quaternion(position, orientation, reference=None, *, rotation=None):
         """Convert Bullet's quaternion to the project's Y-up angle order.
 
         One orientation has infinitely many Euler descriptions.  Picking the
@@ -1245,7 +1271,8 @@ class CollisionWorld:
         nearest to it.  The result still recreates Bullet's rotation matrix;
         this is continuity selection, not an approximation of the attitude.
         """
-        rotation = np.asarray(bullet.getMatrixFromQuaternion(orientation), dtype=float).reshape(3,3)
+        if rotation is None:
+            rotation = np.asarray(bullet.getMatrixFromQuaternion(orientation), dtype=float).reshape(3,3)
         sine = max(-1., min(1., -float(rotation[1,2])))
         cosine = math.hypot(float(rotation[0,2]), float(rotation[2,2]))
 
@@ -1352,7 +1379,7 @@ class CollisionWorld:
         contact_friction = self._ragdoll_friction(math.cos(pose.pitch)*math.cos(pose.roll))
         bullet.changeDynamics(body, -1, collisionMargin=.001, lateralFriction=contact_friction, restitution=.02,
                               rollingFriction=.01, spinningFriction=.01,
-                              linearDamping=.015, angularDamping=.025,
+                              linearDamping=self.DYNAMIC_LINEAR_DAMPING, angularDamping=.025,
                               physicsClientId=self.cid)
         bullet.changeDynamics(body, -1,
                               localInertiaDiagonal=properties.inertia_diagonal,
@@ -1363,7 +1390,7 @@ class CollisionWorld:
         com_velocity = np.asarray(velocity, dtype=float) + np.cross(
             np.asarray(launch_angular, dtype=float), com_offset)
         obstacles = self.map_bodies | self.terrain_bodies
-        obstacles.update(body_id for other, body_id in self.bodies.items() if other != entity)
+        obstacles.update(body_id for body_id, other in self.body_entities.items() if other != entity)
         obstacles.update(dynamic.body for other, dynamic in self.dynamic_bodies.items()
                          if other != entity)
         corrected_by = 0.
@@ -1609,13 +1636,15 @@ class CollisionWorld:
         for radius in (.75,1.5,2.5,3.5):
             offsets.extend((radius*math.sin(i*math.tau/12),
                             radius*math.cos(i*math.tau/12)) for i in range(12))
+        suspension = self._has_suspension(entity)
         self._sensor_filter(entity,_TRACKED_GROUP,_DYNAMIC_GROUP)
         try:
             for dx,dz in offsets:
                 candidate = self._landing_support(x+dx,z+dz,yaw,pose.position[1],entity)
                 if (abs(candidate.position[1]-pose.position[1]) > 4.
                         or not self._valid(candidate,pose,entity=entity,climb=False,
-                                           suspension=self._has_suspension(entity))[0]):
+                                           suspension=suspension)[0]
+                        or (suspension and not self._can_carry_origin(entity,candidate))):
                     continue
                 self._road_poses[entity] = candidate
                 self._deactivate_dynamic(entity,candidate,(0.,0.,0.))
@@ -1632,9 +1661,8 @@ class CollisionWorld:
         t = t*t*(3.-2.*t)
         return self.DYNAMIC_HULL_FRICTION + t*(self.DYNAMIC_TRACK_FRICTION-self.DYNAMIC_HULL_FRICTION)
 
-    def _update_ragdoll_friction(self, dynamic, orientation, dt, contacts=None):
-        rotation = bullet.getMatrixFromQuaternion(orientation)
-        ux, uy, uz = rotation[1], rotation[4], rotation[7]
+    def _update_ragdoll_friction(self, dynamic, basis, blend, contacts=None):
+        ux, uy, uz = basis[1], basis[4], basis[7]
         if contacts is None:
             contacts = bullet.getContactPoints(bodyA=dynamic.body, physicsClientId=self.cid)
         total_weight = weighted_alignment = 0.
@@ -1650,7 +1678,7 @@ class CollisionWorld:
         # following a hill on its tracks keeps ordinary track contact grip.
         alignment = weighted_alignment / total_weight if total_weight else uy
         target = self._ragdoll_friction(alignment)
-        value = dynamic.contact_friction + (target-dynamic.contact_friction)*(-math.expm1(-self.DYNAMIC_GRIP_BLEND_RATE*dt))
+        value = dynamic.contact_friction + (target-dynamic.contact_friction)*blend
         if abs(value-dynamic.contact_friction) > 1e-5:
             dynamic.contact_friction = value
             # Sliding grip is independent of the existing rotational contact
@@ -1757,7 +1785,7 @@ class CollisionWorld:
                     center = np.asarray(pose.position) + offset
                     angular = np.asarray(self._rapier_angular_states[entity])
                     linear = np.asarray(self.motion[entity].velocity) + np.cross(angular, offset)
-                    before[entity] = (center, orientation, linear, angular)
+                    before[entity] = (center, rotation.ravel(), linear, angular)
                 result = self._rapier.step(sub_dt)
                 final_contacts = self._rapier_contacts(result['contacts'], sub_dt)
                 for entity, dynamic in list(self.dynamic_bodies.items()):
@@ -1772,7 +1800,8 @@ class CollisionWorld:
                     angular = np.asarray(state['angular'])
                     origin_velocity = linear - np.cross(angular, offset)
                     previous = self.poses[entity]
-                    pose = self._pose_from_quaternion(state['position'], orientation, previous)
+                    pose = self._pose_from_quaternion(state['position'], orientation, previous,
+                                                      rotation=rotation)
                     if not all(math.isfinite(value) for value in (*pose.position, *origin_velocity, *angular)):
                         raise ValueError('Non-finite Rapier dynamic body state')
                     self.poses[entity] = pose
@@ -1791,17 +1820,28 @@ class CollisionWorld:
         # As with Bullet, quiet landing and stuck-time counters advance once
         # per arena fixed step, not once per native integration substep.
         for entity, dynamic in list(self.dynamic_bodies.items()):
-            if entity in piloted:
-                dynamic.settled_steps = 0
-                dynamic.stationary_time = 0.
-                continue
             pose = self.poses[entity]
             previous = previous_poses[entity]
             orientation = self._rapier_orientations[entity]
             rotation = np.asarray(bullet.getMatrixFromQuaternion(orientation)).reshape(3, 3)
             angular = np.asarray(self._rapier_angular_states[entity])
             origin_velocity = np.asarray(self.motion[entity].velocity)
-            linear = origin_velocity + np.cross(angular, rotation @ np.asarray(dynamic.center_of_mass))
+            rotational_velocity = np.cross(angular, rotation @ np.asarray(dynamic.center_of_mass))
+            clipped, clipped_velocity = self._constrain_dynamic_pose(entity, pose, origin_velocity, rotation)
+            if clipped.position != pose.position:
+                self._rapier.deactivate(entity)
+                self._rapier.activate(entity, clipped.position, orientation,
+                                      clipped_velocity + rotational_velocity, angular)
+                self.poses[entity] = pose = clipped
+                self.motion[entity] = Motion(clipped_velocity, False)
+                self.set_pose(self.bodies[entity], pose)
+                self._synced[entity] = (pose, self.motion[entity])
+                origin_velocity = clipped_velocity
+            if entity in piloted:
+                dynamic.settled_steps = 0
+                dynamic.stationary_time = 0.
+                continue
+            linear = origin_velocity + rotational_velocity
             contacts = final_contacts[entity]
             handoff = self._rapier_handoff(entity, dynamic, pose, linear, angular, rotation[:, 1], contacts)
             if handoff is not None:
@@ -1845,8 +1885,11 @@ class CollisionWorld:
             self.pending_dynamics.pop(entity, None)
             self.short_flight_spins.pop(entity, None)
         dynamic = self.dynamic_bodies[entity]
-        offset = matrix(pose.yaw, pose.pitch, pose.roll) @ dynamic.center_of_mass
-        com_velocity = tuple(np.asarray(velocity) + np.cross(angular, offset))
+        ox, oy, oz = matrix(pose.yaw, pose.pitch, pose.roll) @ dynamic.center_of_mass
+        wx, wy, wz = angular
+        com_velocity = (velocity[0] + (wy*oz-wz*oy),
+                        velocity[1] + (wz*ox-wx*oz),
+                        velocity[2] + (wx*oy-wy*ox))
         if self._rapier is not None:
             self._rapier.set_velocity(entity, com_velocity, angular)
             self._rapier_angular_states[entity] = angular
@@ -1856,7 +1899,7 @@ class CollisionWorld:
         self._synced[entity] = (pose, state)
         return True
 
-    def add_flight_velocity(self, entity, delta, *, angular_delta=None):
+    def add_flight_velocity(self, entity, delta, *, angular_delta=None, linear_damping=None):
         if not self.supports_flight:
             return False
         state = self.motion[entity]
@@ -1864,7 +1907,45 @@ class CollisionWorld:
         angular = self.flight_spin(entity)
         if angular_delta is not None:
             angular = tuple(current+extra for current, extra in zip(angular, angular_delta))
-        return self.set_flight_velocity(entity, velocity, angular)
+        if not self.set_flight_velocity(entity, velocity, angular):
+            return False
+        if linear_damping is not None and self._rapier is None:
+            dynamic = self.dynamic_bodies[entity]
+            bullet.changeDynamics(dynamic.body, -1, linearDamping=linear_damping, physicsClientId=self.cid)
+            dynamic.restore_air_damping = True
+        return True
+
+    def _constrain_dynamic_pose(self, entity, pose, velocity, rotation):
+        """Keep dynamic hulls inside the red line and above deep terrain overlaps."""
+        bounds = self.dynamic_bounds[entity]
+        clipped = self._border_pose(pose, entity, flight_bounds=bounds, rotation=rotation)
+        x, y, z = clipped.position
+        vx, vy, vz = velocity
+        if (x - pose.position[0]) * vx < 0.:
+            vx = 0.
+        if (z - pose.position[2]) * vz < 0.:
+            vz = 0.
+        low, high = bounds
+        up = rotation[1]
+        down = -float(np.minimum(up * low, up * high).sum())
+        # The box is only a broad-phase bound. Its corners can stick out from
+        # a sloped hull or track nose and must not trigger depenetration.
+        if y - down < self.terrain.height(x, z) + 2.:
+            dynamic = self.dynamic_bodies[entity]
+            if dynamic.terrain_points is None:
+                assets = self.assets_for(entity)
+                proxies = getattr(assets, 'contact_proxies', None)
+                components = ((part.name, part.vertices) for part in proxies) if proxies else (
+                    getattr(assets, '_convex_shapes', None) or assets.tank_shapes)
+                dynamic.terrain_points = np.concatenate(
+                    [vertices for name, vertices in components if name != assets.turret_node])
+            world_points = dynamic.terrain_points @ rotation.T + clipped.position
+            heights = self._terrain_heights(world_points[:, 0], world_points[:, 2])
+            penetration = float(np.max(heights - world_points[:, 1]))
+            if penetration > self.DYNAMIC_DEEP_TERRAIN_OVERLAP:
+                clipped = Pose((x, y + penetration - self.SKIN, z), pose.yaw, pose.pitch, pose.roll)
+                vy = max(0., vy)
+        return clipped, (vx, vy, vz)
 
     def add_ground_velocity(self, entity, x, z):
         if not self.experimental_ground_impacts or not self.motion[entity].grounded:
@@ -1875,6 +1956,44 @@ class CollisionWorld:
             vx, vz = state.velocity
         self.ground_motion[entity] = GroundMotion((vx+x, vz+z), state.yaw_rate, True)
         return True
+
+    def deferred_impulse(self, entity, delta, spin, *, dt, max_speed, damping=None):
+        """Test a queued impulse against the live hull and its next swept pose."""
+        if entity not in self.bodies or entity in self.pending_dynamics:
+            return False
+        pose = self.poses[entity]
+        state = self.motion[entity]
+        slides = spin is None and state.grounded and self.experimental_ground_impacts
+        current = state.velocity
+        ground = self.ground_motion[entity]
+        if slides and ground.active and ground.velocity is not None:
+            current = ground.velocity[0], 0., ground.velocity[1]
+        velocity = tuple(a+b for a, b in zip(current, delta))
+        if not all(map(math.isfinite, velocity)):
+            return False
+        length = math.hypot(*velocity)
+        if length > max_speed:
+            velocity = tuple(v*max_speed/length for v in velocity)
+        ahead = Pose(tuple(p+v*dt for p, v in zip(pose.position, velocity)),
+                     pose.yaw, pose.pitch, pose.roll)
+        try:
+            if (not self._inside(pose, entity) or not self._inside(ahead, entity)
+                    or self._contacts(pose, entity, suspension=state.grounded)
+                    or self._contacts(ahead, entity, suspension=slides)):
+                return False
+        finally:
+            self.set_pose(self.bodies[entity], pose)
+        if slides:
+            return self.add_ground_velocity(entity, velocity[0]-current[0], velocity[2]-current[2])
+        angular = self.flight_spin(entity)
+        omega = tuple(a+b for a, b in zip(angular, spin)) if spin is not None else angular
+        angular_speed = math.hypot(*omega)
+        limit = self.DYNAMIC_MAX_LAUNCH_ANGULAR_SPEED
+        if angular_speed > limit:
+            omega = tuple(v*limit/angular_speed for v in omega)
+        return self.add_flight_velocity(entity, tuple(v-c for v, c in zip(velocity, current)),
+                                        angular_delta=tuple(v-c for v, c in zip(omega, angular)),
+                                        linear_damping=damping)
 
     def dynamic_commit(self, dt, *, piloted=()):
         """Advance live bodies and then start newly released hulls.
@@ -1892,7 +2011,9 @@ class CollisionWorld:
         previous_contacts = {}
         if self.dynamic_bodies:
             steps = max(1, math.ceil(dt / self.DYNAMIC_MAX_STEP))
-            bullet.setTimeStep(dt / steps, physicsClientId=self.cid)
+            sub_dt = dt / steps
+            blend = -math.expm1(-self.DYNAMIC_GRIP_BLEND_RATE * sub_dt)
+            bullet.setTimeStep(sub_dt, physicsClientId=self.cid)
             for _ in range(steps):
                 before = {}
                 for entity,dynamic in self.dynamic_bodies.items():
@@ -1900,9 +2021,10 @@ class CollisionWorld:
                         dynamic.body,physicsClientId=self.cid)
                     linear,angular = bullet.getBaseVelocity(dynamic.body,
                                                             physicsClientId=self.cid)
-                    self._update_ragdoll_friction(dynamic, orientation, dt/steps,
+                    basis = bullet.getMatrixFromQuaternion(orientation)
+                    self._update_ragdoll_friction(dynamic, basis, blend,
                                                   contacts=previous_contacts.get(entity))
-                    before[entity] = (center,orientation,linear,angular)
+                    before[entity] = (center,basis,linear,angular)
                 bullet.stepSimulation(physicsClientId=self.cid)
                 # The tracked solver destroys breakables in _valid(), but an
                 # active rigid body never enters that path. Resolve its real
@@ -1915,15 +2037,20 @@ class CollisionWorld:
                     contacts = bullet.getContactPoints(bodyA=dynamic.body,
                                                        physicsClientId=self.cid)
                     current_contacts[entity] = contacts
-                    keys = {breakables[point[2]] for point in contacts
-                            if point[2] in breakables and point[8] <= self.SKIN}
-                    if keys:
-                        contacts_changed = True
-                        velocity, _ = bullet.getBaseVelocity(dynamic.body,
-                                                               physicsClientId=self.cid)
-                        direction = (float(velocity[0]), float(velocity[2]))
-                        for key in sorted(keys):
-                            self.destroy(key, direction)
+                    if contacts:
+                        if dynamic.restore_air_damping and any(point[8] <= 0. for point in contacts):
+                            bullet.changeDynamics(dynamic.body, -1, linearDamping=self.DYNAMIC_LINEAR_DAMPING,
+                                                  physicsClientId=self.cid)
+                            dynamic.restore_air_damping = False
+                        keys = {breakables[point[2]] for point in contacts
+                                if point[2] in breakables and point[8] <= self.SKIN}
+                        if keys:
+                            contacts_changed = True
+                            velocity, _ = bullet.getBaseVelocity(dynamic.body,
+                                                                 physicsClientId=self.cid)
+                            direction = (float(velocity[0]), float(velocity[2]))
+                            for key in sorted(keys):
+                                self.destroy(key, direction)
                     self._record_fall_contacts(entity,dynamic,before[entity],contacts)
                 previous_contacts = {} if contacts_changed else current_contacts
         for entity, dynamic in list(self.dynamic_bodies.items()):
@@ -1945,24 +2072,37 @@ class CollisionWorld:
             velocity, angular = bullet.getBaseVelocity(dynamic.body, physicsClientId=self.cid)
             rotation = np.asarray(bullet.getMatrixFromQuaternion(orientation),
                                   dtype=float).reshape(3, 3)
-            offset = rotation @ np.asarray(dynamic.center_of_mass, dtype=float)
+            ox, oy, oz = rotation @ dynamic.center_of_mass
             # Bullet reports the inertial (centre-of-mass) frame.  The rest
             # of the server, collision sensor and Mercury pose retain the
             # hull origin, so mirror back both the origin and its velocity.
             # v_origin = v_com - omega x r_com.
-            origin = np.asarray(center, dtype=float) - offset
-            self._fall_peaks[entity] = max(self._fall_peaks.get(entity,float(origin[1])),
-                                           float(origin[1]))
-            origin_velocity = np.asarray(velocity, dtype=float) - np.cross(
-                np.asarray(angular, dtype=float), offset)
-            pose = self._pose_from_quaternion(origin, orientation, self.poses[entity])
+            origin = (center[0]-ox, center[1]-oy, center[2]-oz)
+            self._fall_peaks[entity] = max(self._fall_peaks.get(entity, origin[1]), origin[1])
+            wx, wy, wz = angular
+            origin_velocity = (velocity[0] - (wy*oz-wz*oy),
+                               velocity[1] - (wz*ox-wx*oz),
+                               velocity[2] - (wx*oy-wy*ox))
+            pose = self._pose_from_quaternion(origin, orientation, self.poses[entity],
+                                              rotation=rotation)
             if (not all(math.isfinite(value) for value in (*pose.position, pose.yaw, pose.pitch, pose.roll))
                     or not all(math.isfinite(value) for value in (*origin_velocity, *angular))):
                 raise ValueError('Non-finite experimental dynamic body state')
+            clipped, clipped_velocity = self._constrain_dynamic_pose(entity, pose, origin_velocity, rotation)
+            if clipped.position != pose.position:
+                center = tuple(current + new - old for current, new, old
+                               in zip(center, clipped.position, pose.position))
+                velocity = tuple(current + new - old for current, new, old
+                                 in zip(velocity, clipped_velocity, origin_velocity))
+                bullet.resetBasePositionAndOrientation(dynamic.body, center, orientation, physicsClientId=self.cid)
+                bullet.resetBaseVelocity(dynamic.body, velocity, angular, physicsClientId=self.cid)
+                pose, origin_velocity = clipped, clipped_velocity
             previous = self.poses[entity]
             self.poses[entity] = pose
-            self.motion[entity] = Motion(tuple(float(value) for value in origin_velocity), False)
-            self.set_pose(self.bodies[entity], pose)
+            self.motion[entity] = Motion(tuple(map(float, origin_velocity)), False)
+            # The sensor mirrors the rigid body's exact position and rotation.
+            bullet.resetBasePositionAndOrientation(self.bodies[entity], pose.position,
+                                                   orientation, physicsClientId=self.cid)
             self._synced[entity] = (pose, self.motion[entity])
             moved |= math.dist(previous.position, pose.position) > 1e-7
             if entity in piloted:
@@ -1995,8 +2135,7 @@ class CollisionWorld:
 
     def _record_fall_contacts(self, entity, dynamic, before, contacts):
         """Use pre-impulse point velocity; one HP peak per contact episode."""
-        center,orientation,linear,angular = before
-        basis = bullet.getMatrixFromQuaternion(orientation)
+        center,basis,linear,angular = before
         cx,cy,cz = dynamic.center_of_mass
         origin_y = center[1] - (basis[3]*cx + basis[4]*cy + basis[5]*cz)
         peak_height = max(self._fall_peaks.get(entity,origin_y),origin_y)
@@ -2200,6 +2339,7 @@ class CollisionWorld:
         self.dynamic_recoveries.clear()
         self.dynamic_orientation_resets.clear()
         self.body_entities.clear()
+        self.suspended_entities.clear()
         self.ground_motion.clear()
         self.ground_commands.clear()
         self.ground_track_rates.clear()
@@ -2267,6 +2407,62 @@ class CollisionWorld:
         self._seed_support_memory(entity, pose, 0.)
         self.set_pose(self.bodies[entity], pose)
         self._synced[entity] = (pose, self.motion[entity])
+
+    def replace_training_body(self, entity, assets, spawns):
+        """Fit the replacement hull at a team spawn before committing it."""
+        previous = self.assets_for(entity)
+        pose = self.poses[entity]
+        if not self.vehicle_assets:
+            self.vehicle_assets.update(dict.fromkeys(self.bodies, self.assets))
+        old_body, old_turret = self.bodies[entity], self.turret_links[entity]
+        old_tracks = self.track_links[entity]
+        self.vehicle_assets[entity] = assets
+        body = None
+        placed = None
+        try:
+            body, turret = self._tank(pose.position, _TRACKED_GROUP, entity)
+            self.bodies[entity], self.turret_links[entity] = body, turret
+            self.track_links[entity] = frozenset(
+                index for index, name in enumerate(
+                    part for part, _ in assets.tank_shapes if part != 'hull')
+                if name.startswith('chassis_track_'))
+            for x, z, yaw in spawns:
+                placed = self.training_placement(entity, x, z, yaw, stationary=True)
+                if placed is not None:
+                    break
+            if placed is None:
+                return None
+            if entity in self.dynamic_bodies:
+                # The old ragdoll owns its previous dimensions and mass.
+                self.bodies[entity] = old_body
+                self._deactivate_dynamic(entity, pose, (0., 0., 0.))
+                self.bodies[entity] = body
+            self.gun_angles[entity] = (0., 0.)
+            self.dynamic_shapes.pop(entity, None)
+            self.dynamic_bounds.pop(entity, None)
+            self._contact_support_cache.pop(entity, None)
+            self._support_hints.pop(entity, None)
+            self._support_bounds.pop(entity, None)
+            self._carrying_supported.pop(entity, None)
+            self._drive_efforts.pop(entity, None)
+            if self.experimental_ground_impacts:
+                self.ground_mass_properties[entity] = self._dynamic_mass_properties(entity, 0.)
+            if self._native_physics is not None:
+                self._native_physics.replace_vehicle(self, entity, placed)
+            if self._rapier is not None:
+                self._rapier.replace_vehicle(self._rapier_vehicle(entity, placed))
+            self.relocate_training_body(entity, placed)
+            bullet.removeBody(old_body, physicsClientId=self.cid)
+            del self.body_entities[old_body]
+            self.body_entities[body] = entity
+            return placed
+        finally:
+            if placed is None:
+                self.vehicle_assets[entity] = previous
+                self.bodies[entity], self.turret_links[entity] = old_body, old_turret
+                self.track_links[entity] = old_tracks
+                if body is not None:
+                    bullet.removeBody(body, physicsClientId=self.cid)
 
     def set_turret(self, yaw, entity=None, pitch=0.):
         entity = self.primary_id if entity is None else entity
@@ -2766,7 +2962,7 @@ class CollisionWorld:
         self.set_pose(player, pose)
         if _contact_queries is not None:
             points = _contact_queries.gather(bullet, self.cid, player, self.SKIN,
-                self.map_bodies, self.bodies.values(),
+                self.map_bodies, self.body_entities,
                 getattr(self, '_contact_query_observer', None), entity)
         else:
             points = []
@@ -2783,7 +2979,7 @@ class CollisionWorld:
                 observer(entity,query_low,query_high)
             near = bullet.getOverlappingObjects(query_low,query_high,
                                                 physicsClientId=self.cid) or []
-            other_tanks = set(self.bodies.values())-{player}
+            other_tanks = self.body_entities.keys() - {player}
             bodies = {b for b,_ in near if b in self.map_bodies or b in other_tanks}
             for body in bodies:
                 points.extend(bullet.getClosestPoints(player, body, self.SKIN,
@@ -2940,6 +3136,55 @@ class CollisionWorld:
                         return False
         return True
 
+    def _border_pose(self, pose, entity, *, flight_bounds=None, rotation=None):
+        """Project the hull onto the playable rectangle, independently on both axes."""
+        x, y, z = pose.position
+        low_x, low_z, high_x, high_z = self.assets.bounds
+        if flight_bounds is None:
+            if self._inside(pose, entity):
+                return pose
+            _, chassis, _ = self._chassis_bounds[id(self.assets_for(entity))]
+            bounds = tuple(((lo[0], 0., lo[2]), (hi[0], 0., hi[2])) for lo, hi in chassis)
+        else:
+            lo, hi = flight_bounds
+            radius = sum(max(abs(a), abs(b)) for a, b in zip(lo, hi)) + self.SKIN
+            if low_x + radius <= x <= high_x - radius and low_z + radius <= z <= high_z - radius:
+                return pose
+            bounds = (flight_bounds,)
+        if rotation is None:
+            rotation = matrix(pose.yaw, pose.pitch, pose.roll)
+
+        def limits(axis, low, high):
+            row = rotation[axis]
+            edges = [(np.minimum(row * lo, row * hi).sum(),
+                      np.maximum(row * lo, row * hi).sum()) for lo, hi in bounds]
+            margin = self.SKIN + .001
+            return (low + margin - min(edge[0] for edge in edges),
+                    high - margin - max(edge[1] for edge in edges))
+
+        left, right = limits(0, low_x, high_x)
+        near, far = limits(2, low_z, high_z)
+        return Pose((min(right, max(left, x)), y, min(far, max(near, z))),
+                    pose.yaw, pose.pitch, pose.roll)
+
+    def _border_drive(self, entity, distance, yaw_delta, displacement=None):
+        if displacement is None and not distance:
+            return None
+        pose = self.poses[entity]
+        x, y, z = pose.position
+        yaw = pose.yaw + yaw_delta
+        dx, dz = ((math.sin(yaw) * distance, math.cos(yaw) * distance)
+                  if displacement is None else displacement)
+        candidate = Pose((x + dx, y, z + dz), yaw, pose.pitch, pose.roll)
+        clipped = self._border_pose(candidate, entity)
+        if clipped is candidate:
+            return displacement
+        # Rotation can grow the footprint at rest. A border must not pull the
+        # tank backwards when it was trying to drive into the wall.
+        bx, _, bz = clipped.position
+        return (min(max(0., dx), max(min(0., dx), bx - x)),
+                min(max(0., dz), max(min(0., dz), bz - z)))
+
     def destroy(self, key, direction, damage=None):
         if key in self.destroyed or key not in self.object_health:
             return False
@@ -3064,13 +3309,19 @@ class CollisionWorld:
         if dt is None:
             if planar_displacement is not None or planar_velocity is not None:
                 raise ValueError('Planar motion requires a fixed-step interval')
-            pose,moved,_ = self._drive(entity,distance,yaw_delta)
+            pose,moved,_ = self._drive(entity, distance, yaw_delta,
+                                      planar_displacement=self._border_drive(entity, distance, yaw_delta))
             state = self.motion.setdefault(entity,Motion())
             state.velocity,state.grounded = (0.,0.,0.),True
         else:
             if not (math.isfinite(dt) and dt > 0):
                 raise ValueError('Invalid motion interval')
             state = self._motion_state(entity)
+            if state.grounded and entity not in self.dynamic_bodies:
+                clipped = self._border_drive(entity, distance, yaw_delta, planar_displacement)
+                if clipped != planar_displacement:
+                    planar_velocity = tuple(axis / dt for axis in clipped)
+                    planar_displacement = clipped
             if (self.experimental_ground_impacts and state.grounded
                     and entity not in self.dynamic_bodies):
                 if planar_velocity is None:
@@ -3214,7 +3465,7 @@ class CollisionWorld:
         """Collect one measured closest point for each nearby grounded pair."""
         distance = self.GROUND_CONTACT_GAP
         pairs = dict(self.ground_contacts)
-        for entity in sorted(self.bodies):
+        for entity in sorted(self.body_entities.values()):
             if (entity in self.dynamic_bodies or entity in self.pending_dynamics
                     or not self.motion[entity].grounded):
                 continue
@@ -4173,6 +4424,12 @@ class CollisionWorld:
             self._fall_peaks[entity] = max(self._fall_peaks.get(entity,y),y)
             dx,dz,dy = vx*h,vz*h,(vy-.5*g*h)*h
             vy -= g*h
+            candidate = Pose((x+dx, y+dy, z+dz), pose.yaw, pose.pitch, pose.roll)
+            clipped = self._border_pose(candidate, entity)
+            if clipped.position[0] != candidate.position[0]:
+                dx, vx = clipped.position[0] - x, 0.
+            if clipped.position[2] != candidate.position[2]:
+                dz, vz = clipped.position[2] - z, 0.
             for attempt in range(3):
                 ground = self._landing_support(x+dx,z+dz,pose.yaw,y,entity)
                 landing = y+dy <= ground.position[1]
@@ -4367,7 +4624,7 @@ class CollisionWorld:
         ignore_entity = self.primary_id if ignore_entity is None else ignore_entity
         closest = None
         for entity,pose in self.poses.items():
-            if entity == ignore_entity:
+            if entity == ignore_entity or entity in self.suspended_entities:
                 continue
             yaw,pitch = self.gun_angles[entity]
             rotation = self._dynamic_rotation(entity)

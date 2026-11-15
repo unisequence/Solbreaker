@@ -40,6 +40,10 @@ def launch_client(lab, *, auto_login=None, profile=None, url=None, lighting=None
         manifest = upgrade_form(lab, manifest)
         from .client_ui import install_sandbox_bindings, install_server_name, install_training_maps
         manifest = install_sandbox_bindings(lab, manifest)
+        from .client_reticle import install as install_reticle
+        manifest = install_reticle(lab, manifest)
+        from .client_time_stop import install as install_time_stop
+        install_time_stop(lab)
         install_training_maps(lab, manifest)
         from .client_atmosphere import apply_preset, install_weather_maps
         manifest = install_weather_maps(lab, manifest)
