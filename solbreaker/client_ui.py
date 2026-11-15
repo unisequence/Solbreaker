@@ -49,7 +49,7 @@ UI_RESOURCES = (BASE_HEADER, BASE_LOBBY, BASE_LOBBY_ACTIONS, STATS_ITEM, INVENTO
                 client_battle_settings.BATTLE_MENU, *client_recon.MARKER_OPACITY)
 STRINGS_EN = "Strings/en.yaml.dvpl"
 STRINGS_RU = "Strings/ru.yaml.dvpl"
-SANDBOX_BINDINGS_VERSION = 13
+SANDBOX_BINDINGS_VERSION = 14
 SANDBOX_BINDING_STRINGS = {
     STRINGS_EN: {'Title': 'Solbreaker Sandbox',
                  'Boost': 'Toggle boost', 'Flight': 'Toggle flight',
@@ -93,9 +93,47 @@ LOCAL_TRAINING_MAP_STRINGS = {
     STRINGS_EN: {"#maps:lagoon:15_lagoon_ln/15_lagoon_ln.sc2": "Lagoon"},
     STRINGS_RU: {"#maps:lagoon:15_lagoon_ln/15_lagoon_ln.sc2": "Лагуна"},
 }
-VEHICLE_NAME_STRINGS = {
-    key: "FVE Defender" for key in ("#other_vehicles:Oth84_FVE_Defender",
-                                    "#other_vehicles:Oth84_FVE_Defender_short")
+# Both name keys are absent from the pinned client for these vehicles.
+VEHICLE_NAMES = {
+    "#china_vehicles:Ch42_M41D": "M41D",
+    "#china_vehicles:Ch34_WZ-131G_FT_BP": "Panlong",
+    "#china_vehicles:Type_58TUR": "Type 58 50-08",
+    "#european_vehicles:S07_Strv74BP": "Turbo",
+    "#european_vehicles:Cz08_T-25BP": "Spark",
+    "#european_vehicles:Cz20_ShPTK_TVP_100": "ShPTK-TVP 100",
+    "#france_vehicles:ARL_44BP": "Eraser BP44",
+    "#france_vehicles:F69_AMX_13D": "AMX Defender",
+    "#france_vehicles:F140_Sentinelle": "Sentinelle",
+    "#germany_vehicles:Waffentrager_IV_CL": "Waffenträger Ritter",
+    "#germany_vehicles:PzVI_AusfTUR": "Tiger Frontline",
+    "#japan_vehicles:PzVI_GuP": "Tiger Kuromorimine SP",
+    "#other_vehicles:Oth36_Indien_Panzer_S1": "Magnate",
+    "#other_vehicles:Oth37_T26_E4_SuperPershing_S1": "Fixer",
+    "#other_vehicles:Oth38_50TP_Tyszkiewicza_S1": "Regressor",
+    "#other_vehicles:Oth51_FD_24": "TSL-7 Defender",
+    "#other_vehicles:Oth53_Rammer": "Rammer",
+    "#other_vehicles:Oth84_FVE_Defender": "FVE Defender",
+    "#other_vehicles:Oth85_Ghoul": "Biter",
+    "#uk_vehicles:GB94_Centurion_Mk5-1_RAAC": "Centurion Mk. 5/1 RAAC",
+    "#uk_vehicles:GB86_Mark_I_Male": "Mark I Male",
+    "#usa_vehicles:A130_Super_Hellcat": "Super Hellcat",
+    "#usa_vehicles:M36_BP": "Enforcer",
+    "#ussr_vehicles:R175_IS_2E": "IS-2 shielded",
+    "#ussr_vehicles:T34_85TUR": "T-34-85 Breakthrough",
+    "#ussr_vehicles:R81_IS8_CL": "IS-8 Taurus",
+}
+VEHICLE_NAMES_RU = {
+    "#china_vehicles:Ch34_WZ-131G_FT_BP": "Паньлун",
+    "#france_vehicles:ARL_44BP": "Стиратель BP44",
+    "#other_vehicles:Oth53_Rammer": "Костолом",
+    "#other_vehicles:Oth85_Ghoul": "Кусака",
+    "#ussr_vehicles:R175_IS_2E": "ИС-2 экранированный",
+    "#ussr_vehicles:T34_85TUR": "Т-34-85 Прорывной",
+    "#ussr_vehicles:R81_IS8_CL": "ИС-8 Taurus",
+}
+VEHICLE_NAME_KEYS = {
+    "#germany_vehicles:G125_Spz_57_Rh": "Rhm. Pzw.",
+    "#usa_vehicles:A121_T26E3_short": "T26E3 Eagle 7",
 }
 LOCAL_PROVISION_STRINGS = {
     STRINGS_EN: {'#artefacts:desert_power/name': 'Desert Kit',
@@ -199,6 +237,18 @@ def _sandbox_controls(document):
     controls.insert(controls.index(bindings), title)
 
 
+def _fill_vehicle_names(document, relative):
+    names = VEHICLE_NAMES
+    if relative == STRINGS_RU:
+        names = {**names, **VEHICLE_NAMES_RU}
+    keys = {f"{key}{suffix}": name for key, name in names.items() for suffix in ("", "_short")}
+    keys.update(VEHICLE_NAME_KEYS)
+    for key, name in keys.items():
+        current = document.get(key, "").strip()
+        if current in ("", key, key.removeprefix("#")):
+            document[key] = name
+
+
 def patched_strings(source, relative, *, navigation_enabled=True):
     document = yaml.load(dvpl.read(source), Loader=_StringsLoader)
     if not isinstance(document, dict):
@@ -210,7 +260,7 @@ def patched_strings(source, relative, *, navigation_enabled=True):
     # The pinned training catalog exposes Lagoon without either locale label.
     for key, text in LOCAL_TRAINING_MAP_STRINGS.get(relative, {}).items():
         document.setdefault(key, text)
-    document.update(VEHICLE_NAME_STRINGS)
+    _fill_vehicle_names(document, relative)
     document.update(LOCAL_PROVISION_STRINGS.get(relative, {}))
     document.update(LOCAL_MODE_STRINGS.get(relative, {}))
     document.update(_sandbox_binding_strings(relative))
@@ -577,7 +627,7 @@ def install_sandbox_bindings(lab, manifest):
     patches = {KEYBOARD_OPTIONS: patched_resource(data/KEYBOARD_OPTIONS, KEYBOARD_OPTIONS)}
     for relative in SANDBOX_BINDING_STRINGS:
         strings = yaml.load(dvpl.read(data/relative), Loader=_StringsLoader)
-        strings.update(VEHICLE_NAME_STRINGS)
+        _fill_vehicle_names(strings, relative)
         strings.update(_sandbox_binding_strings(relative))
         _weather_map_strings(strings, relative)
         patches[relative] = dvpl.encode(yaml.safe_dump(strings, sort_keys=False, allow_unicode=True,

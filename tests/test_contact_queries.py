@@ -108,6 +108,7 @@ class ContactQueriesTests(unittest.TestCase):
         from solbreaker.collision import CollisionWorld, Pose
         world = SimpleNamespace(primary_id=10, bodies=self.vehicles, cid=self.cid,
             SKIN=self.skin, SUSPENSION_TRAVEL=.2, map_bodies=self.maps,
+            body_entities={body: entity for entity, body in self.vehicles.items()},
             track_links={10: (0, 1)}, breakable_bodies={},
             _compressed_track_contact=lambda *args: False)
         world.set_pose = lambda body, pose: bullet.resetBasePositionAndOrientation(

@@ -330,55 +330,69 @@ impl World {
             .as_array()
             .ok_or("Missing vehicle geometry")?
         {
-            let entity = entry["id"].as_u64().ok_or("Missing entity id")? as u32;
-            let original = entry["body"].as_i64().ok_or("Missing vehicle body id")? as i32;
-            let parts = entry["parts"].as_array().ok_or("Missing vehicle parts")?;
-            let hull = parts
-                .iter()
-                .position(|part| part["name"] == "hull")
-                .ok_or("Missing hull part")?;
-            let shape = world.shape(&parts[hull], false)?;
-            let mut links = Vec::new();
-            let mut turret = None;
-            for (index, part) in parts.iter().enumerate() {
-                if index == hull {
-                    continue;
-                }
-                let shape = world.shape(part, false)?;
-                let moving = part["turret"].as_bool().unwrap_or(false);
-                if moving {
-                    turret = Some(links.len() as i32);
-                }
-                links.push((shape, vector::<3>(&part["offset"])?, moving));
-            }
-            let mut body = world.create_body(
-                shape,
-                &links,
-                vector::<3>(&entry["position"])?,
-                vector::<4>(&entry["orientation"])?,
-            )?;
-            body.turret = turret;
-            unsafe {
-                let command = (world.client.api.filter_init)(world.client.handle);
-                for link in -1..body.links {
-                    (world.client.api.filter_mask)(command, body.native_id, link, 2, -1);
-                }
-                world.client.execute(command)?;
-                let command = (world.client.api.dynamics_init)(world.client.handle);
-                (world.client.api.collision_margin)(command, body.native_id, 0.001);
-                world.client.execute(command)?;
-            }
-            world.original_ids.insert(body.native_id, original);
-            world.entities.insert(entity, original);
-            world.bodies.insert(original, body);
-            if let Some(value) = entry.get("ground") {
-                world.ground.insert(
-                    entity,
-                    ground::State::new(ground::Configuration::new(value)?),
-                );
-            }
+            world.install_vehicle(entry)?;
         }
         Ok(world)
+    }
+
+    fn install_vehicle(&mut self, entry: &Value) -> Result<(), String> {
+        let entity = entry["id"].as_u64().ok_or("Missing entity id")? as u32;
+        let original = entry["body"].as_i64().ok_or("Missing vehicle body id")? as i32;
+        let ground = entry.get("ground").map(ground::Configuration::new).transpose()?;
+        let parts = entry["parts"].as_array().ok_or("Missing vehicle parts")?;
+        let hull = parts
+            .iter()
+            .position(|part| part["name"] == "hull")
+            .ok_or("Missing hull part")?;
+        let shape = self.shape(&parts[hull], false)?;
+        let mut links = Vec::new();
+        let mut turret = None;
+        for (index, part) in parts.iter().enumerate() {
+            if index == hull {
+                continue;
+            }
+            let shape = self.shape(part, false)?;
+            let moving = part["turret"].as_bool().unwrap_or(false);
+            if moving {
+                turret = Some(links.len() as i32);
+            }
+            links.push((shape, vector::<3>(&part["offset"])?, moving));
+        }
+        let mut body = self.create_body(
+            shape,
+            &links,
+            vector::<3>(&entry["position"])?,
+            vector::<4>(&entry["orientation"])?,
+        )?;
+        body.turret = turret;
+        unsafe {
+            let command = (self.client.api.filter_init)(self.client.handle);
+            for link in -1..body.links {
+                (self.client.api.filter_mask)(command, body.native_id, link, 2, -1);
+            }
+            self.client.execute(command)?;
+            let command = (self.client.api.dynamics_init)(self.client.handle);
+            (self.client.api.collision_margin)(command, body.native_id, 0.001);
+            self.client.execute(command)?;
+        }
+        if let Some(&old_id) = self.entities.get(&entity) {
+            let old = &self.bodies[&old_id];
+            if let Err(error) = self.client.execute(unsafe {
+                (self.client.api.remove)(self.client.handle, old.native_id)
+            }) {
+                self.poisoned = true;
+                return Err(error);
+            }
+            self.original_ids.remove(&old.native_id);
+            self.bodies.remove(&old_id);
+        }
+        self.original_ids.insert(body.native_id, original);
+        self.entities.insert(entity, original);
+        self.bodies.insert(original, body);
+        if let Some(config) = ground {
+            self.ground.insert(entity, ground::State::new(config));
+        }
+        Ok(())
     }
 
     fn shape(&self, value: &Value, concave: bool) -> Result<i32, String> {
@@ -540,6 +554,25 @@ impl World {
         Ok(points)
     }
 
+    fn sensor_enabled(&mut self, entity: u32, enabled: bool) -> Result<(), String> {
+        let original = *self.entities.get(&entity).ok_or("Unknown entity")?;
+        let body = &self.bodies[&original];
+        unsafe {
+            let command = (self.client.api.filter_init)(self.client.handle);
+            let (group, mask) = if enabled { (2, -1) } else { (0, 0) };
+            for link in -1..body.links {
+                (self.client.api.filter_mask)(command, body.native_id, link, group, mask);
+            }
+            self.client.execute(command)?;
+        }
+        if enabled {
+            self.original_ids.insert(body.native_id, original);
+        } else {
+            self.original_ids.remove(&body.native_id);
+        }
+        Ok(())
+    }
+
     fn query(&mut self, request: &Value) -> Result<Value, String> {
         match request["operation"]
             .as_str()
@@ -566,6 +599,10 @@ impl World {
                         return Err(error);
                     }
                 }
+                Ok(Value::Null)
+            }
+            "replace_vehicle" => {
+                self.install_vehicle(&request["vehicle"])?;
                 Ok(Value::Null)
             }
             "destroy" => {
@@ -778,6 +815,31 @@ unsafe fn json_argument(pointer: *const c_char) -> Result<Value, String> {
         return Err("Missing JSON argument".into());
     }
     serde_json::from_slice(CStr::from_ptr(pointer).to_bytes()).map_err(|error| error.to_string())
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn solbreaker_physics_sensor_enabled(
+    handle: *mut c_void, entity: u32, enabled: bool,
+) -> i32 {
+    if handle.is_null() {
+        return -1;
+    }
+    let world = &mut *handle.cast::<World>();
+    if world.poisoned {
+        return -2;
+    }
+    match catch_unwind(AssertUnwindSafe(|| world.sensor_enabled(entity, enabled))) {
+        Ok(Ok(())) => 0,
+        Ok(Err(error)) => {
+            world.error = error;
+            -3
+        }
+        Err(_) => {
+            world.error = "Panic changing native sensor presence".into();
+            world.poisoned = true;
+            -4
+        }
+    }
 }
 
 #[no_mangle]

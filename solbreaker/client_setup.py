@@ -90,6 +90,10 @@ def prepare(game, destination, profile, *, windows=False, proton=None, steam=Non
         manifest = client_atgm_aim.upgrade(stage, manifest, manifest['client_exe_sha256'])
         client_sandbox.upgrade(stage, manifest, manifest['client_exe_sha256'])
         client_ui.install_ui_guards(stage)
+        from .client_reticle import install as install_reticle
+        manifest = install_reticle(stage, json.loads(manifest_path.read_text()))
+        from .client_time_stop import install as install_time_stop
+        install_time_stop(stage)
         client_ui.install_training_maps(stage, manifest)
         replay_ui.install(stage)
         scene_quality.install(stage)

@@ -130,13 +130,13 @@ def validate_contents(payloads):
 
 
 def package(output, *, windows_native=None, windows_wheel=None, windows_runtime=None,
-            linux_native=None, server_only=False, windows_physics=None):
+            linux_native=None, server_only=False, windows_physics=None, windows_rapier=None):
     if bool(windows_native) != bool(windows_wheel):
         raise ValueError('Provide both the Windows DLL directory and the Python 3.12 Bullet wheel')
     if windows_runtime and not windows_native:
         raise ValueError('Portable runtime requires the accepted Windows native inputs')
-    if windows_physics and not windows_native:
-        raise ValueError('A rebuilt Windows controller requires the remaining pinned Windows inputs')
+    if (windows_physics or windows_rapier) and not windows_native:
+        raise ValueError('Rebuilt Windows libraries require the remaining pinned Windows inputs')
     if linux_native and (windows_native or not server_only):
         raise ValueError('Linux libraries are only supported in a dedicated Linux package')
     if server_only and not (windows_runtime or linux_native):
@@ -179,14 +179,16 @@ def package(output, *, windows_native=None, windows_wheel=None, windows_runtime=
             if hashlib.sha256(content).hexdigest() != expected[path.name]:
                 raise ValueError('Native package input differs from accepted SHA-256: '+path.name)
             payloads[name] = content
-        if windows_physics:
-            name = 'solbreaker/native/physics_core/solbreaker_physics_core.dll'
-            controller = read_input(Path(windows_physics))
-            offset = int.from_bytes(controller[60:64], 'little')
-            if controller[:2] != b'MZ' or controller[offset:offset+6] != b'PE\0\0\x64\x86':
-                raise ValueError('Expected an x86-64 Windows ground controller')
-            validate_contents({GAME_CATALOG: payloads[GAME_CATALOG], name: controller})
-            payloads[name] = controller
+        for crate, path in (('physics_core', windows_physics), ('rapier_dynamic', windows_rapier)):
+            if path is None:
+                continue
+            name = f'solbreaker/native/{crate}/{WINDOWS_LIBRARIES[crate]}'
+            content = read_input(Path(path))
+            offset = int.from_bytes(content[60:64], 'little')
+            if content[:2] != b'MZ' or content[offset:offset+6] != b'PE\0\0\x64\x86':
+                raise ValueError('Expected an x86-64 Windows library: '+name)
+            validate_contents({GAME_CATALOG: payloads[GAME_CATALOG], name: content})
+            payloads[name] = content
         payloads['runtime/manager.json'] = (json.dumps(dict(reuse_native=True, play_mode='local', gui_theme='dark'))+'\n').encode()
     if windows_runtime:
         from tools.windows_bundle import payloads as runtime_payloads

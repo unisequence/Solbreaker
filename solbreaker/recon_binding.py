@@ -139,9 +139,15 @@ class ReconBindings:
         from .recon_wire import encode
         bound = self.resolve(token)
         arena = bound.arena
-        roster = tuple(RosterVehicle(v.entity_id, v.team, v.alive)
-                       for v in arena.vehicles.values())
         sequence = self.next_sequence(token)
+        timeline = getattr(arena, 'time_stop', None)
+        if timeline is not None:
+            private = timeline.recon_snapshot(bound.observer_id, bound.battle_id, sequence)
+            if private is not None:
+                return encode(private)
+        roster = tuple(RosterVehicle(v.entity_id, v.team, v.alive)
+                       for v in arena.vehicles.values()
+                       if timeline is None or v.entity_id != timeline.entity)
         snapshot = build_recon_snapshot(arena.recon, roster, bound.observer_id,
                                         battle_id=bound.battle_id, sequence=sequence,
                                         now=arena.simulation_time)

@@ -597,6 +597,7 @@ action LocalRoomBots{team}More() {{ ChangeData(roomBots{team}Override, min({TEAM
     boss_actions += ''.join(f'action SolLevel{i}() {{ ChangeData(solRoleLevel, {i}); }}\n'
                             for i in range(1, big_boss.ROLE_LEVEL_COUNT + 1))
     boss_actions += 'action SolRespawn() { ChangeData(solRespawn, solRespawn + 1); }\n'
+    boss_actions += 'action SolChangeTank() { ChangeData(solChangeTank, solChangeTank + 1); }\n'
     return {ACTIONS: dvpl.encode(actions.replace('@MAX_ROOM_MINUTES@', str(MAX_ROOM_MINUTES)).encode()),
             BOSS_ACTIONS: dvpl.encode(boss_actions.encode())}
 
@@ -642,8 +643,10 @@ STRINGS['ru'].update(ModeCancel='Отмена', ModeSelect='Выбрать',
                      ModeDescriptionBigBoss='Пять ролей со способностями и возрождениями.')
 
 
-for locale, respawn, title in (('en', 'RESPAWN', 'Choose a role'), ('ru', 'ПЕРЕСПАВН', 'Выбери роль')):
+for locale, respawn, title in (('en', 'RESPAWN', 'Choose a role'), ('ru', 'РЕСПАВН', 'Выбери роль')):
     strings = STRINGS[locale]
+    strings['ChangeTank'] = 'СМЕНИТЬ ТАНК' if locale == 'ru' else 'CHANGE TANK'
+    strings['ReturnToBattle'] = 'ВЕРНУТЬСЯ В БОЙ' if locale == 'ru' else 'RETURN TO BATTLE'
     strings.update(Respawn=respawn, BossRoleTitle=title,
                    BossRoleLevel='Role level' if locale == 'en' else 'Уровень роли')
     for index, (_, en_name, ru_name, en_ability, ru_ability, stats) in enumerate(BOSS_CARDS, 1):
@@ -661,9 +664,9 @@ for locale, respawn, title in (('en', 'RESPAWN', 'Choose a role'), ('ru', 'ПЕ�
                 strings[key] = value + unit
 
 
-def _boss_actions(root, name):
+def _boss_actions(root, *names):
     root['components']['UIActionComponent'] = {'actionsPath': '~res:/'+BOSS_ACTIONS.removesuffix('.dvpl')}
-    root['components']['UIDataLocalVarsComponent'] = {'data': [['int', name, '0']]}
+    root['components']['UIDataLocalVarsComponent'] = {'data': [['int', name, '0'] for name in names]}
 
 
 def _boss_value(name, expression):
@@ -825,15 +828,21 @@ def patch_boss_screen(document):
 def patch_boss_menu(document):
     from copy import deepcopy
     root, = document['Prototypes']
-    _boss_actions(root, 'solRespawn')
+    _boss_actions(root, 'solRespawn', 'solChangeTank')
     buttons = next(node for node in _walk(root) if node.get('path') == 'Middle/VerticalBox')['children']
     exit_button = next(button for button in buttons if button.get('name') == 'exitButton')
     respawn = deepcopy(exit_button)
-    respawn.update(name='SolRespawnButton', visible=False, classes='button button-color-gray')
+    respawn.update(name='SolRespawnButton', visible=False, classes='button button-color-blue')
     respawn['components']['UIInputEventComponent'] = {'onTouchUpInside': 'SolRespawn'}
     respawn['children'][0]['components']['UITextComponent']['text'] = 'Local/BattleSettings/Respawn'
-    buttons.insert(buttons.index(exit_button), respawn)
+    buttons.insert(buttons.index(exit_button) + 1, respawn)
     root['children'].append(_boss_value('SolRespawnValue', 'solRespawn'))
+    change_tank = deepcopy(respawn)
+    change_tank.update(name='SolChangeTankButton', classes='button button-color-gray')
+    change_tank['components']['UIInputEventComponent'] = {'onTouchUpInside': 'SolChangeTank'}
+    change_tank['children'][0]['components']['UITextComponent']['text'] = 'Local/BattleSettings/ChangeTank'
+    buttons.insert(buttons.index(respawn) + 1, change_tank)
+    root['children'].append(_boss_value('SolChangeTankValue', 'solChangeTank'))
 
 
 def _room_header(document):
@@ -870,12 +879,12 @@ def patch_room(document):
 
 def upgrade_form(lab, manifest):
     """Refresh the installed native battle settings form in an idle client."""
-    if manifest.get('battle_settings_ui_version') == 28:
+    if manifest.get('battle_settings_ui_version') == 33:
         return manifest
     from hashlib import sha256
     import json
     import yaml
-    from .client_ui import STRINGS_EN, STRINGS_RU, _StringsLoader
+    from .client_ui import BATTLE_BUTTON, HANGAR, HANGAR_ACTIONS, STRINGS_EN, STRINGS_RU, _StringsLoader, patched_resource
     from .connection import atomic_write
 
     overrides = dict(manifest.get('ui_overrides', {}))
@@ -929,7 +938,7 @@ def upgrade_form(lab, manifest):
                                    'Lives', 'Duration', 'Minutes', 'ModeDefault', 'SingleLife', 'Endless', 'NoTimer', 'RoomBots1', 'RoomBots2',
                                    'RoomHeaderBots', 'RoomHeaderTime', 'UnlimitedAmmo', 'AmmoOn', 'AmmoOff')}
             strings.update({f'Local/BattleSettings/{key}': value for key, value in STRINGS[locale].items()
-                            if key == 'Respawn' or key.startswith(('BossRole', 'ModeDescription'))
+                            if key in ('Respawn', 'ChangeTank', 'ReturnToBattle') or key.startswith(('BossRole', 'ModeDescription'))
                             or key in ('ModeCancel', 'ModeSelect')})
             changed = any(document.get(key) != value for key, value in strings.items())
             document.update(strings)
@@ -966,6 +975,13 @@ def upgrade_form(lab, manifest):
     if source:
         from .client_ui import local_directory
         game = Path(source).resolve(strict=True)
+        for relative in (HANGAR, HANGAR_ACTIONS, BATTLE_BUTTON):
+            if relative in overrides:
+                target = data/relative
+                if target.resolve(strict=True) != target or not target.is_file():
+                    raise ValueError('Training return requires a private hangar overlay')
+                staged[target] = patched_resource(game/'Data'/relative, relative)
+                overrides[relative] = sha256(staged[target]).hexdigest()
         menu_source = game/'Data'/BATTLE_MENU
         if menu_source.is_file():
             document = yaml.safe_load(dvpl.read(menu_source))
@@ -982,7 +998,7 @@ def upgrade_form(lab, manifest):
     for target, content in staged.items():
         atomic_write(target, content, replace_symlink=target in (data/ROOM, data/BATTLE_MENU))
     updated = dict(manifest, ui_overrides=overrides, room_bot_hint_version=1,
-                   battle_settings_ui_version=28)
+                   battle_settings_ui_version=33)
     atomic_write(lab/'manifest.json', (json.dumps(updated, indent=2)+'\n').encode())
     return updated
 

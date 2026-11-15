@@ -10,7 +10,7 @@ import time
 
 from .arena_loading import ArenaLoad
 from .arena_owner import AsyncArenaOwner, Command, CommandRejected, OwnerError
-from .arena_owner_game import GameArenaFactory
+from .arena_owner_game import GameArenaFactory, TrainingTank
 from .arena_owner_registry import ArenaOwnerRegistry
 from .arena_owner_settlement import commit
 from .arena_owner_spawn import OwnerSpawnManager
@@ -50,6 +50,7 @@ class OwnerBattle:
     cleanup: asyncio.Task | None = None
     close_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     recon_tasks: dict = field(default_factory=dict)
+    training_requests: set = field(default_factory=set)
 
 
 class ArenaOwnerService:
@@ -106,6 +107,7 @@ class ArenaOwnerService:
             client.arena_id, client.phase = arena.result_id, 'battle_building'
             client.battle_spawned = False
             client.battle_hints_at = 0.
+            client.training_swap_refresh_at = 0.
             client.result_sent = False
             client.reconnect_replay = False
             client.owner_leave_pending = False
@@ -277,6 +279,7 @@ class ArenaOwnerService:
             for entity_id,flags in state['flags']:
                 arena.vehicles[entity_id].flags=flags
         else:
+            arena.owner_training_reentry = state.get('training_reentry', False)
             if getattr(arena, 'practice', False):
                 arena.practice_spawned = set(state['practice_spawned'])
             capture = getattr(arena, 'base_capture', None)
@@ -330,22 +333,18 @@ class ArenaOwnerService:
 
     def _on_delivered(self, job, command, result):
         arena = job.arena
+        if command.op == 'ready' and arena.players[command.account_id].loaded:
+            for client in self.endpoint.clients.values():
+                if (client.arena_id == arena.result_id and client.account_id == command.account_id
+                        and getattr(client, 'training_reentry_at', 0.)):
+                    self.endpoint.training_reentry_ready(client, arena)
         if command.op == 'leave':
             for addr, client in list(self.endpoint.clients.items()):
                 if (self.endpoint.clients.get(addr) is client
                         and client.arena_id == arena.result_id
                         and client.account_id == command.account_id):
                     client.owner_leave_pending = False
-                    client.arena_id = None
-                    client.arena_spawn_at = 0
-                    client.battle_spawned = False
-                    client.battle_hints_at = 0.
-                    client.reconnect_replay = False
-                    client.phase = 'account_pending'
-                    client.load_grace_until = time.monotonic() + self.endpoint.ENTITY_LOAD_GRACE
-                    client.clock_start = time.monotonic()
-                    client.last_sync_tick = -1
-                    self.endpoint.send(addr, client, b'\x04\0')
+                    self.endpoint._reset_to_hangar(addr, client)
         if not any(player.attached for player in arena.players.values()):
             self.endpoint.arenas.remove_if_empty(arena)
             if self.endpoint.arenas.get(arena.result_id) is not arena:
@@ -378,7 +377,7 @@ class ArenaOwnerService:
         if job is None or job.transport is None or job.closing:
             raise OwnerError('arena owner is unavailable')
         operation = _INPUT_OPS.get(kind)
-        if operation is None:
+        if operation is None or (getattr(client, 'training_reentry_at', 0.) and not client.battle_spawned):
             return None
         return job.transport.submit_client(
             addr, client, Command(operation, time.monotonic(), client.account_id, bytes(body)))
@@ -389,6 +388,89 @@ class ArenaOwnerService:
             raise OwnerError('arena owner is unavailable')
         return job.transport.submit_client(
             addr, client, Command('leave', time.monotonic(), client.account_id))
+
+    def training_park(self, addr, client, arena):
+        self._training_request(addr, client, arena)
+
+    def training_swap(self, addr, client, arena, lease, inventory_id, definition, shells, consumables,
+                      *, camouflage=0):
+        scene = self.endpoint.owner_vehicle_scene(definition)
+        settings = {name: getattr(scene, name, None) for name in (
+            'internal_geometry', 'engine_spec', 'ammo_rack_spec', 'fuel_tank_spec',
+            'fire_policy', 'fire_min_damage', 'crew_specs', 'crew_bindings')}
+        tank = TrainingTank(inventory_id, definition, shells, consumables, settings, camouflage)
+        self._training_request(addr, client, arena, lease, tank)
+
+    def _training_request(self, addr, client, arena, lease=None, tank=None):
+        from .base import BattleRefused, ChannelOverflow
+        job = self.jobs.get(arena.result_id)
+        if job is None or job.transport is None or job.closing:
+            if tank is not None:
+                raise BattleRefused('The reserved training battle is no longer available')
+            return
+        account = client.account_id
+        if account in job.training_requests:
+            return
+        now = time.monotonic()
+        try:
+            if tank is None:
+                future = job.transport.submit_client(addr, client, Command('training_park', now, account))
+            else:
+                future = job.transport.submit_nowait(
+                    Command('training_swap', now, account, pickle.dumps(tank, protocol=5)))
+        except OwnerError as exc:
+            if tank is not None:
+                raise BattleRefused('The reserved training battle is no longer available') from exc
+            return
+        client.training_swap_pending = True
+        client.training_swap_inventory = tank.inventory_id if tank is not None else None
+        job.training_requests.add(account)
+
+        def finish(reply):
+            job.training_requests.discard(account)
+            client.training_swap_pending = False
+            client.training_swap_inventory = None
+            current = self.endpoint.clients.get(addr) is client
+            try:
+                result = reply.result()
+                error = pickle.loads(result.state).get('training_error')
+                if error:
+                    raise CommandRejected(error)
+            except (OwnerError, CommandRejected) as exc:
+                if current and tank is not None and client.phase == 'account':
+                    self.endpoint.server.event('training_reentry_refused', account_id=account,
+                                               arena_id=arena.result_id, reason=str(exc))
+                    try:
+                        self.endpoint.send_join_failure(addr, client, self.endpoint.JOIN_WRONG_ARENA_STATE)
+                    except ChannelOverflow:
+                        self.endpoint._disconnect_client(addr, 'reliable send window exceeded')
+                return
+            if tank is not None:
+                # Mirror inventory immediately, even if the requester went away
+                # while the owner was replacing the hull.
+                arena.players[account].inventory_id = tank.inventory_id
+                vehicle = arena.vehicle_for(account)
+                vehicle.definition, vehicle.descriptor = tank.definition, tank.definition.descriptor
+                vehicle.loadout_shells = tank.shells
+                vehicle.camouflage = tank.camouflage
+                arena.training_swappers.add(account)
+                if self.endpoint._reconnects().get(account) is not lease:
+                    return  # Lease expiry already queued the authoritative departure.
+                if not current or client.phase != 'account':
+                    self.endpoint._expire_reconnects(time.monotonic(), only_account=account)
+                    return
+            elif not current or client.phase != 'battle' or client.arena_id != arena.result_id:
+                return  # A dropped battle session already queued its departure.
+            try:
+                if tank is None:
+                    self.endpoint._open_training_hangar(addr, client, arena, time.monotonic())
+                else:
+                    self.endpoint._enter_training_battle(
+                        addr, client, arena, tank.inventory_id, tank.definition, now)
+            except ChannelOverflow:
+                self.endpoint._disconnect_client(addr, 'reliable send window exceeded')
+
+        future.add_done_callback(finish)
 
     def sandbox(self, addr, client, body):
         job = self.jobs.get(client.arena_id)
@@ -406,6 +488,8 @@ class ArenaOwnerService:
     def stop_control(self, arena, account_id):
         job = self.jobs.get(arena.result_id)
         if job is not None and job.transport is not None and not job.closing:
+            if getattr(arena, 'time_stop_enabled', False):
+                return job.transport.submit_nowait(Command('time_stop_cancel', time.monotonic(), account_id))
             return job.transport.submit_nowait(
                 Command('control', time.monotonic(), account_id, b'\0\0'))
         return None

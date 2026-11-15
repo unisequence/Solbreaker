@@ -1,6 +1,6 @@
 """Authoritative arena state. No Mercury IDs, packet bytes or sockets here."""
 import dataclasses
-from collections import Counter
+from collections import Counter, deque
 import math
 import os
 import random
@@ -59,6 +59,10 @@ def _step_budget(value):
     return float(value) if value is not None else None
 
 
+class TrainingSpawnUnavailable(ValueError):
+    """Every team spawn is occupied and the original hull is still intact."""
+
+
 class Arena:
     """Shared world; participants and vehicles outlive individual UDP sessions."""
     STEP = 1 / 60
@@ -92,6 +96,9 @@ class Arena:
         self.sandbox_enabled = sandbox_enabled
         self._sandbox_inputs = {}
         self._sandbox_flights = {}
+        self._resolved_time_branches = set()
+        self.time_stop = None
+        self.time_stop_enabled = (sandbox_enabled and os.environ.get('SOLBREAKER_TIME_STOP') == '1')
         self.prebattle_end = 0.
         self.step_budget = _step_budget(step_budget)
         if type(recon_enabled) is not bool:
@@ -116,6 +123,7 @@ class Arena:
         rules = (training.battle_mode if training.bots_enabled else 'elimination') if solo else room_mode
         self.gravity_mode = rules == 'gravity'
         self.big_boss_mode = rules == big_boss.MODE
+        self.time_stop_enabled &= not self.gravity_mode
         self.big_boss = None
         self.boss_role_picker = self.big_boss_mode and not solo and room_settings is not None
         self.boss_pending_roles = {}
@@ -135,6 +143,8 @@ class Arena:
         self.practice_gunners = {}
         self.practice_next_spawn = 0.
         self.respawn_at = {}
+        self.hangar_players = set()
+        self.training_swappers = set()
         self.practice_timer_at = 0.
         if result_id is not None and (type(result_id) is not str or len(result_id) != 32
                                       or any(c not in '0123456789abcdef' for c in result_id)):
@@ -171,6 +181,8 @@ class Arena:
         self._landing_skids = {}
         self.accumulator = 0.
         self._input_only = False
+        self.pending_inputs = deque()
+        self.pending_input_counts = Counter()
         self.step_count = 0
         self.motion_frame = None
         self.dropped_time = 0.
@@ -276,7 +288,8 @@ class Arena:
             assets = scenes.get(player.account_id,collision_scene)
             actual_descriptor = assets.definition.descriptor if assets else descriptor
             self.vehicles[player.vehicle_id] = Vehicle(player.vehicle_id,player.account_id,
-                    player.nickname,team,actual_descriptor,pose)
+                    player.nickname,team,actual_descriptor,pose,
+                    camouflage=account.get('camouflage', 0))
             own = self.vehicles[player.vehicle_id]
             own.definition = assets.definition if assets else None
             controller = getattr(own.definition, 'armor_states_controller', None)
@@ -481,6 +494,13 @@ class Arena:
                 if entity in self.practice_slots:
                     self._park_practice_target(vehicle)
             self._vehicles_configured = True
+            if self.time_stop_enabled:
+                from .arena_time_stop import BattleTimeStop
+                try:
+                    self.time_stop = BattleTimeStop(self)
+                except (OSError, RuntimeError, ValueError) as error:
+                    self.time_stop_enabled = False
+                    self.emit('time_stop_worker_error', reason=str(error))
         if self.training_bots:
             from .bot_ai import BotDirector
             from .bot_navigation import Navigation
@@ -937,21 +957,23 @@ class Arena:
         if changed:
             self._publish_state_modifiers(vehicle)
 
-    def _gun_contact(self, contact, target, gun, at):
+    def _gun_contact(self, contact, target, gun, at, *, probability_checked=False):
         """Sandbox: chance draw, then nominal device damage. No natural recovery.
 
         chance 0 never damages and 1 always damages, without drawing. Hull HP,
         hits and kills are untouched; zero dispersion and reload are unchanged.
         """
         chance = gun.spec.projectile_chance
-        if gun.destroyed or chance <= 0 or chance < 1 and self.module_rng.random() >= chance:
-            return
+        if gun.destroyed or not probability_checked and (chance <= 0 or
+                chance < 1 and self.module_rng.random() >= chance):
+            return False
         before = gun.critical,gun.destroyed
         applied = gun.damage(contact.shell.damage_devices)
         self.emit('module_hit',contact.shooter,contact.target,shot=contact.shot,
                   part=contact.hit.part,damage=applied,health=gun.health,at=at)
         if before != (gun.critical,gun.destroyed):
             self._module_changed(target,_GUN_EXTRA,1 if gun.destroyed else 0,at)
+        return applied > 0
 
     def _internal_candidate(self, event):
         """Whether this direct penetration can start an opt-in module trace."""
@@ -1196,10 +1218,10 @@ class Arena:
         finally:
             self.advancing_fires.remove(vehicle.entity_id)
 
-    def _track_contact(self, contact, now):
+    def _track_contact(self, contact, now, *, probability_checked=False):
         target = self.vehicles.get(contact.target)
         shooter = self.vehicles.get(contact.shooter)
-        if self.recon is not None:
+        if self.recon is not None and not probability_checked:
             self._recon_impact(contact.shot, shooter, target, contact.at)
         if (not contact.penetrated or target is None or shooter is None or not target.alive
                 or target.team == shooter.team or target.sandbox_god_mode):
@@ -1208,7 +1230,8 @@ class Arena:
         if (contact.hit.part not in target.tracks and gun is not None
                 and contact.hit.part == target.definition.gun.geometry):
             if contact.shell.damage_devices > 0:
-                self._gun_contact(contact,target,gun,max(self.module_clock,min(now,contact.at)))
+                return self._gun_contact(contact, target, gun, max(self.module_clock,min(now,contact.at)),
+                                         probability_checked=probability_checked)
             return
         if contact.hit.part not in target.tracks:
             return
@@ -1230,6 +1253,7 @@ class Arena:
         if before != (state.broken,state.critical) or state.broken and applied > 0:
             self._module_changed(target, contact.hit.part, 1 if state.broken else 0, at,
                                  track_just_broke=state.broken and not before[0])
+        return applied > 0
 
     def _repair_tracks(self, vehicle, now):
         """Repair kit: full HP for supported local modules."""
@@ -1494,6 +1518,12 @@ class Arena:
         if self.closed:
             return True
         self.retiring = True
+        self.pending_inputs.clear()
+        self.pending_input_counts.clear()
+        if self.time_stop is not None:
+            if not self.time_stop.abort():
+                return False
+            self.time_stop = None
         if self._bot_navigation_builder is not None:
             self._bot_navigation_builder.close()
             self._bot_navigation_builder = None
@@ -1796,6 +1826,15 @@ class Arena:
 
     def sandbox_control(self, account_id, control):
         player = self.players.get(account_id)
+        timeline = getattr(self, 'time_stop', None)
+        if control.flags == sandbox.TIME_STOP:
+            if timeline and control.token == sandbox.token(self) and player is not None:
+                timeline.toggle(account_id)
+            return
+        if timeline and account_id == timeline.account:
+            if control.token == sandbox.token(self) and control.flags & sandbox.GRAVITY_JUMP:
+                timeline.request_ability()
+            return
         if control.flags in (sandbox.BOSS_PICK_ROLE, sandbox.BOSS_RESPAWN):
             if (self.boss_role_picker and player and player.attached and player.loaded
                     and control.token == sandbox.token(self) and not self.finished_at):
@@ -1897,17 +1936,20 @@ class Arena:
         for target in self.vehicles.values():
             if not target.alive or target.team == source.team or not self._player_attached(target):
                 continue
+            target_class = vehicle_class(self._boss_game, target.definition)
             impulse = big_boss.blast_impulse(origin, target.pose.position,
-                                            target.definition.mass, source.pose.yaw,
-                                            vehicle_class(self._boss_game, target.definition))
+                                            target.definition.mass, source.pose.yaw, target_class)
             if impulse is None:
                 continue
             entity = target.entity_id
             velocity, spin = impulse
             grounded = self.world.motion[entity].grounded
             sliding = spin is None and self.world.add_ground_velocity(entity, velocity[0], velocity[2])
-            if sliding or self.world.add_flight_velocity(entity, velocity, angular_delta=spin):
-                self.big_boss.impulses[entity] = source.entity_id, now + 4.
+            light = target_class == 'lightTank'
+            if sliding or self.world.add_flight_velocity(
+                    entity, velocity, angular_delta=spin,
+                    linear_damping=big_boss.LIGHT_BLAST_AIR_DAMPING if light else None):
+                self.big_boss.impulses[entity] = source.entity_id, now + (12. if light else 4.)
                 if not sliding and entity not in self.big_boss.blast_landings:
                     self.big_boss.blast_landings[entity] = target.pose if grounded else None
             self._damage_health(target, max(1, round(target.max_health * big_boss.BLAST_DAMAGE)),
@@ -2015,11 +2057,20 @@ class Arena:
         self._emit_boss_vehicle_effects(target)
         return True
 
-    def _boss_heal(self, source, target, amount):
+    def _suspended_entities(self):
+        return self.world.suspended_entities if isinstance(self.world, CollisionWorld) else ()
+
+    def _heal_health(self, source, target, amount):
+        if not target.alive or target.entity_id in self._suspended_entities():
+            return 0
         healed = min(target.max_health-target.health, round(amount))
         if healed > 0:
             target.health += healed
             self.emit('health', source.entity_id, target.entity_id, health=target.health, healed=healed)
+        return max(0, healed)
+
+    def _boss_heal(self, source, target, amount):
+        self._heal_health(source, target, amount)
         if self.big_boss.poison.pop(target.entity_id, None):
             self._emit_boss_vehicle_effects(target)
 
@@ -2158,20 +2209,25 @@ class Arena:
         self.motion_frame = None
         self.emit('practice_notice', player_vehicle.entity_id, notice=sandbox.TARGETS_CLEARED)
 
-    def _restore_vehicle(self, entity, pose):
+    def _restore_vehicle(self, entity, pose, *, replacement=None):
         previous = self.vehicles[entity]
+        descriptor, shells, specs, camouflage = replacement if replacement is not None else (
+            previous.descriptor, previous.loadout_shells,
+            tuple(slot.spec if slot else None for slot in previous.consumables), previous.camouflage)
         restored = Vehicle(entity, previous.account_id, previous.nickname, previous.team,
-                           previous.descriptor, pose, loadout_ammo=previous.loadout_ammo,
-                           loadout_shells=previous.loadout_shells,
-                           consumables=tuple(self._new_consumable(previous, slot.spec) if slot else None
-                                             for slot in previous.consumables))
+                           descriptor, pose, loadout_ammo=previous.loadout_ammo,
+                           loadout_shells=shells, camouflage=camouflage,
+                           generation=previous.generation + 1,
+                           consumables=tuple(self._new_consumable(previous, spec) if spec else None
+                                             for spec in specs))
         restored.sandbox_fast_reload = previous.sandbox_fast_reload
         restored.sandbox_god_mode = previous.sandbox_god_mode
         previous_abilities = None
         if (selection := self.boss_pending_roles.pop(entity, None)) is not None:
             previous_abilities = self._pin_boss_role(restored, *selection)
-        elif self.big_boss is not None and entity in self.big_boss.roles:
-            self.big_boss.assign_role(entity)
+        elif self.big_boss is not None and (replacement is not None or entity in self.big_boss.roles):
+            if replacement is None:
+                self.big_boss.assign_role(entity)
             previous_abilities = self._set_boss_role_ability(restored)
         if self.unlimited_lives:
             for field in ('shots', 'hits', 'damage', 'blocked_damage', 'assisted_damage',
@@ -2200,6 +2256,74 @@ class Arena:
         if self.practice_timer_at and now >= self.practice_timer_at:
             self.practice_timer_at = now+self.battle_seconds
             self.emit('period', period=3, seconds=self.battle_seconds, winner=0)
+
+    def reserve_training_seat(self, account_id):
+        self.cancel_time_stop(account_id)
+        vehicle = self.vehicle_for(account_id)
+        self.hangar_players.add(account_id)
+        self.players[account_id].loaded = False
+        vehicle.flags = 0
+        vehicle.airborne_input_until = 0.
+        vehicle.sandbox_god_mode = False
+        vehicle.sandbox_boost = False
+        self._set_fast_reload(vehicle, False)
+        self._cancel_burst(vehicle)
+        vehicle.autoaim_target, vehicle.autoaim_offset = 0, None
+        vehicle.gun.set_angles(vehicle.gun.yaw, vehicle.gun.pitch)
+        self.respawn_at.pop(vehicle.entity_id, None)
+        self.boss_pending_roles.pop(vehicle.entity_id, None)
+        self._sandbox_inputs.pop(account_id, None)
+
+    def training_tank_available(self, account_id):
+        boss = self.big_boss
+        return (boss is None or not boss.tickets
+                or boss.lives.get(self.players[account_id].vehicle_id, 1) > 0)
+
+    def cancel_time_stop(self, account_id):
+        if (timeline := getattr(self, 'time_stop', None)) is not None and timeline.account == account_id:
+            timeline.abort()
+            timeline.rearm = True
+            self.motion_frame = None
+
+    def reenter_training(self, account_id, scene, shells, consumables, *, camouflage=0):
+        from .map_catalog import map_team_capacity
+
+        previous = self.vehicle_for(account_id)
+        entity = previous.entity_id
+        # Validate the persistent loadout before changing the physics body.
+        candidate = Vehicle(entity, account_id, previous.nickname, previous.team,
+                            scene.definition.descriptor, previous.pose,
+                            definition=scene.definition, loadout_shells=shells)
+        self._configure_ammunition(candidate)
+        if self.gravity_mode and vehicle_class(self._gravity_game, scene.definition) in (
+                'lightTank', 'mediumTank', 'AT-SPG'):
+            consumables += (None,) * max(0, 3-len(consumables)) + (GRAVITY_JUMP_SPEC,)
+        spawns = ((*training_spawn(self.map_spec, previous.team, slot),
+                   training_yaw(self.map_spec, previous.team, slot))
+                  for slot in range(map_team_capacity(self.map_id)))
+        enemy_positions = [vehicle.pose.position for vehicle in self.vehicles.values()
+                           if vehicle.team != previous.team and vehicle.alive
+                           and self._player_attached(vehicle)]
+        if enemy_positions:
+            def clearance(spawn):
+                x, z, _ = spawn
+                return min((x-enemy_x)**2 + (z-enemy_z)**2
+                           for enemy_x, _, enemy_z in enemy_positions)
+
+            spawns = sorted(spawns, key=clearance, reverse=True)
+        if scene is self.world.assets_for(entity):
+            pose = next((placement for x, z, yaw in spawns if
+                         (placement := self.world.training_placement(entity, x, z, yaw,
+                                                                     stationary=True)) is not None), None)
+        else:
+            pose = self.world.replace_training_body(entity, scene, spawns)
+        if pose is None:
+            raise TrainingSpawnUnavailable('All team spawn points are occupied')
+        self._lose_target(entity)
+        self._restore_vehicle(entity, pose,
+                              replacement=(scene.definition.descriptor, shells, consumables, camouflage))
+        self.hangar_players.remove(account_id)
+        self.emit('training_reentry', entity)
 
     def _advance_respawns(self, now):
         if not self.respawn_at or self.world is None:
@@ -2546,19 +2670,14 @@ class Arena:
         if self._is_boss(vehicle):
             charge = next((s for s in vehicle.consumables if s and s.spec is big_boss.MEGASHOT), None)
             if charge is not None and charge.activate(now):
-                shell = dataclasses.replace(shell, kind='ARMOR_PIERCING', railgun=True,
-                    damage=shell.damage * big_boss.MEGASHOT_DAMAGE, speed=big_boss.MEGASHOT_SPEED,
-                    gravity=0., missile=None, effect_index=big_boss.MEGASHOT_EFFECT)
+                shell = big_boss.megashot(shell)
         elif self.big_boss is not None:
             role = self.big_boss.roles.get(vehicle.entity_id)
             level = self.big_boss.levels.get(vehicle.entity_id, 0)
-            if role == big_boss.REGENERATOR:
-                shell = dataclasses.replace(shell, healing_level=level)
-            elif role == big_boss.CATALYST:
-                active = any(s.uses and now < s.active_until for s in vehicle.consumables
-                             if s and s.spec in big_boss.ROLE_ACTIVE[role])
-                shell = dataclasses.replace(shell, damage=shell.damage*big_boss.CATALYST_DAMAGE[level],
-                                            poison_level=level if active else None)
+            poisoned = role == big_boss.CATALYST and any(
+                s.uses and now < s.active_until for s in vehicle.consumables
+                if s and s.spec in big_boss.ROLE_ACTIVE[role])
+            shell = big_boss.role_shell(shell, role, level, poisoned=poisoned)
         vehicle.shots += 1
         if not (self.unlimited_ammo or (self.practice and vehicle.account_id is not None)):
             vehicle.ammo -= 1
@@ -2628,6 +2747,7 @@ class Arena:
     def _emit_shot(self, vehicle, shell, origin, velocity, now, shot_effect, shooting_count=1):
         if getattr(shell, 'railgun', False):
             shot_effect = shell.effect_index
+        self.projectiles[self.next_shot].trace_effect = shot_effect
         self.emit('shot',vehicle.entity_id,shot=self.next_shot,origin=origin,
                   velocity=velocity,gravity=shell.gravity,at=now,
                   shell_id=shell.compact_id,effect_index=shot_effect,
@@ -2997,14 +3117,25 @@ class Arena:
 
     def _armor_frame_state(self, vehicle, before, after, fraction, at):
         """Interpolate motion while taking the controller snapshot at one time."""
-        state = interpolate(before, after, fraction)
         snapshot = self._movable_armor_snapshot_at(vehicle, at)
-        return state if snapshot is None else dataclasses.replace(state, armor_state=snapshot)
+        # A full interval already has both motion endpoints. The controller
+        # still uses the interval's armor state, including at an expiry.
+        if fraction == 0:
+            state = before
+        elif fraction == 1:
+            state = after
+        else:
+            state = interpolate(before, after, fraction)
+        armor_state = snapshot if snapshot is not None else (
+            before.armor_state if before.armor_state == after.armor_state else None)
+        return state if state.armor_state == armor_state else dataclasses.replace(
+            state, armor_state=armor_state)
 
     def _armor_frame_states(self, before, after, fraction, at):
+        suspended = self._suspended_entities()
         return {entity:self._armor_frame_state(self.vehicles[entity], before[entity], after[entity],
                                                 fraction, at)
-                for entity in before}
+                for entity in before if entity not in suspended}
 
     def equipment_state(self, vehicle, now=None):
         """Immutable start/stop snapshot, independent of network serialization."""
@@ -3034,6 +3165,8 @@ class Arena:
     def finish(self, winner=0, reason='timeout', now=None):
         if self.finished_at:
             return
+        if getattr(self, 'time_stop', None) is not None:
+            self.time_stop.abort()
         at = self.simulation_time if now is None else now
         for vehicle in self.vehicles.values():
             if vehicle.alive:
@@ -3076,7 +3209,9 @@ class Arena:
         player = self.players[account_id]
         if not player.attached:
             return
+        self.cancel_time_stop(account_id)
         player.attached = False
+        self.hangar_players.discard(account_id)
         player.departure_reason = reason
         self._sandbox_inputs.pop(account_id, None)
         if self._recon_point_probe is not None:
@@ -3120,7 +3255,8 @@ class Arena:
             return []
         return [BattleResult(self.result_id,p.account_id,self.winner==p.team,
                 self.vehicles[p.vehicle_id].shots,self.vehicles[p.vehicle_id].hits,
-                self.vehicles[p.vehicle_id].damage,self.finish_reason,p.inventory_id,
+                self.vehicles[p.vehicle_id].damage,self.finish_reason,
+                None if p.account_id in getattr(self, 'training_swappers', ()) else p.inventory_id,
                 reward=self.vehicles[p.vehicle_id].battle_reward(self.winner==p.team))
                 for p in self.players.values()]
 
@@ -3162,8 +3298,9 @@ class Arena:
             if event.result.outcome!='penetrated' and self.world is not None:
                 primary = None
                 extra = []
+                suspended = self._suspended_entities()
                 for target in self.vehicles.values():
-                    if not target.alive or target.team==shooter.team:
+                    if not target.alive or target.team==shooter.team or target.entity_id in suspended:
                         continue
                     state = states[target.entity_id] if states else None
                     pose = state.pose if state else target.pose
@@ -3285,7 +3422,7 @@ class Arena:
 
     def _damage_health(self, target, amount, source, at, *, shell_hit, hit_effect=None, kinetic=False, manual_respawn=False):
         """True clamped HP damage, shared death/stats, no invented impact RPC."""
-        if not target.alive:
+        if not target.alive or target.entity_id in self._suspended_entities():
             return 0
         if kinetic and self.big_boss is not None:
             amount = int(amount * self.big_boss.damage_factor(target.entity_id) + .5)
@@ -3358,7 +3495,7 @@ class Arena:
                 if shield or poison:
                     self._emit_boss_vehicle_effects(target)
             respawning = ((self.unlimited_lives or (self.practice and target.account_id is not None))
-                          and self._player_attached(target))
+                          and target.account_id not in self.hangar_players and self._player_attached(target))
             if self.big_boss is not None and not manual_respawn:
                 respawning = self.big_boss.destroyed(target) and respawning
                 if target.entity_id in self.big_boss.bosses:
@@ -3632,6 +3769,8 @@ class Arena:
         return gravity * grip_coefficient * math.cos(pitch)**2
 
     def _player_attached(self, vehicle):
+        if (timeline := getattr(self, 'time_stop', None)) is not None and timeline.entity == vehicle.entity_id:
+            return False
         player = self.players.get(vehicle.account_id)
         return bool(player and player.attached or vehicle.entity_id in self.training_bots)
 
@@ -3808,11 +3947,11 @@ class Arena:
                 if self.big_boss is not None and self.big_boss.traps and vehicle.alive and self.world
                 else None)
         if pull is not None:
-            flags = 0
+            trap_response = -math.expm1(-big_boss.TRAP_RESPONSE*dt)
             if airborne:
                 vx, _, vz = self.world.motion[vehicle.entity_id].velocity
                 self.world.add_flight_velocity(vehicle.entity_id,
-                    ((pull[0]-vx)*min(1.,dt*5.), 0., (pull[1]-vz)*min(1.,dt*5.)))
+                    ((pull[0]-vx)*trap_response, 0., (pull[1]-vz)*trap_response))
         if self.gravity_mode and airborne and vehicle.alive:
             self._gravity_air_control(vehicle, flags, dt)
         turn = int(bool(flags&8))-int(bool(flags&4))
@@ -3896,6 +4035,10 @@ class Arena:
         # Turn rate takes only the timed rotation factor, never the engine one.
         turn_rate = ((assets.rotation_speed if assets else math.radians(35))
                      *vehicle.rotation_factor*mobility.turn_factor)
+        if pull is not None:
+            target = math.copysign(min(abs(target)*big_boss.TRAP_DRIVE_SPEED_FACTOR,
+                                       big_boss.TRAP_DRIVE_SPEED_CAP), target)
+            turn_rate *= big_boss.TRAP_TURN_FACTOR
         # A complete native definition uses the bounded local P/v drivetrain.
         # Braking now has a separate guarded force/mass approximation; neither
         # branch changes gravity or collision response.
@@ -4008,9 +4151,17 @@ class Arena:
                 self.world.GROUND_LATERAL_GRIP*dt)
             planar_displacement = (planar_velocity[0]*dt,planar_velocity[1]*dt)
         if pull is not None and not airborne:
-            yaw_delta = track_yaw_delta = 0.
-            planar_velocity = pull
-            planar_displacement = (pull[0]*dt, pull[1]*dt)
+            # The field damps incoming momentum toward its pull plus the
+            # reduced track input. Contacts still resolve the resulting move.
+            heading = vehicle.pose.yaw+yaw_delta*.5
+            fx, fz = math.sin(heading), math.cos(heading)
+            vx, vz = planar_velocity if planar_velocity is not None else (
+                fx*vehicle.speed, fz*vehicle.speed)
+            vx += (pull[0]+fx*target-vx)*trap_response
+            vz += (pull[1]+fz*target-vz)*trap_response
+            planar_velocity = (vx, vz)
+            planar_displacement = (vx*dt, vz*dt)
+            residual_slip = abs(vx*fz-vz*fx)
         if self.world:
             start_pose = vehicle.pose
             if ground_mode or track_motion is not None or landing is not None or pull is not None:
@@ -4340,6 +4491,8 @@ class Arena:
             self.accumulator = max(0.,self.accumulator-self.STEP)
             self.step_count += 1
             self.simulation_time = self.started+self.step_count*self.STEP
+            if self.time_stop is not None and not self.finished_at:
+                self.time_stop.tick(self.simulation_time)
             self._fixed_step(self.simulation_time)
             self._record_motion_frame(self.simulation_time)
         if deadline is not None and self.accumulator > self.MAX_CATCHUP:
@@ -4354,16 +4507,18 @@ class Arena:
         tick = game_tick(now,self.epoch)
         if self.motion_frame is not None and self.motion_frame.tick == tick:
             return
+        timeline = getattr(self, 'time_stop', None)
+        phased = timeline.entity if timeline is not None else None
         markers = None
         if os.environ.get('SOLBREAKER_MARKER_BATCH') == '1':
-            ready = [v for v in self.vehicles.values() if v.alive
+            ready = [v for v in self.vehicles.values() if v.alive and v.entity_id != phased
                      and (p := self.players.get(v.account_id)) is not None and p.attached]
             markers = _try_marker_batch(self, ready, _MARKER_BATCH_ARENA_METHODS)
         samples = {}
         for vehicle in self.vehicles.values():
             marker = None
             player = self.players.get(vehicle.account_id)
-            if vehicle.alive and player is not None and player.attached:
+            if vehicle.alive and vehicle.entity_id != phased and player is not None and player.attached:
                 if markers is not None:
                     marker = markers[vehicle.entity_id]
                 else:
@@ -4376,8 +4531,11 @@ class Arena:
 
     def _fixed_step(self, now):
         dt = self.STEP
+        phased = self.time_stop.entity if getattr(self, 'time_stop', None) is not None else None
         self._advance_supremacy(now)
         for vehicle in self.vehicles.values():
+            if vehicle.entity_id == phased:
+                continue
             if not self.finished_at and vehicle.alive:
                 # A state expiry can lie inside this projectile frame. Delay
                 # its public property16 event until every earlier contact has
@@ -4551,7 +4709,7 @@ class Arena:
                                              if vehicle.entity_id in drive_results else None),
                               **self._drive_observability(vehicle, now))
             for player in self.players.values():
-                if player.attached:
+                if player.attached and player.vehicle_id != phased:
                     self._aim(self.vehicles[player.vehicle_id],dt,before[player.vehicle_id].pose.yaw)
             for eid, target in bot_targets.items():
                 bot = self.vehicles[eid]
@@ -4571,7 +4729,7 @@ class Arena:
                 vehicle.distance += math.dist(before[entity].pose.position,after[entity].pose.position)
             contacts = []
             frame_start = now-dt
-            armor_segments = self._armor_state_segments(frame_start, now)
+            armor_segments = self._armor_state_segments(frame_start, now) if self.projectiles else ()
             armor_frames = {}
             armor_sweeps = {}
             share_sweeps = len(self.projectiles) > 1
@@ -4650,6 +4808,8 @@ class Arena:
                         del self._recon_contacts[shot]
                 self.recon.expire(now)
             for vehicle in self.vehicles.values():
+                if vehicle.entity_id == phased:
+                    continue
                 if vehicle.alive:
                     self._advance_fire(vehicle, now)
                 if vehicle.alive:

@@ -11,7 +11,8 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 
 from solbreaker.arena import Arena
-from solbreaker.collision import CollisionWorld, Destructible, Motion, Pose
+from solbreaker.big_boss import BigBoss, GravityTrap
+from solbreaker.collision import CollisionWorld, Destructible, Motion, Pose, matrix
 from solbreaker.mesh_files import MeshFiles
 from solbreaker.native_physics import SensorState, StepInput, StepOutput, library_path, load_library
 from solbreaker.physics_proxy import vehicle_proxies
@@ -148,6 +149,49 @@ class NativePhysicsTests(unittest.TestCase):
         world.dynamic_commit(1/60)
         self.assertLess(world.motion[200].velocity[1], vy)
 
+    def test_graviton_damps_fast_tanks_and_retains_ground_controls(self):
+        assets = self.assets('flat')
+        world = self.world(assets)
+        arena = Arena([dict(id=1, nickname='Pilot')], b'', terrain(), now=1.)
+        self.addCleanup(arena.close)
+        arena.ready(1, 1.)
+        arena.world = world
+        vehicle = arena.vehicle_for(1)
+        vehicle.definition = assets.definition
+        entity = vehicle.entity_id
+        arena.big_boss = BigBoss({}, 'test')
+        arena.big_boss.traps.append(GravityTrap(1, 201, 3-vehicle.team, (0., 0., 0.), 4, 8.))
+        dt = arena.STEP
+
+        def drive(flags, steps):
+            vehicle.flags = flags
+            for frame in range(steps):
+                now = 1. + frame*dt
+                vehicle.last_input = now
+                arena._drive(vehicle, dt, now)
+
+        world.relocate_training_body(entity, Pose((0., 0., 0.), 0.))
+        vehicle.pose = world.poses[entity]
+        drive(1 | 8, 30)
+        self.assertGreater(vehicle.pose.position[2], .2)
+        self.assertGreater(vehicle.pose.yaw, .2)
+        self.assertLess(vehicle.pose.yaw, .4)
+
+        world.relocate_training_body(entity, Pose((0., 0., 20.), 0.))
+        vehicle.pose = world.poses[entity]
+        vehicle.sandbox_boost = True
+        vehicle.speed = 36.
+        world.motion[entity].velocity = (0., 0., 36.)
+        drive(1, 30)
+        self.assertLess(vehicle.pose.position[2], 25.)
+        self.assertLess(vehicle.speed, 0.)
+
+        self.assertTrue(world.set_flight_velocity(entity, (0., 4., 36.), (0., 0., 0.)))
+        drive(1, 1)
+        _, vertical, forward = world.motion[entity].velocity
+        self.assertAlmostEqual(vertical, 4.)
+        self.assertLess(forward, 32.)
+
     def test_gravity_damps_takeoff_bank_with_no_input(self):
         for mass in (10_000., 60_000.):
             with self.subTest(mass=mass):
@@ -173,6 +217,20 @@ class NativePhysicsTests(unittest.TestCase):
                 self.assertFalse(world.motion[entity].grounded)
                 self.assertLess(abs(world.poses[entity].roll), .08)
                 self.assertGreater(world.motion[entity].velocity[2], 7.)
+
+    def test_ragdoll_recovery_skips_a_clear_pose_without_track_support(self):
+        world = self.world(self.assets('flat'))
+        entity = 200
+        pose = world.poses[entity]
+        self.assertTrue(world.set_flight_velocity(entity, (0., -.1, 0.), (0., 0., 0.)))
+        with patch.object(world, '_can_carry_origin', side_effect=(False, True)) as can_carry:
+            self.assertTrue(world._recover_dynamic(entity, world.dynamic_bodies[entity],
+                                                   pose, matrix(pose.yaw, pose.pitch, pose.roll)))
+        self.assertEqual(can_carry.call_count, 2)
+        location = world.poses[entity].position
+        self.assertAlmostEqual(math.dist(pose.position[::2], location[::2]), .75)
+        self.assertTrue(world.motion[entity].grounded)
+        self.assertNotIn(entity, world.dynamic_bodies)
 
     def test_default_does_not_fall_back_when_native_library_is_missing(self):
         with TemporaryDirectory() as temporary:
@@ -218,6 +276,19 @@ class NativePhysicsTests(unittest.TestCase):
         world.set_turret(.7,201)
         world.move(.01,0.,200,dt=1/60)
         self.assertTrue(world._native_physics.query(operation='contacts',entity=200,skin=world.SKIN))
+
+    def test_suspended_sensor_exits_native_ground_contacts_without_relocation(self):
+        world = self.world(self.assets('flat'))
+        physics = world._native_physics
+        if not hasattr(physics.library, 'solbreaker_physics_sensor_enabled'):
+            self.skipTest('Rebuild physics_core with sensor presence support')
+        world.relocate_training_body(201, Pose((0., 0., 2.), .3))
+        physics.sync(world)
+        self.assertTrue(physics.query(operation='contacts', entity=200, skin=world.SKIN))
+        world.set_tracked_presence(201, False)
+        self.assertFalse(physics.query(operation='contacts', entity=200, skin=world.SKIN))
+        world.set_tracked_presence(201, True)
+        self.assertTrue(physics.query(operation='contacts', entity=200, skin=world.SKIN))
 
     def test_invalid_command_preserves_world_and_can_be_retried(self):
         world = self.world(self.assets('flat'))
@@ -331,6 +402,90 @@ class NativePhysicsTests(unittest.TestCase):
                     world.dynamic_commit(1/60, piloted=(200,))
                     self.assertLess(world.poses[200].position[2], limit)
                 self.assertLess(world.motion[200].velocity[2], 8.)
+
+    def test_red_border_preserves_ground_motion_along_the_wall(self):
+        for native in (False, True):
+            with self.subTest(native=native):
+                assets = self.assets('flat')
+                assets.bounds = (-20., -20., 20., 20.)
+                world = self.world(assets, native)
+                world.relocate_training_body(200, world.ground_pose(18.4, 0., 0., entity=200))
+                for _ in range(24):
+                    world.move(0., 0., 200, dt=1/60, planar_displacement=(.17, .12))
+                x, _, z = world.poses[200].position
+                self.assertGreater(x, 18.4)
+                self.assertLess(x, 19.)
+                self.assertGreater(z, 2.7)
+                self.assertTrue(world.motion[200].grounded)
+                self.assertIsNone(world.last_wall_recoil)
+
+    def test_red_border_removes_only_outward_air_velocity(self):
+        for backend in ('bullet', 'rapier'):
+            with self.subTest(backend=backend), patch.dict(os.environ, SOLBREAKER_DYNAMIC_BACKEND=backend):
+                assets = self.assets('flat')
+                assets.bounds = (-20., -20., 20., 20.)
+                world = self.world(assets)
+                world.relocate_training_body(200, Pose((17., 8., 0.), 0.))
+                self.assertTrue(world.set_flight_velocity(200, (35., 0., 20.), (0., 0., 0.)))
+                for _ in range(18):
+                    world.dynamic_commit(1/60, piloted=(200,))
+                x, y, z = world.poses[200].position
+                vx, vy, vz = world.motion[200].velocity
+                self.assertGreater(x, 17.)
+                self.assertLess(x, 19.)
+                self.assertGreater(y, 7.)
+                self.assertGreater(z, 4.)
+                self.assertAlmostEqual(vx, 0., places=5)
+                self.assertLess(vy, 0.)
+                self.assertGreater(vz, 14.)
+
+    def test_dynamic_terrain_guard_extricates_a_deeply_buried_nose(self):
+        from solbreaker.collision import bullet, matrix, quaternion
+        with patch.dict(os.environ, SOLBREAKER_DYNAMIC_BACKEND='bullet'):
+            world = self.world(self.assets('flat'))
+        world.relocate_training_body(200, Pose((0., 8., 0.), 0.))
+        self.assertTrue(world.set_flight_velocity(200, (4., -7., 8.), (0., 0., 0.)))
+        dynamic = world.dynamic_bodies[200]
+        pitch = .8
+        center = np.asarray((0., .4, 0.)) + matrix(0., pitch, 0.) @ dynamic.center_of_mass
+        bullet.resetBasePositionAndOrientation(dynamic.body, center, quaternion(0., pitch, 0.),
+                                               physicsClientId=world.cid)
+        bullet.resetBaseVelocity(dynamic.body, (4., -7., 8.), physicsClientId=world.cid)
+
+        world.dynamic_commit(1/60, piloted=(200,))
+
+        corrected = world.poses[200]
+        vx, vy, vz = world.motion[200].velocity
+        self.assertGreater(corrected.position[1], 1.)
+        self.assertAlmostEqual(corrected.pitch, pitch, places=5)
+        self.assertAlmostEqual(vy, 0., places=5)
+        self.assertGreater(vx, 3.)
+        self.assertGreater(vz, 7.)
+
+    def test_dynamic_terrain_guard_ignores_empty_space_below_a_bevelled_nose(self):
+        from solbreaker.collision import bullet, matrix, quaternion
+        assets = self.assets('flat')
+        front = ((0., -1.), (0., 1.), (1., 3.), (1.4, 3.), (1.4, -1.))
+        assets.tank_shapes = (
+            ('hull', box((-.7, .45, -1.), (.7, 1.5, 1.))),
+            ('chassis_track_L', np.array([(x, y, z) for x in (-1.1, -.7) for y, z in front])),
+            ('chassis_track_R', np.array([(x, y, z) for x in (.7, 1.1) for y, z in front])),
+            assets.tank_shapes[-1])
+        assets.contact_proxies = vehicle_proxies(assets.tank_shapes, assets.turret_node, assets.support)
+        with patch.dict(os.environ, SOLBREAKER_DYNAMIC_BACKEND='bullet'):
+            world = self.world(assets)
+        self.assertTrue(world.set_flight_velocity(200, (0., -1., 0.), (0., 0., 0.)))
+        dynamic = world.dynamic_bodies[200]
+        pitch = .8
+        center = np.asarray((0., 1.2, 0.)) + matrix(0., pitch, 0.) @ dynamic.center_of_mass
+        bullet.resetBasePositionAndOrientation(dynamic.body, center, quaternion(0., pitch, 0.),
+                                               physicsClientId=world.cid)
+        bullet.resetBaseVelocity(dynamic.body, (0., -1., 0.), physicsClientId=world.cid)
+
+        world.dynamic_commit(1/60, piloted=(200,))
+
+        self.assertLess(world.poses[200].position[1], 1.2)
+        self.assertLess(world.motion[200].velocity[1], 0.)
 
     def test_native_tracks_cross_a_low_riser_but_stop_at_a_wall(self):
         for height, can_cross in ((.18, True), (.20, True), (.27, True), (.50, False), (1., False)):

@@ -98,6 +98,8 @@ class Vehicle:
     tracks: dict[str, TrackState] = field(default_factory=dict)
     capture_points: int = 0
     defense_points: float = 0.
+    camouflage: int = 0
+    generation: int = 0
 
     def battle_reward(self, won):
         return calculate_rewards(won=won, damage=self.damage,

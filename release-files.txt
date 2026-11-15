@@ -302,6 +302,7 @@ solbreaker/arena_owner_settlement.py
 solbreaker/arena_owner_spawn.py
 solbreaker/arena_owner_transport.py
 solbreaker/arena_retirement.py
+solbreaker/arena_time_stop.py
 solbreaker/armor.py
 solbreaker/armor_native.py
 solbreaker/assets/build-11.21.0.1235_7376187-files.json.gz
@@ -310,6 +311,7 @@ solbreaker/assets/launcher-cover-source.json
 solbreaker/assets/launcher-cover.png
 solbreaker/assets/solbreaker.ico
 solbreaker/assets/solbreaker.png
+solbreaker/assets/time-stop-clock.packed.webp
 solbreaker/auth.py
 solbreaker/ballistics.py
 solbreaker/base.py
@@ -326,6 +328,7 @@ solbreaker/bot_orders.py
 solbreaker/bot_roster.py
 solbreaker/bot_traffic.py
 solbreaker/build_info.py
+solbreaker/camouflage.py
 solbreaker/captures.py
 solbreaker/catalog.py
 solbreaker/certificate_authorities.py
@@ -342,9 +345,11 @@ solbreaker/client_patch.py
 solbreaker/client_provisions.py
 solbreaker/client_recon.py
 solbreaker/client_registration.py
+solbreaker/client_reticle.py
 solbreaker/client_sandbox.py
 solbreaker/client_setup.py
 solbreaker/client_t49_textures.py
+solbreaker/client_time_stop.py
 solbreaker/client_tls.py
 solbreaker/client_ui.py
 solbreaker/client_x11_input.py
@@ -472,6 +477,8 @@ solbreaker/supremacy.py
 solbreaker/tech_tree.py
 solbreaker/terminal.py
 solbreaker/terrain.py
+solbreaker/time_stop.py
+solbreaker/time_stop_worker.py
 solbreaker/tls.py
 solbreaker/track_drive.py
 solbreaker/track_fall_damage.py
@@ -486,7 +493,10 @@ start-server.ps1
 start-server.sh
 tests/__init__.py
 tests/test_ammo_resupply.py
+tests/test_arena_input_queue.py
+tests/test_ballistics.py
 tests/test_battle_provisions.py
+tests/test_camouflage.py
 tests/test_bot_combat.py
 tests/test_captures.py
 tests/test_client_repairs.py
@@ -517,6 +527,8 @@ tests/test_setup.py
 tests/test_static_visibility.py
 tests/test_steam_depot.py
 tests/test_terminal.py
+tests/test_time_stop.py
+tests/test_training_reentry.py
 tests/test_training_room_bots.py
 tests/test_token_capacity.py
 tests/test_updates.py

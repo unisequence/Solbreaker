@@ -44,18 +44,18 @@ def download(url, path, expected, limit):
         raise ValueError(f'Download differs from pinned SHA-256: {path.name}')
 
 
-def verify_native_source(*, rebuilt_physics=False):
+def verify_native_source(*, rebuilt_crates=()):
     paths = ['tools/build_native.py', 'tools/build_contact_queries.py', 'solbreaker/native/contact_queries.c']
     paths += [f'solbreaker/native/{crate}/{name}' for crate in WINDOWS_LIBRARIES
-              if crate != 'physics_core' or not rebuilt_physics
+              if crate not in rebuilt_crates
               for name in ('Cargo.toml', 'Cargo.lock', 'abi.h', 'build.rs', 'src')]
     result = subprocess.run(['git', 'diff', '--quiet', WINDOWS_INPUT_COMMIT, '--', *paths], cwd=ROOT)
     if result.returncode:
         raise ValueError('Windows native sources differ from the accepted build. Refresh the reviewed Windows inputs.')
 
 
-def stage_windows(directory, native_archive, *, rebuilt_physics=False):
-    verify_native_source(rebuilt_physics=rebuilt_physics)
+def stage_windows(directory, native_archive, *, rebuilt_crates=()):
+    verify_native_source(rebuilt_crates=rebuilt_crates)
     if native_archive is None:
         native_archive = directory/WINDOWS_INPUT_ZIP
         download(WINDOWS_INPUT_URL, native_archive, WINDOWS_INPUT_SHA256, updates.MAX_DOWNLOAD)
@@ -100,17 +100,19 @@ def release_version(tag):
     return tag[1:]
 
 
-def build(tag, output, native_archive, linux_native=None, windows_physics=None):
+def build(tag, output, native_archive, linux_native=None, windows_physics=None, windows_rapier=None):
     version = release_version(tag)
     with tempfile.TemporaryDirectory(prefix='solbreaker-release-') as temporary:
         work = Path(temporary)
-        native = stage_windows(work, native_archive, rebuilt_physics=windows_physics is not None)
+        rebuilt_crates = {crate for crate, path in (('physics_core', windows_physics),
+                                                    ('rapier_dynamic', windows_rapier)) if path is not None}
+        native = stage_windows(work, native_archive, rebuilt_crates=rebuilt_crates)
         source = work/f'Solbreaker-{version}-source.zip'
         windows = work/f'Solbreaker-{version}-windows-x64.zip'
         server = work/f'Solbreaker-{version}-server-windows-x64.zip'
         package(source)
         windows_inputs = dict(windows_native=native, windows_wheel=work/WHEEL,
-                              windows_runtime=work, windows_physics=windows_physics)
+                              windows_runtime=work, windows_physics=windows_physics, windows_rapier=windows_rapier)
         package(windows, **windows_inputs)
         package(server, **windows_inputs, server_only=True)
         archives = [(source, 'source'), (windows, 'windows-x64'), (server, 'server-windows-x64')]
@@ -137,5 +139,6 @@ if __name__ == '__main__':
     parser.add_argument('--windows-input', type=Path, help='Local copy of the pinned Windows release archive')
     parser.add_argument('--linux-native', type=Path, help='Freshly built Linux native crate directory')
     parser.add_argument('--windows-physics', type=Path, help='Ground controller DLL built from this checkout')
+    parser.add_argument('--windows-rapier', type=Path, help='Rapier DLL built from this checkout')
     args = parser.parse_args()
-    build(args.tag, args.output, args.windows_input, args.linux_native, args.windows_physics)
+    build(args.tag, args.output, args.windows_input, args.linux_native, args.windows_physics, args.windows_rapier)

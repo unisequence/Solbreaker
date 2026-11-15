@@ -19,6 +19,23 @@ def digest(data):
 
 
 class ClientRepairs(unittest.TestCase):
+    def test_reticle_yaml_uses_no_aliases(self):
+        import yaml
+        from solbreaker.client_reticle import _patch_aim, _patch_readouts
+
+        rotate = {'name': 'rotateControl', 'children': [{'name': 'sightCursorZoom'}]}
+        aim = {'Prototypes': [{'children': [{'name': 'UISightCursor', 'children': [rotate]}]}]}
+        _patch_aim(aim)
+        colors = {'StyleSheets': [
+            {'selectors': [f'.cont.{state} ?'], 'properties': {}}
+            for state in ('loaded', 'loading', 'rangefinder', 'over')
+        ]}
+        _patch_readouts(colors)
+        # The native package loader rejects aliases even though PyYAML accepts them.
+        for document in (aim, colors):
+            self.assertFalse(any(isinstance(event, yaml.AliasEvent)
+                                 for event in yaml.parse(yaml.safe_dump(document))))
+
     def setUp(self):
         work = TemporaryDirectory()
         self.addCleanup(work.cleanup)
@@ -146,6 +163,7 @@ class ClientRepairs(unittest.TestCase):
               patch.object(client_atgm_aim, 'OUTPUT_SHA256', digest(after)),
               patch.object(client_atgm_aim, 'PATCHES', ((0, b'old', b'new'),)),
               patch('solbreaker.management_tasks.require_executable_idle'),
+              patch('solbreaker.client_reticle.install', side_effect=lambda lab, manifest: manifest),
               patch('solbreaker.client_ui.install_server_name'),
               patch('solbreaker.client_tls.configure_environment'),
               patch('solbreaker.management_tasks.subprocess.call', return_value=0) as launch):
@@ -168,6 +186,7 @@ class ClientRepairs(unittest.TestCase):
               patch.object(client_sandbox, 'OUTPUT_SHA256', digest(after)),
               patch.object(client_sandbox, 'patch', return_value=after) as upgrade_image,
               patch('solbreaker.management_tasks.require_executable_idle'),
+              patch('solbreaker.client_reticle.install', side_effect=lambda lab, manifest: manifest),
               patch('solbreaker.client_motion_blur.install_motion_blur'),
               patch('solbreaker.client_ui.install_server_name'),
               patch('solbreaker.client_tls.configure_environment'),

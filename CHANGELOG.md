@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.0-alpha.11
+
+- Try Time Stop in sandbox battles. Press F8 to enter a private timeline and
+  press it again to return early. Movement is free. Shots and supported Big
+  Boss abilities spend energy, and their effects apply when you return.
+- Other players keep fighting. An animated clock marks your departure point,
+  and brief color glitches mark your departure and return.
+- Change tanks from the pause menu and rejoin a running training battle.
+  The previous hull stays on the map during tank selection.
+- Add camouflage selection in the garage and a unified battle reticle.
+
 ## 0.1.0-alpha.8
 
 - Improve track support when crossing low ledges. Resolve the map's active

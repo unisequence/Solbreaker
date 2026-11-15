@@ -18,6 +18,9 @@ RESTORE_HP = 4096
 BOSS_PICK_ROLE = 8192
 BOSS_RESPAWN = 16384
 GOD_MODE = 32768
+CHANGE_TANK = 65536
+TIME_STOP = 1 << 17
+BRANCH_SHOT_BASE = 1 << 30
 PRACTICE_TANKS = (
     ('china', 'Ch01_Type59', 'Type 59'),
     ('ussr', 'KV1', 'KV-1'),
@@ -35,6 +38,7 @@ PRACTICE_NOTICE = 0x400
 RESTORE_HP_KEY = 0x4000
 HP_RESTORED = 0x8000
 GOD_MODE_KEY = 0x10000
+TIME_STOP_KEY = 1 << 17
 TARGET_FIRE_OFF, TARGET_FIRE_ON, TARGETS_CLEARED, TARGET_SLOTS_FULL = range(4, 8)
 INPUT_LEASE = .85
 BOOST_POWER = 2.4
@@ -56,6 +60,8 @@ def advertisement(arena, *, notice=0, ability=False):
         capabilities |= PRACTICE_KEYS
     else:
         capabilities &= ~0x08
+    if getattr(arena, 'time_stop_enabled', False):
+        capabilities |= TIME_STOP_KEY
     capabilities |= notice
     second = b'\1' + struct.pack('<I', capabilities) if capabilities else b'\0'
     return b'\x13' + variable8(96, b'\x03TFS1SBOX' + struct.pack('<I', token(arena)) + second)
@@ -76,6 +82,21 @@ def boss_picker_message(arena, state):
     return b'\x13' + variable8(96, b'\x04TFS1ROLE' + struct.pack('<II', token(arena), state) + b'\0')
 
 
+def change_tank_message(arena):
+    return b'\x13' + variable8(96, b'\x03TFS1SWAP' + struct.pack('<I', token(arena)) + b'\0')
+
+
+def training_reentry_enabled(arena):
+    if (getattr(arena, 'room_settings', None) is None or not arena.unlimited_lives
+            or not arena.started or arena.finished_at or arena.closed or arena.retiring):
+        return False
+    if getattr(arena, 'owner_backed', False):
+        return getattr(arena, 'owner_training_reentry', False)
+    return ((world := arena.world) is not None
+            and not arena.drive_workers
+            and (world._rapier is None or hasattr(world._rapier.library, 'tfs_rapier_replace_vehicle')))
+
+
 def receive(endpoint, addr, client, arena, body, now):
     """Consume sandbox reports on the authenticated current battle session."""
     if not body.startswith(PREFIX):
@@ -83,8 +104,7 @@ def receive(endpoint, addr, client, arena, body, now):
     boss = arena.big_boss if getattr(arena, 'big_boss_mode', False) is True else None
     player = arena.players.get(client.account_id) if boss is not None else None
     ability = player is not None
-    if (arena is None or not (arena.sandbox_enabled or getattr(arena, 'gravity_mode', False) is True or ability)
-            or client.reconnect_replay
+    if (arena is None or client.reconnect_replay
             or not client.battle_spawned or body[-1:] != b'\x01'):
         return True
     raw = body[len(PREFIX):-1]
@@ -92,9 +112,18 @@ def receive(endpoint, addr, client, arena, body, now):
         control = Control.decode(raw)
     except ValueError:
         return True
+    if control.flags == CHANGE_TANK:
+        if control.token == token(arena):
+            endpoint.training_hangar(addr, client, arena)
+        return True
+    if control.flags == TIME_STOP and not getattr(arena, 'time_stop_enabled', False):
+        return True
+    if not (arena.sandbox_enabled or getattr(arena, 'gravity_mode', False) is True or ability):
+        return True
     previous = client.sandbox_input
     current = token(arena)
-    if previous is not None and previous[0] == current and now-previous[2] < .025:
+    if (previous is not None and previous[0] == current and now-previous[2] < .025
+            and control.flags != TIME_STOP):
         return True
     if control.token == 0:
         if not control.flags and not control.shot and client.reliable_window_used < 200:
@@ -118,7 +147,9 @@ def receive(endpoint, addr, client, arena, body, now):
     if getattr(arena, 'owner_backed', False):
         endpoint.owner_service.sandbox(addr, client, raw)
     else:
-        arena.sandbox_control(client.account_id, control)
+        from .arena_commands import ArenaCommand
+        endpoint.queue_arena_input(addr, client, arena,
+                                   ArenaCommand(client.account_id, 'sandbox', (control,)))
     return True
 
 
@@ -138,6 +169,8 @@ class Control:
             raise ValueError('Invalid sandbox control size')
         control = cls(*INPUT.unpack(data))
         length = math.hypot(control.x, control.y, control.z)
+        if control.flags in (CHANGE_TANK, TIME_STOP) and not length and not control.shot:
+            return control
         if control.flags & (BOSS_PICK_ROLE | BOSS_RESPAWN):
             if length:
                 raise ValueError('Invalid Big Boss request')

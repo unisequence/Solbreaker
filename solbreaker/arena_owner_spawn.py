@@ -88,7 +88,8 @@ class OwnerSpawnManager:
             client.last_sync_tick = -1
             client.load_grace_until = now + self.endpoint.ENTITY_LOAD_GRACE
             self.endpoint.send(addr, client, avatar_initial(data, now))
-            await asyncio.sleep(self.delay)
+            training_return = getattr(client, 'training_reentry_at', 0.)
+            await asyncio.sleep(min(self.delay, .25) if training_return else self.delay)
             if not self._current(route, addr, client, arena_id, account_id, 'battle'):
                 return
             required = sum((len(batch) + 899) // 900 for batch in data.batches)
@@ -98,7 +99,8 @@ class OwnerSpawnManager:
             for batch in data.batches:
                 self.endpoint.send(addr, client, batch)
             client.battle_spawned = True
-            client.reconnect_replay = False
+            if not training_return:
+                client.reconnect_replay = False
             client.battle_hints_at = self.clock() + 4.
             if self.on_spawn is not None:
                 value = self.on_spawn(addr, client, arena_id)

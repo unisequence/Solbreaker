@@ -21,6 +21,9 @@
 #define RESTORE_HP 4096u
 #define BOSS_PICK_ROLE 8192u
 #define BOSS_RESPAWN 16384u
+#define CHANGE_TANK 65536u
+#define TIME_STOP (1u << 17)
+#define BRANCH_SHOT_BASE (1u << 30)
 #define GOD_MODE 32768u
 #define PRACTICE_ACTIONS (NEXT_TARGET | TOGGLE_TARGET_FIRE | CLEAR_TARGETS)
 #define ONE_SHOT_ACTIONS (SPAWN_TARGET | GRAVITY_JUMP | TELEPORT | PRACTICE_ACTIONS | RESTORE_HP)
@@ -49,6 +52,10 @@ static const char bindings_path[] = "..\\documents\\solbreaker-keybinds.bin";
 static const char blur_path[] = "..\\documents\\solbreaker-motion-blur.bin";
 static const char blur_temp[] = "..\\documents\\solbreaker-motion-blur.tmp";
 static const char bindings_temp[] = "..\\documents\\solbreaker-keybinds.tmp";
+__attribute__((section(".boss_rodata")))
+static const char keyboard_path[] = "..\\documents\\solbreaker-keyboard.bin";
+__attribute__((section(".boss_rodata")))
+static const char keyboard_temp[] = "..\\documents\\solbreaker-keyboard.tmp";
 
 static const NativeString binding_names[] = {
     {"SolBoost", 8, 15}, {"SolFlight", 9, 15}, {"SolMissile", 10, 15},
@@ -74,6 +81,8 @@ static const NativeString binding_captions[][2] = {
 static const uint8_t visible_bindings[] = {0, 1, 2, 3, 5, 6, 7, 8, 9, 10, 11};
 
 typedef struct { float x, y, z; } Vector;
+typedef struct { float x, y; } Point;
+typedef struct { float x, y, width, height; } Rect;
 typedef struct { Vector position, target; } CameraPose;
 typedef struct {
     uint32_t thread, avatar, owner, scene, token, sequence, previous_keys;
@@ -96,6 +105,21 @@ typedef struct {
     void *role_picker, *role_value, *stock_boss_panel;
     uint32_t role_token, role_state, role_sent, respawn_sent, role_keys;
     void *respawn_menu, *respawn_value;
+    void *swap_value;
+    uint32_t swap_token, swap_sent;
+    uint32_t temporal_enabled, temporal_key, temporal_end, temporal_energy, temporal_hud;
+    uint32_t temporal_started, temporal_merge;
+    uint32_t temporal_gain, temporal_release_gain;
+    void *temporal_panel, *temporal_label;
+    uint32_t peer_started, peer_duration, peer_merge;
+    Vector peer_origin;
+    void *peer_root, *peer_clock, *peer_hand, *peer_hour, *peer_opacity;
+    uint32_t temporal_scene_sampled;
+    float temporal_scene_time;
+    Vector temporal_transition_position;
+    uint32_t temporal_transition_tick, temporal_returning, temporal_glitch_property;
+    float temporal_glitch[4];
+    void *battle_controls_root;
 } Sandbox;
 
 extern uint32_t sandbox_delta(void);
@@ -191,6 +215,53 @@ static int save_bindings(uint32_t delta, void *layout) {
     return write_setting(delta, bindings_path, bindings_temp, &data, sizeof(data));
 }
 
+/* Keep the keyboard/mouse layout in the local profile across account sessions. */
+__attribute__((section(".late_sandbox"), noinline))
+static void restore_keyboard(uint32_t delta, void *layout) {
+    KeyBinding saved[FIRST_SANDBOX_ACTION];
+    if (!read_setting(delta, keyboard_path, saved, sizeof(saved))) return;
+    typedef void (THISCALL *CopyString)(NativeString *, const NativeString *);
+    CopyString copy_string = (CopyString)(0x006a5120u + delta);
+    NativeBind bind = (NativeBind)(0x0123c830u + delta);
+    for (uint32_t action = 0; action < FIRST_SANDBOX_ACTION; action++) {
+        const KeyBinding *key = &saved[action];
+        if ((key->device == 0x200 && key->key < 6)
+                || (key->device == 0x400 && key->key < 0x7f)
+                || (!key->device && !key->key && !key->modifiers && key->phase == 1)) {
+            /* NativeBind destroys its by-value string, so give it an owned copy. */
+            NativeString name;
+            copy_string(&name, sandbox_binding_name(action));
+            bind(layout, action, name, key);
+        }
+    }
+}
+
+__attribute__((section(".late_sandbox"), noinline))
+void **sandbox_load_keyboard(void **output, void *source, const NativeString *name) {
+    typedef void **(*Create)(void **, void *, const NativeString *);
+    uint32_t delta = sandbox_delta();
+    void **result = ((Create)(0x011de9f0u + delta))(output, source, name);
+    if (*output) restore_keyboard(delta, *output);
+    return result;
+}
+
+__attribute__((section(".late_sandbox"), noinline))
+static void save_keyboard(uint32_t delta, void *layout) {
+    if (layout != keyboard_layout(delta)) return;
+    KeyBinding bindings[FIRST_SANDBOX_ACTION];
+    for (uint32_t action = 0; action < FIRST_SANDBOX_ACTION; action++)
+        bindings[action] = get_binding(delta, layout, action);
+    write_setting(delta, keyboard_path, keyboard_temp, bindings, sizeof(bindings));
+}
+
+__attribute__((section(".late_sandbox"), noinline))
+void THISCALL sandbox_save_keyboard(void *layout) {
+    typedef void (THISCALL *Save)(void *);
+    uint32_t delta = sandbox_delta();
+    ((Save)(0x0120ebe0u + delta))(layout);
+    save_keyboard(delta, layout);
+}
+
 static void seed_bindings(uint32_t delta, void *layout, int restore) {
     NativeBind bind = (NativeBind)(0x0123c830u + delta);
     SavedBindings saved;
@@ -219,6 +290,7 @@ void THISCALL sandbox_reset_bindings(void *layout) {
     if (layout == keyboard_layout(delta)) {
         seed_bindings(delta, layout, 0);
         save_bindings(delta, layout);
+        save_keyboard(delta, layout);
     }
 }
 
@@ -226,8 +298,11 @@ int THISCALL sandbox_set_binding(void *layout, uint32_t action, NativeString nam
     uint32_t delta = sandbox_delta();
     NativeBind bind = (NativeBind)(0x0123c830u + delta);
     uint32_t index = action - FIRST_SANDBOX_ACTION;
-    if (index >= SANDBOX_ACTION_COUNT || index == 4)
-        return bind(layout, action, name, key);
+    if (index >= SANDBOX_ACTION_COUNT || index == 4) {
+        int result = bind(layout, action, name, key);
+        if (!result && action < FIRST_SANDBOX_ACTION) save_keyboard(delta, layout);
+        return result;
+    }
     if (key->device != 0x400 || !key->key || key->key >= 0x7f || key->modifiers >= 16)
         return 2; /* Keep the native keyboard capture open for a key event. */
     KeyBinding previous = get_binding(delta, layout, action);
@@ -352,18 +427,28 @@ static void boss_picker_update(uint32_t delta, Sandbox *s);
 static void boss_picker_message(uint32_t delta, const uint32_t *message);
 static void boss_respawn_menu(void *menu, uint32_t delta);
 static void *find_control(void *root, const char *name, uint32_t delta);
+static void bind_battle_controls(uint32_t delta, Sandbox *s, void *root);
+static void temporal_audio_gain(uint32_t delta, Sandbox *s, uint32_t percent);
 
-static void reset(Sandbox *s) {
+static void reset(uint32_t delta, Sandbox *s) {
+    temporal_audio_gain(delta, s, 100u);
+    s->temporal_release_gain = 0;
     clear_view(s);
     s->owner = s->avatar = s->scene = s->token = s->sequence = 0;
     s->previous_keys = s->toggles = s->last_report = s->sent_flags = s->shot = 0;
     s->pending_actions = s->allowed_keys = 0;
     s->bindings_layout = 0;
     s->respawn_menu = s->respawn_value = 0;
+    s->swap_value = 0;
     s->role_sent = s->respawn_sent = 0;
     s->aim_frame_tick = 0;
     s->blur_tick = s->blur_camera = s->blur_scene = 0;
     s->blur_offset[0] = s->blur_offset[1] = 0;
+    s->temporal_enabled = s->temporal_key = s->temporal_end = s->temporal_hud = 0;
+    s->temporal_started = s->temporal_merge = 0;
+    s->peer_started = s->peer_merge = 0;
+    s->temporal_transition_tick = 0;
+    s->temporal_glitch[2] = 0;
 }
 
 static float limit(float value, float bound) {
@@ -402,7 +487,8 @@ static int send_control_value(uint32_t delta, Sandbox *s, uint32_t flags, Vector
     FIELD(body, 0) = 0x2d534654u;  /* TFS- */
     FIELD(body, 4) = 0x2d42414cu;  /* LAB- */
     body[8] = 'S';
-    FIELD(body, 9) = flags & (BOSS_PICK_ROLE | BOSS_RESPAWN) ? s->role_token : s->token;
+    FIELD(body, 9) = flags == CHANGE_TANK ? s->swap_token :
+        flags & (BOSS_PICK_ROLE | BOSS_RESPAWN) ? s->role_token : s->token;
     FIELD(body, 13) = ++s->sequence;
     FIELD(body, 17) = flags;
     FIELD(body, 21) = value;
@@ -522,12 +608,160 @@ static void crew_voice(uint32_t delta, Sandbox *s, uint32_t cue) {
     if (sound) ((Play)(0x176ab50u + delta))(sound, cue, 0);
 }
 
+__attribute__((section(".late_sandbox"), noinline))
+static void temporal_sound(uint32_t delta, uint32_t status) {
+    typedef void *(STDCALL *Module)(const char *);
+    typedef void *(STDCALL *Procedure)(void *, const char *);
+    typedef int (STDCALL *Play)(const char *, void *, uint32_t);
+    Procedure resolve = *(Procedure *)(0x036ef1c0u + delta);
+    Module module = *(Module *)(0x036ef08cu + delta);
+    void *audio = module("winmm.dll");
+    if (!audio) {
+        void *kernel = module("kernel32.dll");
+        Module load = kernel ? (Module)resolve(kernel, "LoadLibraryA") : 0;
+        audio = load ? load("winmm.dll") : 0;
+    }
+    Play play = audio ? (Play)resolve(audio, "PlaySoundA") : 0;
+    if (play) play(status < 3 ? "Data\\SolbreakerTimeStop\\enter.wav"
+                              : "Data\\SolbreakerTimeStop\\merge.wav", 0, 0x20003u);
+}
+
+/* The primary Wwise output gain multiplies the in-game volume settings. */
+__attribute__((section(".late_sandbox"), noinline))
+static void temporal_audio_gain(uint32_t delta, Sandbox *s, uint32_t percent) {
+    uint32_t stored = percent == 100u ? 0 : percent;
+    if (s->temporal_gain == stored) return;
+    typedef uint8_t (*Initialized)(void);
+    typedef uint32_t (*SetOutputVolume)(uint64_t, float);
+    if (!((Initialized)(0x2622a50u + delta))()) {
+        s->temporal_gain = 0;
+        return;
+    }
+    if (((SetOutputVolume)(0x26276d0u + delta))(0, (float)percent * .01f) == 1u)
+        s->temporal_gain = stored;
+}
+
+__attribute__((section(".late_sandbox"), noinline))
+static void temporal_audio_update(uint32_t delta, Sandbox *s, uint32_t now) {
+    if (s->temporal_end) {
+        uint32_t elapsed = now - s->temporal_started;
+        temporal_audio_gain(delta, s, elapsed < 260u ? 100u - 88u * elapsed / 260u : 12u);
+    } else {
+        uint32_t elapsed = now - s->temporal_merge;
+        uint32_t start = s->temporal_release_gain;
+        temporal_audio_gain(delta, s, start && elapsed < 420u
+            ? start + (100u - start) * elapsed / 420u : 100u);
+    }
+}
+
+/* TracerComponent +0x20 stores the server shot ID. Keep the retained
+ * trajectory for world shots and advance newly fired private shots. */
+__attribute__((section(".late_sandbox")))
+void THISCALL sandbox_tracer_update(void *system, void *tracer, void *node, float dt) {
+    uint32_t delta = sandbox_delta();
+    Sandbox *s = state(delta, 0);
+    if (s && s->temporal_end && FIELD(tracer, 0x20) < BRANCH_SHOT_BASE)
+        return;
+    typedef void (THISCALL *Update)(void *, void *, void *, float);
+    ((Update)(0x132ad50u + delta))(system, tracer, node, dt);
+}
+
+__attribute__((section(".late_sandbox")))
+void THISCALL sandbox_tracer_position(void *tracer, const Vector *position, const Vector *velocity) {
+    uint32_t delta = sandbox_delta();
+    Sandbox *s = state(delta, 0);
+    if (s && FIELD(tracer, 0x20) < BRANCH_SHOT_BASE) {
+        if (s->temporal_end) return;
+        void *path = (void *)FIELD(tracer, 0x84);
+        if (s->temporal_merge && clock_ms(delta)-s->temporal_merge < 420u &&
+                path && FIELD(path, 0) == 0x3855ae8u + delta) {
+            /* Rebase the ballistic path and discard queued interpolation
+             * targets from before the fork. Retain its storage and lifetime. */
+            FIELD(path, 0x14) = 0;
+            *(Vector *)((uintptr_t)path + 0x18) = *position;
+            *(Vector *)((uintptr_t)path + 0x28) = *velocity;
+            *(Vector *)((uintptr_t)path + 0x4c) = *position;
+            return;
+        }
+    }
+    typedef void (THISCALL *Update)(void *, const Vector *, const Vector *);
+    ((Update)(0x1314f10u + delta))(tracer, position, velocity);
+}
+
+__attribute__((section(".late_sandbox"), noinline))
+static void temporal_scene_process(void *system, float dt, uint32_t address) {
+    uint32_t delta = sandbox_delta();
+    Sandbox *s = state(delta, 0);
+    /* SceneSystem's scene pointer is at +0x28. Leave other scenes running. */
+    if (s && s->temporal_end && s->scene == FIELD(system, 0x28)) return;
+    typedef void (THISCALL *Process)(void *, float);
+    ((Process)(address + delta))(system, dt);
+}
+
+#define SCENE_PROCESS(name, address) \
+    __attribute__((section(".late_sandbox"))) \
+    void THISCALL name(void *system, float dt) { temporal_scene_process(system, dt, address); }
+SCENE_PROCESS(sandbox_scene_animation, 0xc2dc40u)
+SCENE_PROCESS(sandbox_scene_wind, 0xbb1d70u)
+SCENE_PROCESS(sandbox_scene_wave, 0xbb1bc0u)
+SCENE_PROCESS(sandbox_scene_trees, 0xaf6220u)
+#undef SCENE_PROCESS
+
+__attribute__((section(".late_sandbox")))
+void THISCALL sandbox_scene_shader_clock(void *bindings, void *material, float time) {
+    uint32_t delta = sandbox_delta();
+    Sandbox *s = state(delta, 0);
+    /* Scene::Draw passes the address of its material field and copies time
+     * into the shader bindings. The simulation clock can continue advancing. */
+    if (s && s->temporal_end && s->scene && (uint32_t)material == s->scene + 0x11cu) {
+        if (!s->temporal_scene_sampled) {
+            s->temporal_scene_time = time;
+            s->temporal_scene_sampled = 1;
+        }
+        time = s->temporal_scene_time;
+    }
+    typedef void (THISCALL *Apply)(void *, void *, float);
+    ((Apply)(0xa95eb0u + delta))(bindings, material, time);
+}
+
+__attribute__((section(".late_sandbox"), noinline))
+static void temporal_notice(uint32_t delta, Sandbox *s, uint32_t seconds, uint32_t energy) {
+    if (!s->temporal_panel || !s->temporal_label) return;
+    if (seconds > 99) seconds = 99;
+    if (energy > 999) energy = 999;
+    NativeString text = {{"00s | 000 E"}, 11, 15};
+    text.text[0] += seconds / 10;
+    text.text[1] += seconds % 10;
+    text.text[6] += energy / 100;
+    text.text[7] += energy / 10 % 10;
+    text.text[8] += energy % 10;
+    typedef void (THISCALL *SetText)(void *, const NativeString *);
+    typedef void (THISCALL *SetVisible)(void *, uint32_t);
+    ((SetText)(0xb8e900u + delta))(s->temporal_label, &text);
+    ((SetVisible)(0xd05020u + delta))(s->temporal_panel, 1);
+}
+
+__attribute__((section(".late_sandbox"), noinline))
+static void temporal_update_hud(uint32_t delta, Sandbox *s, uint32_t now) {
+    if (!s->temporal_end || (s->temporal_hud && now-s->temporal_hud < 200u)) return;
+    s->temporal_hud = now;
+    int32_t remaining = (int32_t)(s->temporal_end-now);
+    temporal_notice(delta, s, remaining > 0 ? ((uint32_t)remaining+999u)/1000u : 0u,
+                    s->temporal_energy);
+}
+
+__attribute__((section(".late_sandbox"), noinline))
 int sandbox_message(uint32_t delta, const uint32_t *first, const uint32_t *end,
                     const uint32_t *second, const uint32_t *second_end) {
     typedef int (*Original)(uint32_t, const uint32_t *, const uint32_t *,
                             const uint32_t *, const uint32_t *);
     if (first && end == first+4 && first[0] == 0x31534654u && first[1] == 0x454c4f52u) {
         boss_picker_message(delta, first);
+        return 1;
+    }
+    if (first && end == first+3 && first[0] == 0x31534654u && first[1] == 0x50415753u) {
+        Sandbox *s = state(delta, 1);
+        if (s) s->swap_token = first[2];
         return 1;
     }
     if (first && end == first+3 && first[0] == 0x31534654u && first[1] == 0x4c414548u) {
@@ -538,6 +772,51 @@ int sandbox_message(uint32_t delta, const uint32_t *first, const uint32_t *end,
         /* VOICE_ENEMY_KILLED and the stock TrackHealth voice. */
         if (first[2] == 0x22 || first[2] == 0x4f)
             crew_voice(delta, state(delta, 0), first[2]);
+        return 1;
+    }
+    if (first && end == first+4 && first[0] == 0x31534654u && first[1] == 0x454d4954u
+            && second && second_end == second+3) {
+        Sandbox *s = state(delta, 0);
+        if (s && s->thread == thread_id()) {
+            uint32_t status = first[2];
+            if (status == 1) {
+                s->temporal_started = clock_ms(delta);
+                s->temporal_end = s->temporal_started+(first[3] & 65535u)*100u;
+                s->temporal_energy = first[3] >> 16;
+                s->temporal_hud = 0;
+                s->temporal_scene_sampled = 0;
+            } else if (status == 2 || status == 6) {
+                s->peer_duration = (first[3] & 65535u)*100u;
+                s->peer_started = clock_ms(delta);
+                s->peer_merge = 0;
+                Vector point;
+                __builtin_memcpy(&point, second, sizeof(point));
+                s->peer_origin = (Vector){point.x, point.z, point.y + .08f};
+            } else if (status == 3 || status == 4) {
+                if (s->temporal_end) {
+                    s->temporal_merge = clock_ms(delta);
+                    s->temporal_release_gain = s->temporal_gain;
+                    typedef void (THISCALL *SetVisible)(void *, uint32_t);
+                    if (s->temporal_panel)
+                        ((SetVisible)(0xd05020u + delta))(s->temporal_panel, 0);
+                }
+                s->temporal_end = 0;
+                if (s->peer_started) s->peer_merge = clock_ms(delta);
+            } else if (status == 5) {
+                s->temporal_energy = first[3] >> 16;
+                s->temporal_hud = 0;
+            }
+            if (status >= 1 && status <= 4) {
+                Vector point;
+                __builtin_memcpy(&point, second, sizeof(point));
+                s->temporal_transition_position = (Vector){point.x, point.z, point.y + 1.15f};
+                s->temporal_transition_tick = clock_ms(delta);
+                s->temporal_returning = status >= 3;
+                temporal_sound(delta, status);
+            }
+            if (status == 1 || status == 5)
+                temporal_update_hud(delta, s, clock_ms(delta));
+        }
         return 1;
     }
     if (first && end == first+4 && first[0] == 0x31534654u && first[1] == 0x47415246u) {
@@ -569,6 +848,7 @@ int sandbox_message(uint32_t delta, const uint32_t *first, const uint32_t *end,
                 return 1;
             }
             s->token = first[2];
+            s->temporal_enabled = !!(capabilities & TIME_STOP);
             s->allowed_keys = (capabilities & 15) | ((capabilities & 16) ? JUMP_KEY : 0)
                               | ((capabilities & 32) ? 16 : 0)
                               | ((capabilities & 128) ? TELEPORT_KEY : 0)
@@ -582,6 +862,7 @@ int sandbox_message(uint32_t delta, const uint32_t *first, const uint32_t *end,
     return ((Original)(0x04b1cc42u + delta))(delta, first, end, second, second_end);
 }
 
+__attribute__((section(".late_sandbox"), noinline))
 void sandbox_reset(uint32_t delta, uint32_t *layer) {
     typedef void (*Original)(uint32_t, uint32_t *);
     ((Original)(0x04b1ce1du + delta))(delta, layer);
@@ -591,7 +872,11 @@ void sandbox_reset(uint32_t delta, uint32_t *layer) {
         s->score_panel = 0;
         s->role_picker = s->role_value = s->stock_boss_panel = 0;
         s->role_token = s->role_state = s->role_keys = 0;
-        reset(s);
+        s->swap_token = 0;
+        s->battle_controls_root = 0;
+        s->temporal_panel = s->temporal_label = 0;
+        s->peer_root = s->peer_clock = s->peer_hand = s->peer_hour = s->peer_opacity = 0;
+        reset(delta, s);
     }
 }
 
@@ -604,7 +889,7 @@ static Sandbox *battle_state(uint32_t delta, uint32_t avatar) {
     if (!s->thread) s->thread = thread_id();
     if (s->thread != thread_id()) return 0;
     if (s->owner != owner || s->avatar != avatar) {
-        reset(s);
+        reset(delta, s);
         s->owner = owner;
         s->avatar = avatar;
     }
@@ -627,6 +912,13 @@ static void poll_controls(uint32_t delta, Sandbox *s, uint32_t now) {
     }
     typedef int16_t (STDCALL *Key)(int);
     Key key = (Key)s->key_state;
+    uint32_t temporal_pressed = s->temporal_enabled && key(0x77) < 0; /* F8 */
+    if (temporal_pressed && !s->temporal_key) {
+        s->temporal_key = 1;
+        send_control(delta, s, TIME_STOP, (Vector){0, 0, 0});
+        return;
+    }
+    s->temporal_key = temporal_pressed;
     uint32_t pressed = binding_keys(delta, s) & s->allowed_keys;
     uint32_t changes = pressed & ~s->previous_keys;
     s->previous_keys = pressed;
@@ -698,8 +990,16 @@ void sandbox_frame(uint32_t delta, uint32_t *rotator) {
     uint32_t consumer = FIELD(rotator, 0x13c);
     s->scene = 0;
     if (consumer && FIELD(consumer, 0) == 0x0382efd8u + delta) {
-        uint32_t link = FIELD(consumer-0x160, 0x144);
+        uint32_t battle_layer = consumer-0x160;
+        uint32_t link = FIELD(battle_layer, 0x144);
         if (link) s->scene = FIELD(link, 0xc);
+        /* BattleUILayer -> BattleHUD -> Screen. The game can reuse this
+         * screen in the next battle without calling UIPackage::GetControl. */
+        uint32_t hud = FIELD(battle_layer, 0x38);
+        uint32_t root = hud ? FIELD(hud, 0x38) : 0;
+        uint32_t screen = root ? FIELD(root, 0x38) : 0;
+        if (screen && FIELD(screen, 0) == 0x37f9244u+delta)
+            bind_battle_controls(delta, s, (void *)root);
     }
     poll_controls(delta, s, now);
 }
@@ -785,6 +1085,71 @@ static CameraPose swap_pose(uint32_t camera, CameraPose pose) {
     return previous;
 }
 
+__attribute__((section(".late_sandbox"), noinline))
+static float temporal_project(uint32_t delta, uint32_t camera, Vector p, Point *point) {
+    typedef const float *(THISCALL *ViewProj)(uint32_t, uint32_t);
+    const float *m = ((ViewProj)(0xa7aee0u + delta))(camera, 0);
+    float depth = p.x*m[3]+p.y*m[7]+p.z*m[11]+m[15];
+    if (!(depth > .5f && depth < 260.f)) return 0;
+    float x = (p.x*m[0]+p.y*m[4]+p.z*m[8]+m[12])/depth;
+    float y = (p.x*m[1]+p.y*m[5]+p.z*m[9]+m[13])/depth;
+    if (!(x > -1.25f && x < 1.25f && y > -1.35f && y < 1.15f)) return 0;
+    *point = (Point){.5f + .5f*x, .5f - .5f*y};
+    return depth;
+}
+
+/* The clock faces the camera and scales with its distance from the viewer. */
+__attribute__((section(".late_sandbox"), noinline))
+static void temporal_clock(uint32_t delta, Sandbox *s, uint32_t camera, uint32_t now) {
+    if (!s->peer_clock || !s->peer_started) return;
+    typedef void (THISCALL *Visible)(void *, uint32_t);
+    Visible visible = (Visible)(0xd05020u + delta);
+    if (now-s->peer_started > s->peer_duration+1000u ||
+            (s->peer_merge && now-s->peer_merge >= 420u)) {
+        visible(s->peer_clock, 0);
+        s->peer_started = 0;
+        return;
+    }
+    Point point;
+    float depth = temporal_project(delta, camera, s->peer_origin, &point);
+    if (!depth) {
+        visible(s->peer_clock, 0);
+        return;
+    }
+    typedef Rect *(THISCALL *GetRect)(void *, Rect *);
+    Rect bounds;
+    ((GetRect)(0xcdf810u + delta))(s->peer_root, &bounds);
+    point.x *= bounds.width;
+    point.y *= bounds.height;
+    uint32_t elapsed = now-s->peer_started;
+    float entrance = elapsed < 280u ? 1.f-(float)elapsed/280.f : 0.f;
+    float reveal = 1.f-entrance*entrance*entrance;
+    float cycle = (float)(elapsed % 2600u)/1300.f-1.f;
+    float opacity = reveal*(.95f+.05f*cycle*cycle);
+    float shrink = 1.f;
+    if (s->peer_merge) {
+        float remaining = 1.f-(float)(now-s->peer_merge)/420.f;
+        opacity *= remaining*remaining;
+        shrink = .55f+.45f*remaining;
+    }
+    float scale = .037f*bounds.width/depth;
+    if (scale < .155f) scale = .155f;
+    if (scale > .65f) scale = .65f;
+    Point scaling = {scale*(.91f+.09f*reveal), scale*shrink*(.48f+.52f*reveal)};
+    typedef void (THISCALL *SetPoint)(void *, const Point *);
+    typedef void (THISCALL *SetFloat)(void *, float);
+    ((SetPoint)(0xcff4a0u + delta))(s->peer_clock, &point);
+    ((SetPoint)(0xcff760u + delta))(s->peer_clock, &scaling);
+    if (s->peer_opacity) ((SetFloat)(0x102ab30u + delta))(s->peer_opacity, opacity);
+    if (s->peer_duration) {
+        float travel = (float)(elapsed < s->peer_duration ? elapsed : s->peer_duration)/s->peer_duration;
+        SetFloat angle = (SetFloat)(0xcfd470u + delta);
+        if (s->peer_hand) angle(s->peer_hand, .890118f+6.2831853f*travel);
+        if (s->peer_hour) angle(s->peer_hour, -1.012291f+.5235988f*travel);
+    }
+    visible(s->peer_clock, 1);
+}
+
 /* MarkerSystem projects the world positions during the scene update, before
  * the draw hook runs. Use the same pose in both passes. */
 void THISCALL sandbox_project_markers(void *system, float elapsed) {
@@ -847,7 +1212,26 @@ static void sample_camera_blur(Sandbox *s, uint32_t camera, uint32_t now) {
     s->blur_tick = now;
 }
 
+__attribute__((section(".late_sandbox"), noinline))
+static void sample_temporal_glitch(uint32_t delta, Sandbox *s, uint32_t camera, uint32_t now) {
+    s->temporal_glitch[2] = 0;
+    uint32_t elapsed = now-s->temporal_transition_tick;
+    uint32_t duration = s->temporal_returning ? 230u : 180u;
+    if (!s->temporal_transition_tick || !camera || elapsed >= duration) return;
+    Point point;
+    float depth = temporal_project(delta, camera, s->temporal_transition_position, &point);
+    if (!depth) return;
+    float radius = 2.5f/depth;
+    if (radius > .19f) radius = .19f;
+    s->temporal_glitch[0] = point.x;
+    s->temporal_glitch[1] = point.y;
+    s->temporal_glitch[2] = radius;
+    float progress = (float)elapsed/duration + .001f;
+    s->temporal_glitch[3] = s->temporal_returning ? -progress : progress;
+}
+
 /* UISceneSystem selects the material that composites the scene before the HUD. */
+__attribute__((section(".late_sandbox"), noinline))
 void *sandbox_blur_material(int alpha, int upscale, int grading) {
     typedef void *(*Select)(int, int, int);
     typedef void (THISCALL *Intern)(uint32_t *, const char *);
@@ -856,11 +1240,23 @@ void *sandbox_blur_material(int alpha, int upscale, int grading) {
     void *material = ((Select)(0xa84af0u + delta))(alpha, upscale, grading);
     Sandbox *s = state(delta, 0);
     if (material && s && s->thread == thread_id()) {
-        const float zero[4] = {0};
-        const float *offset = zero;
+        float offset[4] = {0};
+        uint32_t now = clock_ms(delta);
         if (s->blur_percent && s->blur_scene && s->blur_scene == s->scene &&
-                clock_ms(delta)-s->blur_tick < 100)
-            offset = s->blur_offset;
+                now-s->blur_tick < 100) {
+            offset[0] = s->blur_offset[0];
+            offset[1] = s->blur_offset[1];
+        }
+        if (s->temporal_end) {
+            float p = (float)(now-s->temporal_started)/260.f;
+            if (p > 1.f) p = 1.f;
+            offset[2] = .70f * (1.f-(1.f-p)*(1.f-p)*(1.f-p));
+            offset[3] = .20f + .48f*(1.f-p)*(1.f-p);
+        } else if (s->temporal_merge && now-s->temporal_merge < 420u) {
+            float p = 1.f-(float)(now-s->temporal_merge)/420.f;
+            offset[2] = .70f*p*p;
+            offset[3] = .72f*p*p;
+        }
         uint32_t property;
         ((Intern)(0x931830u + delta))(&property, "solbreakerCameraBlur");
         ((Property)(0xca2e30u + delta))(material, &property, offset, 3, 1, 0);
@@ -869,12 +1265,57 @@ void *sandbox_blur_material(int alpha, int upscale, int grading) {
     return material;
 }
 
+/* Project into the sampled UV rectangle, which can use only part of the texture. */
+__attribute__((section(".late_sandbox"), noinline))
+static void apply_temporal_glitch(void *material, const Rect *uv, uint32_t delta) {
+    Sandbox *s = state(delta, 0);
+    if (!material || !s || s->thread != thread_id()) return;
+    float radius = s->temporal_glitch[2];
+    if (radius && !s->temporal_glitch_property) {
+        typedef void (THISCALL *Intern)(uint32_t *, const char *);
+        ((Intern)(0x931830u + delta))(&s->temporal_glitch_property, "solbreakerTemporalGlitch");
+    }
+    if (s->temporal_glitch_property) {
+        float effect[4] = {
+            uv->x + uv->width*s->temporal_glitch[0],
+            uv->y + uv->height*s->temporal_glitch[1],
+            radius*uv->width, s->temporal_glitch[3],
+        };
+        typedef void (THISCALL *Property)(void *, const uint32_t *, const float *, int, int, int);
+        ((Property)(0xca2e30u + delta))(material, &s->temporal_glitch_property, effect, 3, 1, 0);
+        s->temporal_glitch[2] = 0;
+    }
+}
+
+typedef void (THISCALL *SceneBlit)(void *, void *, void *, const void *, const Rect *, const Rect *);
+
+__attribute__((section(".late_sandbox"), noinline))
+void THISCALL sandbox_scene_blit(void *draw, void *texture, void *material, const void *color,
+                               const Rect *destination, const Rect *uv) {
+    uint32_t delta = sandbox_delta();
+    apply_temporal_glitch(material, uv, delta);
+    ((SceneBlit)(0xa6bc30u + delta))(draw, texture, material, color, destination, uv);
+}
+
+__attribute__((section(".late_sandbox"), noinline))
+void THISCALL sandbox_scene_graded_blit(void *draw, void *texture, void *material, const void *color,
+                                      const Rect *destination, const Rect *uv) {
+    uint32_t delta = sandbox_delta();
+    apply_temporal_glitch(material, uv, delta);
+    ((SceneBlit)(0xa6a150u + delta))(draw, texture, material, color, destination, uv);
+}
+
 void THISCALL sandbox_draw(void *scene) {
     typedef void (THISCALL *Draw)(void *);
     uint32_t delta = sandbox_delta();
     Draw draw = (Draw)(0x00d54070u + delta);
     Sandbox *s = state(delta, 0);
-    if (s && s->owner && s->thread == thread_id() && s->role_state)
+    if (s && (s->temporal_end || s->temporal_gain) && s->thread == thread_id()) {
+        uint32_t now = clock_ms(delta);
+        temporal_audio_update(delta, s, now);
+        temporal_update_hud(delta, s, now);
+    }
+    if (s && s->owner && s->thread == thread_id() && (s->role_state || s->swap_token))
         boss_picker_update(delta, s);
     if (!s || s->thread != thread_id() || s->scene != (uint32_t)scene) {
         draw(scene);
@@ -892,6 +1333,9 @@ void THISCALL sandbox_draw(void *scene) {
         sample_camera_blur(s, camera, clock_ms(delta));
         s->blur_scene = (uint32_t)scene;
     }
+    uint32_t now = clock_ms(delta);
+    sample_temporal_glitch(delta, s, camera, now);
+    if (camera && s->peer_started) temporal_clock(delta, s, camera, now);
     draw(scene);
     if (missile_view) swap_pose(camera, previous);
 }
@@ -1104,6 +1548,8 @@ static const char boss_level_path[] BOSS_DATA = "SolRoleLevel";
 static const char stock_boss_path[] BOSS_DATA = "AbilityPanel";
 static const char respawn_button_path[] BOSS_DATA = "menuDialog/**/SolRespawnButton";
 static const char respawn_value_path[] BOSS_DATA = "SolRespawnValue";
+static const char swap_button_path[] BOSS_DATA = "menuDialog/**/SolChangeTankButton";
+static const char swap_value_path[] BOSS_DATA = "SolChangeTankValue";
 
 BOSS_UI static unsigned picker_value(void *field, uint32_t delta) {
     typedef NativeString *(THISCALL *Get)(void *, NativeString *);
@@ -1124,19 +1570,41 @@ BOSS_UI static void boss_visible(void *control, uint32_t visible, uint32_t delta
     if (control) ((Visible)(0xd05020u + delta))(control, visible);
 }
 
-/* The pinned BattleScreen constructor takes ownership of this UI root. */
+BOSS_UI static void bind_battle_controls(uint32_t delta, Sandbox *s, void *root) {
+    if (s->battle_controls_root == root) return;
+    s->battle_controls_root = root;
+    s->temporal_panel = find_control(root, "SolTimeHUD", delta);
+    s->temporal_label = s->temporal_panel ? find_control(s->temporal_panel, "SolTimeValue", delta) : 0;
+    s->temporal_hud = 0;
+    boss_visible(s->temporal_panel, 0, delta);
+    s->peer_root = root;
+    s->peer_clock = find_control(root, "SolTimeClock", delta);
+    s->peer_hand = s->peer_hour = s->peer_opacity = 0;
+    if (s->peer_clock) {
+        s->peer_hand = find_control(s->peer_clock, "Hand", delta);
+        s->peer_hour = find_control(s->peer_clock, "Hour", delta);
+        const char *type = "UIOpacityComponent";
+        NativeString component_name = {{0}, 18, 18};
+        __builtin_memcpy(component_name.text, &type, sizeof(type));
+        typedef void *(THISCALL *Component)(void *, const NativeString *, uint32_t);
+        void *opacity = ((Component)(0xce0530u + delta))(s->peer_clock, &component_name, 0);
+        if (opacity && FIELD(opacity, 0) == 0x3781ee4u+delta) s->peer_opacity = opacity;
+        boss_visible(s->peer_clock, 0, delta);
+    }
+    s->role_picker = find_control(root, boss_picker_path, delta);
+    s->role_value = s->role_picker ? find_control(s->role_picker, boss_role_path, delta) : 0;
+    s->role_sent = s->role_value ? picker_value(s->role_value, delta) : 0;
+    boss_visible(s->role_picker, s->role_state == 2, delta);
+}
+
+/* Bind early for the role picker during battle loading. */
 BOSS_UI void *THISCALL boss_screen_root(void *package, void *result, const NativeString *name) {
     typedef void *(THISCALL *Get)(void *, void *, const NativeString *);
-    void *returned = ((Get)(0xcddf80u + sandbox_delta()))(package, result, name);
     uint32_t delta = sandbox_delta();
+    void *returned = ((Get)(0xcddf80u + delta))(package, result, name);
     Sandbox *s = state(delta, 1);
     void *root = (void *)FIELD(result, 0);
-    if (s && root) {
-        s->role_picker = find_control(root, boss_picker_path, delta);
-        s->role_value = s->role_picker ? find_control(s->role_picker, boss_role_path, delta) : 0;
-        s->role_sent = s->role_value ? picker_value(s->role_value, delta) : 0;
-        boss_visible(s->role_picker, s->role_state == 2, delta);
-    }
+    if (s && root) bind_battle_controls(delta, s, root);
     return returned;
 }
 
@@ -1179,11 +1647,22 @@ BOSS_UI static void boss_respawn_menu(void *menu, uint32_t delta) {
     s->respawn_menu = menu;
     s->respawn_value = find_control(menu, respawn_value_path, delta);
     s->respawn_sent = s->respawn_value ? picker_value(s->respawn_value, delta) : 0;
+    void *swap_button = find_control(menu, swap_button_path, delta);
+    s->swap_value = swap_button && s->swap_token ? find_control(menu, swap_value_path, delta) : 0;
+    s->swap_sent = s->swap_value ? picker_value(s->swap_value, delta) : 0;
+    boss_visible(swap_button, s->swap_value != 0, delta);
     boss_visible(button, s->role_state == 1, delta);
 }
 
 BOSS_UI static void boss_picker_update(uint32_t delta, Sandbox *s) {
     typedef int16_t (STDCALL *Key)(int);
+    if (s->swap_value && picker_value(s->swap_value, delta) != s->swap_sent &&
+            send_control_value(delta, s, CHANGE_TANK, (Vector){0, 0, 0}, 0)) {
+        typedef void (THISCALL *Close)(void *);
+        ((Close)(0x19449c0u + delta))(s->respawn_menu);
+        s->swap_value = s->respawn_value = s->respawn_menu = 0;
+        return;
+    }
     if (s->role_state == 2 && foreground(delta, s)) {
         uint32_t value = s->role_value ? picker_value(s->role_value, delta) : 0;
         uint32_t choice = value != s->role_sent ? value % 10 : 0;
@@ -1214,7 +1693,7 @@ BOSS_UI static void boss_picker_update(uint32_t delta, Sandbox *s) {
             s->respawn_sent = value;
             typedef void (THISCALL *Close)(void *);
             ((Close)(0x19449c0u + delta))(s->respawn_menu);
-            s->respawn_menu = s->respawn_value = 0;
+            s->swap_value = s->respawn_menu = s->respawn_value = 0;
         }
     }
 }

@@ -34,28 +34,33 @@ jobs:
           rustup toolchain install 1.85.0 --profile minimal
           export CARGO_TARGET_DIR="$RUNNER_TEMP/cargo-target"
           RUSTUP_TOOLCHAIN=1.85.0 python tools/build_native.py --jobs 2
-      - name: Build Windows ground controller from the same sources
+      - name: Build Windows physics libraries from the same sources
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64-posix
           rustup target add --toolchain 1.85.0 x86_64-pc-windows-gnu
           export CARGO_TARGET_DIR="$RUNNER_TEMP/cargo-target"
           export CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc-posix
-          RUSTFLAGS="-C link-arg=-static-libgcc" cargo +1.85.0 build --release --locked \
-            --jobs 2 --target x86_64-pc-windows-gnu --manifest-path solbreaker/native/physics_core/Cargo.toml
-          objdump -p "$CARGO_TARGET_DIR/x86_64-pc-windows-gnu/release/solbreaker_physics_core.dll" > "$RUNNER_TEMP/windows-imports.txt"
-          if grep -Ei 'DLL Name: (libgcc|libwinpthread|libstdc\+\+)' "$RUNNER_TEMP/windows-imports.txt"; then
-            exit 1
-          fi
+          export RUSTFLAGS="-C link-arg=-static-libgcc"
+          for crate in physics_core rapier_dynamic; do
+            cargo +1.85.0 build --release --locked --jobs 2 --target x86_64-pc-windows-gnu \
+              --manifest-path "solbreaker/native/$crate/Cargo.toml"
+          done
+          for dll in solbreaker_physics_core.dll tfs_rapier_dynamic.dll; do
+            objdump -p "$CARGO_TARGET_DIR/x86_64-pc-windows-gnu/release/$dll" > "$RUNNER_TEMP/windows-imports.txt"
+            if grep -Ei 'DLL Name: (libgcc|libwinpthread|libstdc\+\+)' "$RUNNER_TEMP/windows-imports.txt"; then
+              exit 1
+            fi
+            # Cargo retains a hard link into target/release/deps.
+            cp "$CARGO_TARGET_DIR/x86_64-pc-windows-gnu/release/$dll" "$RUNNER_TEMP/$dll"
+          done
       - name: Build and verify release archives
         run: |
           git merge-base --is-ancestor HEAD origin/main
-          # Cargo retains a hard link into target/release/deps. The packer requires a unique file.
-          cp "$RUNNER_TEMP/cargo-target/x86_64-pc-windows-gnu/release/solbreaker_physics_core.dll" \
-            "$RUNNER_TEMP/solbreaker_physics_core.dll"
           python tools/build_release.py --tag "$GITHUB_REF_NAME" --output "$RUNNER_TEMP/solbreaker-release" \
             --linux-native solbreaker/native \
-            --windows-physics "$RUNNER_TEMP/solbreaker_physics_core.dll"
+            --windows-physics "$RUNNER_TEMP/solbreaker_physics_core.dll" \
+            --windows-rapier "$RUNNER_TEMP/tfs_rapier_dynamic.dll"
       - name: Test the extracted Linux server bundle
         working-directory: ${{ runner.temp }}
         run: |
