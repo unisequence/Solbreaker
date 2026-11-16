@@ -53,6 +53,7 @@ _DRIVE_PARAMETERS = ('bkwdSpeedLimitBias', 'cooldown', 'duration', 'enginePowerI
 # Reactive Armor: pinned id33 ShieldKit. While ACTIVE at the impact time, enemy
 # non-HE HP damage taken scales by 1-shieldCoef (local sandbox rule).
 _SHIELDS = {'shieldKit': ('ShieldKit', 33)}
+SHIELDED_SHELL_KINDS = ('ARMOR_PIERCING', 'ARMOR_PIERCING_CR', 'HOLLOW_CHARGE')
 _SHIELD_PARAMETERS = ('cooldown', 'duration', 'shieldCoef')
 # Armor Mover raw73 is restricted by the pinned catalog to five Titan vehicles.
 # Its localization explicitly says “any shell”, unlike ShieldKit's non-HE-only
@@ -395,7 +396,7 @@ class ConsumableState:
             return True
         return False
 
-    def state_at(self, now) -> ConsumableView:
+    def state_at(self, now, *, cooldown_multiplier=1.) -> ConsumableView:
         now = _clock(now)
         spec = self.spec
         if self.uses and now < self.active_until:
@@ -405,7 +406,7 @@ class ConsumableState:
                                   spec.forward_bias_kmh, spec.reverse_bias_kmh, spec.damage_taken_factor,
                                   spec.all_shell_damage_factor, spec.yaw_rate_factor, spec.pitch_rate_factor)
         if (self.uses or self.initial_cooldown) and now < self.ready_at:
-            total = math.ceil(self._cooldown_duration())
+            total = math.ceil(self._cooldown_duration() / cooldown_multiplier)
             return ConsumableView(COOLDOWN, min(total, math.ceil(self.ready_at - now)), total, 1.0, 1.0)
         return ConsumableView(READY, 0, 0, 1.0, 1.0)
 

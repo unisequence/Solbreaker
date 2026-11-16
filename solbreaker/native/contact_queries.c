@@ -9,7 +9,7 @@
  */
 static PyObject *gather(PyObject *self, PyObject *args) {
     PyObject *bullet, *cid, *player, *skin_object, *maps, *vehicle_values;
-    PyObject *observer, *entity;
+    PyObject *observer, *entity, *blocked = Py_None;
     PyObject *joints_fn=NULL, *aabb_fn=NULL, *near_fn=NULL, *closest_fn=NULL;
     PyObject *kw=NULL, *call=NULL, *value=NULL, *bounds=NULL, *low=NULL, *high=NULL;
     PyObject *near=NULL, *vehicles=NULL, *bodies=NULL, *iterator=NULL, *item=NULL;
@@ -17,8 +17,8 @@ static PyObject *gather(PyObject *self, PyObject *args) {
     double lo[3]={INFINITY,INFINITY,INFINITY}, hi[3]={-INFINITY,-INFINITY,-INFINITY};
     double skin;
     long joints, link;
-    if (!PyArg_ParseTuple(args,"OOOOOOOO:gather",&bullet,&cid,&player,&skin_object,
-                          &maps,&vehicle_values,&observer,&entity)) return NULL;
+    if (!PyArg_ParseTuple(args,"OOOOOOOO|O:gather",&bullet,&cid,&player,&skin_object,
+                          &maps,&vehicle_values,&observer,&entity,&blocked)) return NULL;
     skin=PyFloat_AsDouble(skin_object);
     if (PyErr_Occurred()) return NULL;
     joints_fn=PyObject_GetAttrString(bullet,"getNumJoints"); if (!joints_fn) goto error;
@@ -71,11 +71,25 @@ static PyObject *gather(PyObject *self, PyObject *args) {
         if (PyErr_Occurred()) goto error;
         Py_CLEAR(iterator);
     }
-    points=PyList_New(0); if (!points) goto error;
+    if (blocked==Py_None) {
+        points=PyList_New(0); if (!points) goto error;
+    }
     iterator=PyObject_GetIter(bodies); if (!iterator) goto error;
     while ((body=PyIter_Next(iterator))) {
         call=PyTuple_Pack(3,player,body,skin_object); if (!call) goto error;
         rows=PyObject_Call(closest_fn,call,kw); Py_CLEAR(call); if (!rows) goto error;
+        if (blocked!=Py_None) {
+            int nonempty=PyObject_IsTrue(rows);
+            if (nonempty<0) goto error;
+            if (nonempty) {
+                value=PyObject_CallFunctionObjArgs(blocked,rows,NULL); if (!value) goto error;
+                int found=PyObject_IsTrue(value); Py_CLEAR(value);
+                if (found<0) goto error;
+                if (found) { points=Py_NewRef(Py_True); goto cleanup; }
+            }
+            Py_CLEAR(rows); Py_CLEAR(body);
+            continue;
+        }
         row_iter=PyObject_GetIter(rows); if (!row_iter) goto error;
         while ((row=PyIter_Next(row_iter))) {
             if (PyList_Append(points,row)<0) goto error;
@@ -85,6 +99,7 @@ static PyObject *gather(PyObject *self, PyObject *args) {
         Py_CLEAR(row_iter); Py_CLEAR(rows); Py_CLEAR(body);
     }
     if (PyErr_Occurred()) goto error;
+    if (blocked!=Py_None) points=Py_NewRef(Py_False);
     goto cleanup;
 error:
     Py_CLEAR(points);
@@ -98,13 +113,13 @@ cleanup:
 }
 
 static PyMethodDef methods[]={
-    {"gather",gather,METH_VARARGS,"Collect contact candidates through the public PyBullet API."},
+    {"gather",gather,METH_VARARGS,"Collect nearby contacts or stop when a predicate rejects a body."},
     {NULL,NULL,0,NULL}
 };
 static struct PyModuleDef module={PyModuleDef_HEAD_INIT,"_contact_queries",NULL,-1,methods,NULL,NULL,NULL,NULL};
 PyMODINIT_FUNC PyInit__contact_queries(void) {
     PyObject *result=PyModule_Create(&module);
-    if (result && PyModule_AddIntConstant(result,"API_VERSION",1)<0) {
+    if (result && PyModule_AddIntConstant(result,"API_VERSION",2)<0) {
         Py_DECREF(result);
         return NULL;
     }

@@ -9,6 +9,9 @@ import math
 import os
 import random
 
+import numpy as np
+
+from . import mad_games
 from .aiming import wrap
 from .orientation import matrix
 from .bot_traffic import TrafficController
@@ -34,6 +37,9 @@ DIFFICULTIES = {
     'hard': BotProfile(24., .15, .3, .25, .7),
 }
 DEFAULT_DIFFICULTY = 'normal'
+
+_HULL_VISIBILITY_OFFSETS = np.array(((-1, 0), (1, 0), (0, -1), (0, 1),
+                                     (-1, -1), (-1, 1), (1, -1), (1, 1)))
 
 
 def training_bot_requested(manifest, environ=None):
@@ -301,11 +307,6 @@ class BotDirector:
         goals=self.objectives[bot.team]
         return goals[ai.patrol_index%len(goals)] if goals else None
 
-    def _enemies(self, bot):
-        a=self.arena
-        return [v for v in a.vehicles.values() if v.alive and v.team!=bot.team
-                and (v.account_id is None or a.players[v.account_id].attached)]
-
     def _visibility_points(self, target):
         world = self.arena.world
         if not hasattr(world, '_component_bounds'):
@@ -316,11 +317,10 @@ class BotDirector:
         low, high = bounds['hull']
         center = (low + high) * .5
         height = low[1] + (high[1] - low[1]) * .65
-        side = (high[0] - low[0]) * .35
-        length = (high[2] - low[2]) * .35
-        points = [(center[0] + x * side, height, center[2] + z * length)
-                  for x, z in ((-1, 0), (1, 0), (0, -1), (0, 1),
-                               (-1, -1), (-1, 1), (1, -1), (1, 1))]
+        points = np.empty((len(_HULL_VISIBILITY_OFFSETS) + 1, 3))
+        points[:-1, 0] = center[0] + _HULL_VISIBILITY_OFFSETS[:, 0] * ((high[0] - low[0]) * .35)
+        points[:-1, 1] = height
+        points[:-1, 2] = center[2] + _HULL_VISIBILITY_OFFSETS[:, 1] * ((high[2] - low[2]) * .35)
         top = (center[0], high[1] - (high[1] - low[1]) * .2, center[2])
         assets = world.assets_for(target.entity_id) if hasattr(world, 'assets_for') else None
         turret = getattr(assets, 'turret_node', None)
@@ -329,40 +329,62 @@ class BotDirector:
             point = (t_low + t_high) * .5
             point[1] = t_low[1] + (t_high[1] - t_low[1]) * .8
             top = (matrix(target.gun.yaw) @ point + assets.definition.aiming.turret_position)
-        points.append(top)
+        points[-1] = top
         rotation = matrix(target.pose.yaw, target.pose.pitch, target.pose.roll)
-        return tuple(tuple(float(a + b) for a, b in zip(target.pose.position, rotation @ point))
-                     for point in points)
+        # Batch the same matrix-vector products, preserving the ray order.
+        transformed = target.pose.position + (rotation @ points[..., None])[..., 0]
+        return tuple(map(tuple, transformed.tolist()))
 
     def _perceive(self, due, now):
+        if not due:
+            return
         a=self.arena;world=a.world;rows=[];starts=[];ends=[]
         rays = getattr(world, '_visibility_rays', None) or getattr(world, '_static_rays', None)
+        team_targets = {}
+        for team in dict.fromkeys(a.vehicles[eid].team for eid in due):
+            enemies, wrecks = [], []
+            for target in a.vehicles.values():
+                if target.team == team:
+                    continue
+                if not target.alive:
+                    wrecks.append(target)
+                elif not mad_games.concealed(target, team) and (
+                        target.account_id is None or a.players[target.account_id].attached):
+                    enemies.append(target)
+            living = {target.entity_id for target in enemies}
+            marked = ({target.entity_id for target in enemies if a.recon.team_visible(team, target.entity_id, now)}
+                      if a.recon is not None else ())
+            team_targets[team] = enemies, wrecks, living, marked
         for eid in due:
             bot=a.vehicles[eid];ai=a.training_bots[eid]
+            origin = bot.pose.position
+            ray_start = (origin[0], origin[1]+1.4, origin[2])
             ai.visible.clear()
             ai.visible_points.clear()
             ai.seen_obstacles.clear()
-            enemies=self._enemies(bot);living={v.entity_id for v in enemies}
+            enemies, wrecks, living, marked = team_targets[bot.team]
             ai.known={e:row for e,row in ai.known.items()
                       if e in living and now-row[1]<self.MEMORY_SECONDS}
+            view_distance = (mad_games.view_range(bot) if getattr(a, 'mad_games_mode', False)
+                             else self.VIEW_DISTANCE)
             for target in enemies:
-                if a.recon is not None and a.recon.team_visible(bot.team,target.entity_id,now):
+                if target.entity_id in marked:
                     ai.known[target.entity_id]=(target.pose.position,now)
-                if math.dist(bot.pose.position,target.pose.position)>self.VIEW_DISTANCE:continue
+                if math.dist(origin,target.pose.position)>view_distance:continue
                 if world is None or not hasattr(world,'_static_rays'):
                     ai.visible.add(target.entity_id);ai.known[target.entity_id]=(target.pose.position,now)
                     continue
-                start=bot.pose.position;end=target.pose.position
-                starts.append((start[0],start[1]+1.4,start[2]))
+                end=target.pose.position
+                starts.append(ray_start)
                 ends.append((end[0],end[1]+1.1,end[2]))
                 rows.append((ai,target))
             # Wrecks remain physical obstacles, but do not become combat
             # targets or reveal their position through an occluding wall.
             if world is not None and hasattr(world,'_static_rays'):
-                for target in a.vehicles.values():
-                    if target.alive or target.team==bot.team or math.dist(bot.pose.position,target.pose.position)>50.:continue
-                    start,end=bot.pose.position,target.pose.position
-                    starts.append((start[0],start[1]+1.4,start[2]))
+                for target in wrecks:
+                    if math.dist(origin,target.pose.position)>50.:continue
+                    end=target.pose.position
+                    starts.append(ray_start)
                     ends.append((end[0],end[1]+1.1,end[2]))
                     rows.append((ai,target))
         if rows:
@@ -1175,7 +1197,11 @@ class BotDirector:
                 self._reset_maneuver(ai)
                 if ai.route_watch_pause_at is None:ai.route_watch_pause_at=now
                 continue
-            self._decide(bot,a.training_bots[eid],now)
+            ai = a.training_bots[eid]
+            self._decide(bot, ai, now)
+            if getattr(a, 'mad_games_mode', False):
+                target = a.vehicles.get(ai.target_id) if ai.target_id in ai.visible else None
+                a._training_bot_mad_mobility(bot, target, now)
         self.stats['decisions']+=len(due)
         self.stats['max_decisions_per_step']=max(self.stats['max_decisions_per_step'],len(due))
         return {eid:a.vehicles.get(ai.target_id) if ai.target_id in ai.visible else None

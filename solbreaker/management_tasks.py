@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import sqlite3
 import stat
 import subprocess
@@ -19,7 +20,46 @@ from .platform_runtime import require_executable_idle
 from .storage import account_access
 
 
-def launch_client(lab, *, auto_login=None, profile=None, url=None, lighting=None):
+def _forward_replay_arguments(script):
+    """Update the previous generated Proton wrapper on first replay launch."""
+    previous = b' run "$PWD/wotblitz.exe"\n'
+    content = script.read_bytes()
+    if content.endswith(previous):
+        atomic_write(script, content[:-1] + b' "$@"\n')
+        script.chmod(0o755)
+
+
+def _launch_proton(args, lab, manifest, environment):
+    opener = shutil.which('xdg-open')
+    documents = manifest.get('documents')
+    if opener is None or not documents:
+        return subprocess.call(args, cwd=lab, env=environment)
+    folder = Path(documents).resolve()/'DAVAProject/replays'
+    with tempfile.TemporaryDirectory(prefix='replay-folder-', dir=lab/'private') as private:
+        request = Path(private)/'open'
+        environment = dict(environment,
+            SOLBREAKER_REPLAY_FOLDER='Z:' + str(folder).replace('/', '\\'),
+            SOLBREAKER_REPLAY_REQUEST='Z:' + str(request).replace('/', '\\'))
+        opened = None
+        with subprocess.Popen(args, cwd=lab, env=environment) as client:
+            while True:
+                try:
+                    return client.wait(timeout=.25)
+                except subprocess.TimeoutExpired:
+                    if request.exists():
+                        request.unlink(missing_ok=True)
+                        if opened is None or opened.poll() is not None:
+                            try:
+                                opened = subprocess.Popen([opener, str(folder)], stdin=subprocess.DEVNULL)
+                            except OSError as error:
+                                print(f'Could not open replay folder: {error}', file=sys.stderr)
+
+
+def launch_client(lab, *, auto_login=None, profile=None, url=None, lighting=None, replay=None):
+    if replay is not None:
+        replay = Path(replay).expanduser().resolve()
+        if not replay.is_file() or replay.suffix.lower() != '.wotbreplay':
+            raise ValueError('Выбери существующий файл .wotbreplay')
     with client_configuration_access(lab):
         lab, manifest = ensure_lab(lab)
         executable = lab/'client/wotblitz.exe'
@@ -67,10 +107,29 @@ def launch_client(lab, *, auto_login=None, profile=None, url=None, lighting=None
         environment = dict(os.environ, SteamAppId='444200', SteamGameId='444200')
         configure_environment(environment, lab, manifest)
         if sys.platform == 'win32':
-            return subprocess.call([str(executable)], cwd=executable.parent, env=environment)
+            args = [str(executable)]
+            if replay is not None:
+                args.append(str(replay))
+            return subprocess.call(args, cwd=executable.parent, env=environment)
+        script = lab/'start-client.sh'
+        args = ['bash', str(script)]
+        if replay is not None:
+            _forward_replay_arguments(script)
         from .client_x11_input import preload
         with preload(environment, lab, executable) as environment:
-            return subprocess.call(['bash', str(lab/'start-client.sh')], cwd=lab, env=environment)
+            if replay is None:
+                return _launch_proton(args, lab, manifest, environment)
+            # The pinned client's command-line parser can drop Unicode or
+            # whitespace in a replay path. Give it an ASCII, unquoted path.
+            with tempfile.TemporaryDirectory(prefix='solbreaker-replay-', dir='/tmp') as directory:
+                with replay.open('rb') as source:
+                    digest = hashlib.file_digest(source, 'sha256').hexdigest()
+                    source.seek(0)
+                    staged = Path(directory)/f'{digest[:20]}.wotbreplay'
+                    with staged.open('wb') as output:
+                        shutil.copyfileobj(source, output)
+                return _launch_proton([*args, 'Z:' + str(staged).replace('/', '\\')],
+                                      lab, manifest, environment)
 
 
 class _ProfileRedirectHandler(HTTPRedirectHandler):

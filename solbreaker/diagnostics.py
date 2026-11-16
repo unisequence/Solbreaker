@@ -505,6 +505,8 @@ def install(path=None):
     Finalize(None, close, exitpriority=10)
     from . import arena as arena_module
     from . import arena_owner_game as owner_module
+    from . import arena_time_stop as timeline_module
+    from . import time_stop as time_stop_module
     from .arena import Arena
     from .arena_owner_game import GameArenaHandler
     from .arena_owner_registry import ArenaRoute
@@ -538,7 +540,8 @@ def install(path=None):
         (Navigation, ('request', 'step')),
         (DriveWorkers, ('poll', 'submit', 'take')),
         (RapierDynamic, ('step', 'static_rays')),
-        (BaseEndpoint, ('tick', 'tick_client', 'send_packet', 'datagram_received')),
+        (BaseEndpoint, ('tick', 'tick_client', '_flush_arena_results', 'send_packet',
+                        'datagram_received')),
     ):
         for name in names:
             _wrap(owner, name, f'{owner.__name__}.{name}')
@@ -547,6 +550,9 @@ def install(path=None):
         _wrap(module, name, f'{module.__name__}.{name}')
     _wrap(GameArenaHandler, 'apply', 'GameArenaHandler.apply', arena='arena')
     _wrap(Arena, 'step', 'Arena.step', arena=True)
+    _wrap(timeline_module, 'merge_frame', 'TimeStop.merge', arena=True)
+    _wrap(time_stop_module, 'safe_return', 'TimeStop.safe_return')
+    _wrap(time_stop_module.EffectLedger, 'merge', 'TimeStop.effects')
     # Trust only the wrappers installed here around the guarded originals.
     # Unrelated replacements must still decline speculative native execution.
     contract = collision_module._DRIVE_PREFIX_METHODS

@@ -8,8 +8,8 @@ import re
 from pathlib import Path
 import sys
 
-from PySide6.QtCore import QRectF, Qt, QTimer
-from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPainterPath, QPixmap
+from PySide6.QtCore import QRectF, Qt, QTimer, QUrl
+from PySide6.QtGui import QColor, QDesktopServices, QFont, QIcon, QPainter, QPainterPath, QPixmap
 from PySide6.QtNetwork import QNetworkInterface
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFormLayout,
     QFrame, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit,
@@ -823,6 +823,13 @@ class Window(QMainWindow):
         preparation.addWidget(self.prepare_maps_button)
         preparation.addWidget(self.map_preparation_status, 1)
         column.addLayout(preparation)
+        replay_actions = QHBoxLayout()
+        self.open_replay_button = button(tr('Открыть реплей…'), self.select_replay)
+        self.replay_folder_button = button(tr('Папка реплеев'), self.open_replay_folder)
+        replay_actions.addWidget(self.open_replay_button)
+        replay_actions.addWidget(self.replay_folder_button)
+        replay_actions.addStretch()
+        column.addLayout(replay_actions)
         column.addStretch()
         dock = QFrame()
         dock.setObjectName('panel')
@@ -1077,6 +1084,33 @@ class Window(QMainWindow):
     def play(self):
         self.execute('play', play_mode='local' if self.own.isChecked() else 'remote')
 
+    def replay_directory(self):
+        lab = Path(self.manager.settings.client).expanduser()
+        documents = document(lab/'manifest.json').get('documents') or lab/'documents'
+        return Path(documents)/'DAVAProject/replays'
+
+    def select_replay(self):
+        directory = self.replay_directory()
+        path, _ = QFileDialog.getOpenFileName(self, tr('Открыть реплей…'),
+            str(directory if directory.is_dir() else Path.home()), tr('Реплеи Blitz (*.wotbreplay)'))
+        if not path or not self.save(play_mode='local' if self.own.isChecked() else 'remote'):
+            return
+        try:
+            self.manager.run('play', replay=path)
+        except (OSError, ValueError) as error:
+            self.error(error)
+        self.poll()
+
+    def open_replay_folder(self):
+        directory = self.replay_directory()
+        try:
+            directory.mkdir(parents=True, exist_ok=True)
+        except OSError as error:
+            self.error(error)
+            return
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(directory))):
+            self.error(tr('Папка реплеев недоступна.'))
+
     def share_lan(self):
         if not self.save():
             return
@@ -1211,6 +1245,9 @@ class Window(QMainWindow):
         wizard_open = self.wizard is not None and self.wizard.isVisible()
         self.language_picker.setEnabled(not self.manager.busy and not wizard_open)
         self.play_button.setEnabled(not self.manager.busy)
+        self.open_replay_button.setVisible(states[1])
+        self.open_replay_button.setEnabled(not self.manager.busy)
+        self.replay_folder_button.setVisible(states[1])
         self.remember_login.setEnabled(not self.manager.busy)
         status = self.manager.server_status()
         can_prepare = local and self.manager.can_prepare_maps

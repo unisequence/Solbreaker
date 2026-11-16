@@ -47,6 +47,7 @@ class Command:
     account_id: int
     payload: bytes = b''
     deadline: float | None = None
+    motion_viewers: tuple[tuple[int, int | None], ...] = ()
 
     def validate(self) -> None:
         if type(self.op) is not str or self.op not in _LENGTHS:
@@ -61,6 +62,14 @@ class Command:
             raise ValueError('invalid account id')
         if type(self.payload) is not bytes or len(self.payload) > _MAX_MESSAGE:
             raise ValueError('invalid operation payload')
+        viewers = self.motion_viewers
+        if type(viewers) is not tuple or len(viewers) > 64 or (viewers and self.op != 'step'):
+            raise ValueError('invalid step motion viewers')
+        if viewers and (any(type(row) is not tuple or len(row) != 2 or type(row[0]) is not int
+                            or not 0 < row[0] <= 0xffffffff
+                            or (row[1] is not None and type(row[1]) is not int) for row in viewers)
+                        or len({row[0] for row in viewers}) != len(viewers)):
+            raise ValueError('invalid step motion viewers')
         expected = _LENGTHS[self.op]
         if expected is not None and len(self.payload) != expected:
             raise ValueError('invalid operation payload')
@@ -162,6 +171,20 @@ def _freeze(value: object) -> bytes:
     if len(data) > _MAX_MESSAGE:
         raise ValueError('owner message exceeds limit')
     return data
+
+
+def _check_reply(reply, sequence, operation):
+    if type(reply) is tuple:
+        if len(reply) == 3 and reply[0] == 'error':
+            raise OwnerError(f'owner failed during {operation}: {reply[1]}: {reply[2]}; command outcome unknown')
+        if (len(reply) == 3 and reply[0] == 'rejected'
+                and reply[1] == sequence and type(reply[2]) is str):
+            raise CommandRejected(reply[2], sequence)
+        if len(reply) == 2 and reply[0] == 'result':
+            result = reply[1]
+            if type(result) is Result and result.sequence == sequence:
+                return result
+    raise OwnerError(f'invalid owner reply during {operation}; command outcome unknown')
 
 
 def _worker(factory: Callable[[], ArenaHandler], incoming, outgoing) -> None:
@@ -308,11 +331,20 @@ class ArenaOwner:
                     try:
                         return pickle.loads(self._out.get_nowait())
                     except queue.Empty:
-                        raise OwnerError('owner timed out or exited; command outcome unknown') from exc
+                        raise self._channel_error('receive', exc) from exc
                 if time.monotonic() >= deadline:
-                    raise OwnerError('owner timed out or exited; command outcome unknown') from exc
+                    raise self._channel_error('receive', TimeoutError('owner receive timed out')) from exc
             except (EOFError,OSError) as exc:
-                raise OwnerError('owner channel failed; command outcome unknown') from exc
+                raise self._channel_error('receive', exc) from exc
+
+    def _channel_error(self, operation, error):
+        exit_code = self._process.exitcode
+        process = f'pid={self._process.pid}'
+        if exit_code is not None:
+            process += f', exit_code={exit_code}'
+        detail = str(error) or 'channel unavailable'
+        return OwnerError(f'owner channel failure during {operation} ({process}): '
+                          f'{type(error).__name__}: {detail}; command outcome unknown')
 
     def apply(self, command: Command) -> Result:
         if self._closed:
@@ -326,25 +358,21 @@ class ArenaOwner:
         raw = _freeze((sequence, command))
         try:
             self._in.put(raw, timeout=self._timeout)
-            reply = self._receive()
-            if (isinstance(reply, tuple) and len(reply) == 3 and reply[0] == 'rejected'
-                    and reply[1] == sequence and type(reply[2]) is str):
-                self._seq = sequence
-                raise CommandRejected(reply[2], sequence)
-            if not isinstance(reply, tuple) or len(reply) != 2 or reply[0] != 'result' or type(reply[1]) is not Result or reply[1].sequence != sequence:
-                raise OwnerError(f'owner failed; command outcome unknown: {reply!r}')
+            result = _check_reply(self._receive(), sequence, command.op)
         except CommandRejected:
+            self._seq = sequence
             raise
         except (queue.Full,EOFError,OSError) as exc:
+            error = self._channel_error(command.op, exc)
             self.close()
-            raise OwnerError('owner channel failed; command outcome unknown') from exc
+            raise error from exc
         except BaseException:
             self.close()
             raise
         self._seq = sequence
         if command.op in _TIMED:
             self._last_at = command.at
-        return reply[1]
+        return result
 
     def close(self) -> None:
         if self._closed:

@@ -38,6 +38,9 @@ LOG = logging.getLogger("solbreaker")
 
 class LocalServer:
     def __init__(self, lab: Path, *, sandbox=False):
+        if sandbox and os.environ.get('SOLBREAKER_TIME_STOP') == '1':
+            from .time_stop import Rules
+            Rules.from_environment()
         from .diagnostics import install
         self.diagnostics = install()
         self.lab = lab

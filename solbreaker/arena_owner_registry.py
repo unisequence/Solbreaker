@@ -72,7 +72,8 @@ class ArenaRoute:
                     continue
                 except Exception as exc:
                     failure = OwnerError(
-                        f'arena command failed; outcome unknown: {type(exc).__name__}: {str(exc)[:512]}')
+                        f'arena command {command.op} failed; outcome unknown: {str(exc)[:512]}')
+                    failure.__cause__ = exc
                     if not future.done():
                         future.set_exception(failure)
                     self._begin_close(failure)

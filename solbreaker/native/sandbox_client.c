@@ -84,6 +84,9 @@ typedef struct { float x, y, z; } Vector;
 typedef struct { float x, y; } Point;
 typedef struct { float x, y, width, height; } Rect;
 typedef struct { Vector position, target; } CameraPose;
+typedef struct { void *control, *hidden_row; } TeamPanel;
+typedef struct { uint32_t effect, entity, renderer; } ParticleIdentity;
+typedef struct { void **begin, **end; } ParticleVector;
 typedef struct {
     uint32_t thread, avatar, owner, scene, token, sequence, previous_keys;
     uint32_t toggles, last_report, missile_tick, shot, active_view, view_tick;
@@ -120,6 +123,11 @@ typedef struct {
     uint32_t temporal_transition_tick, temporal_returning, temporal_glitch_property;
     float temporal_glitch[4];
     void *battle_controls_root;
+    uint32_t peer_hidden_entity;
+    TeamPanel team_panels[4];
+    ParticleIdentity *temporal_particles;
+    uint32_t temporal_particle_count, temporal_particle_capacity;
+    void *temporal_particle_system;
 } Sandbox;
 
 extern uint32_t sandbox_delta(void);
@@ -429,6 +437,7 @@ static void boss_respawn_menu(void *menu, uint32_t delta);
 static void *find_control(void *root, const char *name, uint32_t delta);
 static void bind_battle_controls(uint32_t delta, Sandbox *s, void *root);
 static void temporal_audio_gain(uint32_t delta, Sandbox *s, uint32_t percent);
+static void temporal_roster(uint32_t delta, Sandbox *s, uint32_t entity);
 
 static void reset(uint32_t delta, Sandbox *s) {
     temporal_audio_gain(delta, s, 100u);
@@ -446,6 +455,8 @@ static void reset(uint32_t delta, Sandbox *s) {
     s->blur_offset[0] = s->blur_offset[1] = 0;
     s->temporal_enabled = s->temporal_key = s->temporal_end = s->temporal_hud = 0;
     s->temporal_started = s->temporal_merge = 0;
+    s->temporal_particle_system = 0;
+    s->temporal_particle_count = 0;
     s->peer_started = s->peer_merge = 0;
     s->temporal_transition_tick = 0;
     s->temporal_glitch[2] = 0;
@@ -654,6 +665,57 @@ static void temporal_audio_update(uint32_t delta, Sandbox *s, uint32_t now) {
     }
 }
 
+/* Wine's Explorer can fail to show the selected replay. Send a request only
+ * for the prepared client's replay directory, using paths set by the launcher. */
+__attribute__((section(".late_sandbox")))
+void THISCALL sandbox_open_replay_folder(void *platform, const void *folder, const void *items) {
+    typedef void (THISCALL *Open)(void *, const void *, const void *);
+    typedef uint32_t (STDCALL *Environment)(const uint16_t *, uint16_t *, uint32_t);
+    typedef void *(STDCALL *Module)(const char *);
+    typedef void *(STDCALL *Procedure)(void *, const char *);
+    typedef int (STDCALL *PidPath)(const void *, uint16_t *);
+    typedef void (STDCALL *Free)(void *);
+    typedef void *(STDCALL *Create)(const uint16_t *, uint32_t, uint32_t, void *,
+                                    uint32_t, uint32_t, void *);
+    typedef int (STDCALL *Close)(void *);
+    static const uint16_t request_key[] = {
+        'S','O','L','B','R','E','A','K','E','R','_','R','E','P','L','A','Y','_','R','E','Q','U','E','S','T',0
+    };
+    static const uint16_t folder_key[] = {
+        'S','O','L','B','R','E','A','K','E','R','_','R','E','P','L','A','Y','_','F','O','L','D','E','R',0
+    };
+    uint32_t delta = sandbox_delta();
+    Environment environment = *(Environment *)(0x036ef0f0u + delta);
+    uint16_t request[260], expected[260], path[260];
+    uint32_t size = environment(request_key, request, 260);
+    if (size && size < 260) {
+        size = environment(folder_key, expected, 260);
+        Module module = *(Module *)(0x036ef08cu + delta);
+        Procedure resolve = *(Procedure *)(0x036ef1c0u + delta);
+        void *shell = module("shell32.dll");
+        PidPath get_path = shell ? (PidPath)resolve(shell, "SHGetPathFromIDListW") : 0;
+        if (size && size < 260 && get_path) {
+            void *pid = ((void *(*)(const void *))(0x2020460u + delta))(folder);
+            int valid = pid && get_path(pid, path);
+            if (pid) (*(Free *)(0x036eff50u + delta))(pid);
+            uint32_t index = 0;
+            if (valid) {
+                while (index < size && path[index] == expected[index]) ++index;
+            }
+            if (valid && index == size && (!path[index] ||
+                    (index+1 < 260 && path[index] == '\\' && !path[index+1]))) {
+                Create create = *(Create *)(0x036ef27cu + delta);
+                void *file = create(request, 0x40000000u, 7, 0, 2, 0x80u, 0);
+                if (file != (void *)-1) {
+                    (*(Close *)(0x036ef320u + delta))(file);
+                    return;
+                }
+            }
+        }
+    }
+    ((Open)(0x2020840u + delta))(platform, folder, items);
+}
+
 /* TracerComponent +0x20 stores the server shot ID. Keep the retained
  * trajectory for world shots and advance newly fired private shots. */
 __attribute__((section(".late_sandbox")))
@@ -706,6 +768,114 @@ SCENE_PROCESS(sandbox_scene_wind, 0xbb1d70u)
 SCENE_PROCESS(sandbox_scene_wave, 0xbb1bc0u)
 SCENE_PROCESS(sandbox_scene_trees, 0xaf6220u)
 #undef SCENE_PROCESS
+
+/* Rendering keeps its registered objects. The expiry loop and both job
+ * queues skip only emitters that were active at the owner scene's fork. */
+__attribute__((section(".late_sandbox")))
+void THISCALL sandbox_scene_particles(void *system, float dt) {
+    uint32_t delta = sandbox_delta();
+    Sandbox *s = state(delta, 0);
+    if (s && s->temporal_end && s->scene == FIELD(system, 0x28) &&
+            s->temporal_particle_system != system) {
+        const ParticleVector *active = (const ParticleVector *)((uintptr_t)system + 0x50);
+        uint32_t count = ((uintptr_t)active->end - (uintptr_t)active->begin) / sizeof(void *);
+        if (count > s->temporal_particle_capacity && count <= UINT32_MAX / sizeof(ParticleIdentity)) {
+            typedef void *(STDCALL *Allocate)(void *, uint32_t, uint32_t, uint32_t);
+            typedef int (STDCALL *Free)(void *, uint32_t, uint32_t);
+            ParticleIdentity *storage = (*(Allocate *)(0x036ef224u + delta))(
+                0, count * sizeof(*storage), 0x3000, 4);
+            if (storage) {
+                if (s->temporal_particles)
+                    (*(Free *)(0x036ef220u + delta))(s->temporal_particles, 0, 0x8000);
+                s->temporal_particles = storage;
+                s->temporal_particle_capacity = count;
+            }
+        }
+        s->temporal_particle_system = system;
+        s->temporal_particle_count = 0;
+        if (count <= s->temporal_particle_capacity) {
+            for (uint32_t i = 0; i < count; ++i) {
+                void *effect = active->begin[i];
+                ParticleIdentity entry = {(uintptr_t)effect, FIELD(effect, 8), FIELD(effect, 0x90)};
+                uint32_t j = i;
+                while (j && s->temporal_particles[j-1].effect > entry.effect) {
+                    s->temporal_particles[j] = s->temporal_particles[j-1];
+                    --j;
+                }
+                s->temporal_particles[j] = entry;
+            }
+            s->temporal_particle_count = count;
+        }
+    }
+    typedef void (THISCALL *Process)(void *, float);
+    ((Process)(0xaf52b0u + delta))(system, dt);
+}
+
+__attribute__((section(".late_sandbox"), noinline))
+static int temporal_particle_in_snapshot(const Sandbox *s, const void *effect) {
+    uint32_t first = 0, end = s->temporal_particle_count;
+    while (first < end) {
+        uint32_t middle = first + (end-first)/2;
+        const ParticleIdentity *entry = &s->temporal_particles[middle];
+        if (entry->effect == (uintptr_t)effect)
+            return entry->entity == FIELD(effect, 8) && entry->renderer == FIELD(effect, 0x90);
+        if (entry->effect < (uintptr_t)effect) first = middle+1;
+        else end = middle;
+    }
+    return 0;
+}
+
+__attribute__((section(".late_sandbox"), used, noinline))
+static int temporal_particle_frozen(void *system, const void *effect) {
+    const Sandbox *s = state(sandbox_delta(), 0);
+    return s && s->temporal_end && s->temporal_particle_system == system &&
+           temporal_particle_in_snapshot(s, effect);
+}
+
+__attribute__((section(".late_sandbox")))
+void THISCALL sandbox_particle_update_queue(ParticleVector *queue, const ParticleVector *active) {
+    uint32_t delta = sandbox_delta();
+    typedef void (THISCALL *Assign)(ParticleVector *, const ParticleVector *);
+    ((Assign)(0x7b70b0u + delta))(queue, active);
+    const Sandbox *s = state(delta, 0);
+    /* Filter the copy before the engine dispatches its worker. */
+    if (s && s->temporal_end && s->temporal_particle_system == (const char *)active - 0x50) {
+        void **write = queue->begin;
+        for (void **read = queue->begin; read != queue->end; ++read)
+            if (!temporal_particle_in_snapshot(s, *read)) *write++ = *read;
+        queue->end = write;
+    }
+}
+
+__asm__(
+    ".pushsection .late_sandbox,\"ax\"\n"
+    ".intel_syntax noprefix\n"
+    ".globl sandbox_particle_lifetime\n"
+    "sandbox_particle_lifetime:\n"
+    /* The stock expiry loop keeps its system in EDI, its iterator in
+     * EBX, its end in EAX, and its timestep in XMM0. */
+    "mov esi, [ebx]\n"
+    "push eax\n"
+    "push ecx\n"
+    "push edx\n"
+    "sub esp, 4\n"
+    "movss [esp], xmm0\n"
+    "push esi\n"
+    "push edi\n"
+    "call temporal_particle_frozen\n"
+    "add esp, 8\n"
+    "test eax, eax\n"
+    "movss xmm0, [esp]\n"
+    "lea esp, [esp+4]\n"
+    "pop edx\n"
+    "pop ecx\n"
+    "pop eax\n"
+    "jnz 0xaf54e6\n"
+    "mov ecx, [esi+0x94]\n"
+    "jmp 0xaf5458\n"
+    ".att_syntax prefix\n"
+    ".popsection\n"
+);
 
 __attribute__((section(".late_sandbox")))
 void THISCALL sandbox_scene_shader_clock(void *bindings, void *material, float time) {
@@ -774,6 +944,15 @@ int sandbox_message(uint32_t delta, const uint32_t *first, const uint32_t *end,
             crew_voice(delta, state(delta, 0), first[2]);
         return 1;
     }
+    if (first && end == first+3 && first[0] == 0x31534654u && first[1] == 0x54534f52u
+            && second == second_end) {
+        Sandbox *s = state(delta, 1);
+        if (s) {
+            if (!s->thread) s->thread = thread_id();
+            if (s->thread == thread_id()) temporal_roster(delta, s, first[2]);
+        }
+        return 1;
+    }
     if (first && end == first+4 && first[0] == 0x31534654u && first[1] == 0x454d4954u
             && second && second_end == second+3) {
         Sandbox *s = state(delta, 0);
@@ -785,6 +964,10 @@ int sandbox_message(uint32_t delta, const uint32_t *first, const uint32_t *end,
                 s->temporal_energy = first[3] >> 16;
                 s->temporal_hud = 0;
                 s->temporal_scene_sampled = 0;
+                s->temporal_particle_system = 0;
+                s->temporal_particle_count = 0;
+                s->shot = 0;
+                clear_view(s);
             } else if (status == 2 || status == 6) {
                 s->peer_duration = (first[3] & 65535u)*100u;
                 s->peer_started = clock_ms(delta);
@@ -876,6 +1059,8 @@ void sandbox_reset(uint32_t delta, uint32_t *layer) {
         s->battle_controls_root = 0;
         s->temporal_panel = s->temporal_label = 0;
         s->peer_root = s->peer_clock = s->peer_hand = s->peer_hour = s->peer_opacity = 0;
+        s->peer_hidden_entity = 0;
+        __builtin_memset(s->team_panels, 0, sizeof(s->team_panels));
         reset(delta, s);
     }
 }
@@ -1027,7 +1212,8 @@ void THISCALL sandbox_move(void *logic, const uint32_t *shooter, const uint32_t 
     uint32_t delta = sandbox_delta();
     Sandbox *s = state(delta, 0);
     if (s && s->thread == thread_id() && s->avatar == (uint32_t)logic
-            && *shooter == FIELD(s->owner, 0x28)) {
+            && *shooter == FIELD(s->owner, 0x28)
+            && (!s->temporal_end || *shot >= BRANCH_SHOT_BASE)) {
         if (s->shot != *shot) clear_view(s);
         s->shot = *shot;
         s->position = *position;
@@ -1104,8 +1290,7 @@ static void temporal_clock(uint32_t delta, Sandbox *s, uint32_t camera, uint32_t
     if (!s->peer_clock || !s->peer_started) return;
     typedef void (THISCALL *Visible)(void *, uint32_t);
     Visible visible = (Visible)(0xd05020u + delta);
-    if (now-s->peer_started > s->peer_duration+1000u ||
-            (s->peer_merge && now-s->peer_merge >= 420u)) {
+    if (s->peer_merge && now-s->peer_merge >= 420u) {
         visible(s->peer_clock, 0);
         s->peer_started = 0;
         return;
@@ -1141,12 +1326,11 @@ static void temporal_clock(uint32_t delta, Sandbox *s, uint32_t camera, uint32_t
     ((SetPoint)(0xcff4a0u + delta))(s->peer_clock, &point);
     ((SetPoint)(0xcff760u + delta))(s->peer_clock, &scaling);
     if (s->peer_opacity) ((SetFloat)(0x102ab30u + delta))(s->peer_opacity, opacity);
-    if (s->peer_duration) {
-        float travel = (float)(elapsed < s->peer_duration ? elapsed : s->peer_duration)/s->peer_duration;
-        SetFloat angle = (SetFloat)(0xcfd470u + delta);
-        if (s->peer_hand) angle(s->peer_hand, .890118f+6.2831853f*travel);
-        if (s->peer_hour) angle(s->peer_hour, -1.012291f+.5235988f*travel);
-    }
+    /* The branch can wait for a safe hull placement after the timer ends. */
+    float travel = elapsed < s->peer_duration ? (float)elapsed/s->peer_duration : 1.f;
+    SetFloat angle = (SetFloat)(0xcfd470u + delta);
+    if (s->peer_hand) angle(s->peer_hand, .890118f+6.2831853f*travel);
+    if (s->peer_hour) angle(s->peer_hour, -1.012291f+.5235988f*travel);
     visible(s->peer_clock, 1);
 }
 
@@ -1321,6 +1505,7 @@ void THISCALL sandbox_draw(void *scene) {
         draw(scene);
         return;
     }
+    if (s->peer_hidden_entity) temporal_roster(delta, s, s->peer_hidden_entity);
     uint32_t camera = battle_camera(delta, (uint32_t)scene);
     int missile_view = camera && __atomic_load_n(&s->active_view, __ATOMIC_RELAXED);
     CameraPose previous;
@@ -1420,6 +1605,7 @@ static const char *room_parse_options(const NativeString *value, RoomOptions *se
             if (room_prefix(text + 6, "supremacy]")) mode = 2;
             if (room_prefix(text + 6, "gravity]")) mode = 3;
             if (room_prefix(text + 6, "big_boss]")) mode = 4;
+            if (room_prefix(text + 6, "mad_games]")) mode = 5;
         } else if (room_prefix(text, "[lives ")) {
             lives = room_prefix(text + 7, "unlimited]");
         } else if (room_prefix(text, "[ammo ")) {
@@ -1570,6 +1756,61 @@ BOSS_UI static void boss_visible(void *control, uint32_t visible, uint32_t delta
     if (control) ((Visible)(0xd05020u + delta))(control, visible);
 }
 
+/* Both team controls own an ordered map of vehicle IDs to row controls.
+ * Resolve the current row on each use. A native update may replace a row. */
+BOSS_UI static void *temporal_team_row(uint32_t delta, void *control, uint32_t entity) {
+    if (!control) return 0;
+    uint32_t vtable = FIELD(control, 0)-delta;
+    unsigned offset;
+    if (vtable == 0x3848eb4u) offset = 0x168;       /* UITeamPanel */
+    else if (vtable == 0x384c5e0u) offset = 0x148;  /* ShortTeamPanel */
+    else return 0;
+    uint32_t head = FIELD(control, offset);
+    for (uint32_t node = head ? FIELD(head, 4) : 0; node && node != head;) {
+        uint32_t id = FIELD(node, 0x10);
+        if (id == entity) return (void *)FIELD(node, 0x14);
+        node = FIELD(node, entity < id ? 0 : 8);
+    }
+    return 0;
+}
+
+BOSS_UI static void bind_team_panels(uint32_t delta, Sandbox *s) {
+    void *root = s->battle_controls_root;
+    if (!root || !s->peer_clock) return;
+    void *hud = find_control(root, "BattleHUD/HUDLayer", delta);
+    if (!hud) return;
+    s->team_panels[0].control = find_control(hud, "AllyTeamPanelContainer/AllyTeamPanel", delta);
+    s->team_panels[1].control = find_control(hud, "EnemyTeamPanelContainer/EnemyTeamPanel", delta);
+    void *score = find_control(hud,
+        "PanelsContainerLayoutProtector/PanelsContainer/Top/Content/BattleStatusControl/ScoreBg", delta);
+    if (score) {
+        s->team_panels[2].control = find_control(score, "left/allyPanel", delta);
+        s->team_panels[3].control = find_control(score, "right/enemyPanel", delta);
+    }
+}
+
+BOSS_UI static void temporal_roster(uint32_t delta, Sandbox *s, uint32_t entity) {
+    uint32_t previous = s->peer_hidden_entity;
+    s->peer_hidden_entity = entity;
+    if (entity && (!s->team_panels[0].control || !s->team_panels[1].control
+            || !s->team_panels[2].control || !s->team_panels[3].control))
+        bind_team_panels(delta, s);
+    for (unsigned i = 0; i < sizeof(s->team_panels)/sizeof(*s->team_panels); ++i) {
+        TeamPanel *panel = &s->team_panels[i];
+        if (previous != entity && panel->hidden_row) {
+            void *old_row = temporal_team_row(delta, panel->control, previous);
+            if (old_row == panel->hidden_row) boss_visible(old_row, 1, delta);
+            panel->hidden_row = 0;
+        }
+        void *row = entity ? temporal_team_row(delta, panel->control, entity) : 0;
+        if (row != panel->hidden_row) panel->hidden_row = 0;
+        if (row && (*(uint8_t *)((uintptr_t)row + 0x4c) & 2u)) {
+            boss_visible(row, 0, delta);
+            panel->hidden_row = row;
+        }
+    }
+}
+
 BOSS_UI static void bind_battle_controls(uint32_t delta, Sandbox *s, void *root) {
     if (s->battle_controls_root == root) return;
     s->battle_controls_root = root;
@@ -1591,6 +1832,8 @@ BOSS_UI static void bind_battle_controls(uint32_t delta, Sandbox *s, void *root)
         if (opacity && FIELD(opacity, 0) == 0x3781ee4u+delta) s->peer_opacity = opacity;
         boss_visible(s->peer_clock, 0, delta);
     }
+    __builtin_memset(s->team_panels, 0, sizeof(s->team_panels));
+    if (s->peer_hidden_entity) temporal_roster(delta, s, s->peer_hidden_entity);
     s->role_picker = find_control(root, boss_picker_path, delta);
     s->role_value = s->role_picker ? find_control(s->role_picker, boss_role_path, delta) : 0;
     s->role_sent = s->role_value ? picker_value(s->role_value, delta) : 0;

@@ -87,6 +87,15 @@ class Vehicle:
     # is copied into each ballistic frame; ordinary and unsupported vehicles
     # retain None and therefore never enter the state-geometry query path.
     movable_armor_state: object | None = None
+    mad_passive: str | None = None
+    mad_revenge: dict[tuple[int, int], float] = field(default_factory=dict)
+    mad_coordinator_allies: int = 0
+    mad_cloaked: bool = False
+    mad_unspotted: bool = False
+    mad_spotted_until: float = 0.
+    mad_observation_due: float | None = None
+    mad_observation_warning: bool = False
+    mad_dash_direction: int = 0
     engine_factor: float = 1.0
     rotation_factor: float = 1.0  # timed hull turn multiplier; also bounds the aim hull omega
     forward_speed_bias: float = 0.  # timed m/s added once to the forward/reverse caps

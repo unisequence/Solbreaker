@@ -13,7 +13,7 @@ from collections import deque
 from functools import cached_property
 from pathlib import Path
 
-from . import big_boss, diagnostics
+from . import big_boss, diagnostics, mad_games
 from .cipher import PacketCipher, encrypt_packet, decrypt_packet
 from .mercury import parse_packet, base_elements, encode_reply, encode_packet, RELIABLE, ReliableInbox
 from .account import create_account, show_gui, account_method, pickle_document, command_header, command_response, local_http_response, resource_response
@@ -495,10 +495,9 @@ class BaseEndpoint(asyncio.DatagramProtocol):
                                   can_retire=lambda arena:not getattr(arena, "_settlement_retry", {}))
         from .arena_loading import ArenaLoader
         self.loading = ArenaLoader(self.validate_load,self.finish_load,self.fail_load)
-        self.recon_transport = None
-        if getattr(server, 'recon_enabled', False):
-            from .recon_transport import ReconTransport
-            self.recon_transport = ReconTransport(self, clock=time.monotonic)
+        # Mad Games uses the marker transport even with Recon rules disabled.
+        from .recon_transport import ReconTransport
+        self.recon_transport = ReconTransport(self, clock=time.monotonic)
         # Count existing diagnostics once, before serving gameplay packets.
         self.battle_captures
         self.rpc_captures
@@ -1091,6 +1090,11 @@ class BaseEndpoint(asyncio.DatagramProtocol):
                 self.server.event('training_hit',entity_id=event.target,health=event.data['health'],
                                   hits=(arena.vehicles[event.actor].hits
                                         if event.actor in arena.vehicles else 0))
+            elif event.kind in ('time_stop_begin', 'time_stop_end', 'time_stop_queued',
+                                'time_stop_rejected', 'time_stop_worker_error'):
+                data = {key: value for key, value in event.data.items()
+                        if key in ('branch', 'account_id', 'reason', 'seconds', 'energy', 'aborted', 'refund')}
+                self.server.event(event.kind, arena_id=arena.result_id, entity_id=event.actor, **data)
             elif event.kind in ('recon_lock', 'recon_share'):
                 self.server.event('training_'+event.kind, arena_id=arena.result_id,
                                   entity_id=event.actor, target_id=event.target, **event.data)
@@ -1610,7 +1614,7 @@ class BaseEndpoint(asyncio.DatagramProtocol):
                        collision_scene=runtime['collision_scene'],
                        prebattle_seconds=big_boss.COUNTDOWN_SECONDS if room_mode == big_boss.MODE else 7.,
                        room_mode=room_mode, room_settings=room_settings,
-                       bot_game=self.game if room_mode in ('gravity', big_boss.MODE) else None)
+                       bot_game=self.game if room_mode in ('gravity', big_boss.MODE, mad_games.MODE) else None)
         owners = getattr(self, 'arena_owners_enabled', False)
         definitions = ({account_id: self.definition for account_id in account_ids}
                        if owners and getattr(self, 'progression', None) is None else {})

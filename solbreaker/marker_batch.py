@@ -68,50 +68,47 @@ def try_markers(arena, vehicles, arena_methods):
         limit=distance*hit[2] if hit[0]>=0 else distance
         rays.append((origin,direction,end,hit,limit))
     suspended = world.suspended_entities
-    targets = [(entity, pose) for entity, pose in world.poses.items() if entity not in suspended]
+    targets = []
     sphere_rows=[]
-    for entity,pose in targets:
-        model=world.assets_for(entity).armor
-        if (type(model) is not armor.ArmorModel or type(model.radius) not in (float,np.float64)
-                or type(pose.position) is not tuple
-                or any(type(value) is not float for value in pose.position)):
-            sphere_rows=[];break
-        sphere_rows.append((*pose.position,(model.radius+1e-5)**2))
+    for entity, pose in world.poses.items():
+        if entity in suspended:
+            continue
+        model = world.assets_for(entity).armor
+        if (type(model) is not armor.ArmorModel
+                or getattr(model.intersections, '__func__', None) is not _INTERSECTIONS
+                or getattr(model._parts_for_query, '__func__', None) is not _PARTS):
+            return None
+        parts = tuple(model._parts_for_query(snapshots.get(entity)))
+        radius2 = (model.radius+1e-5)**2
+        targets.append((entity, pose, model, parts, radius2))
+        if (type(model.radius) in (float, np.float64) and type(pose.position) is tuple
+                and all(type(value) is float for value in pose.position)):
+            sphere_rows.append((*pose.position, radius2))
     coarse=None
-    if sphere_rows:
+    if sphere_rows and len(sphere_rows) == len(targets):
         ray_rows=np.array([(*origin,*direction,limit) for origin,direction,_,_,limit in rays],dtype=float)
         sphere_rows=np.array(sphere_rows,dtype=float)
         coarse=native.marker_spheres(lib,ray_rows,sphere_rows)
-    # Model validation is performed once, after the same sphere rejection as
-    # intersections. Off-ray models never pay native wrapper guards.
+    # The native mask rejects only distant targets. Keep the exact sphere
+    # predicate and original target order for all remaining candidates.
     for ray_index,vehicle in enumerate(vehicles):
         origin,direction,end,hit,limit=rays[ray_index]
         query_index = len(queries)
-        queries.append([vehicle, hit, end, None])
-        for target_index,(entity,pose) in enumerate(targets):
+        queries.append([vehicle, hit, end, direction, None])
+        length2 = sum(d*d for d in direction)
+        if length2 <= 1e-16:
+            continue
+        candidates = range(len(targets)) if coarse is None else np.flatnonzero(coarse[ray_index])
+        for target_index in candidates:
+            entity, pose, model, parts, radius2 = targets[target_index]
             if entity == vehicle.entity_id:
                 continue
-            model = world.assets_for(entity).armor
-            if (type(model) is not armor.ArmorModel
-                    or getattr(model.intersections, '__func__', None) is not _INTERSECTIONS
-                    or getattr(model._parts_for_query, '__func__', None) is not _PARTS):
-                return None
-            entry = prepared.get(entity)
-            if entry is None:
-                parts = tuple(model._parts_for_query(snapshots.get(entity)))
-                entry = prepared[entity] = [parts, None]
-            parts = entry[0]
-            if coarse is not None and not coarse[ray_index,target_index]:
-                continue
             delta = tuple(c-o for c, o in zip(pose.position, origin))
-            length2 = sum(d*d for d in direction)
-            if length2 <= 1e-16:
-                continue
             t = max(0., min(limit, sum(c*d for c, d in zip(delta, direction))/length2))
             nearest2 = sum((c-d*t)**2 for c, d in zip(delta, direction))
-            if nearest2 > (model.radius+1e-5)**2:
+            if nearest2 > radius2:
                 continue
-            if entry[1] is None:
+            if entity not in prepared:
                 if not 1 <= len(parts) <= 64:
                     return None
                 for name, triangles, ids, thickness, factors in parts:
@@ -134,8 +131,8 @@ def try_markers(arena, vehicles, arena_methods):
                     else:
                         local_rot, offset = np.eye(3), np.zeros(3)
                     transforms.append((local_rot, offset))
-                entry[1] = rot, transforms
-            rot, transforms = entry[1]
+                prepared[entity] = rot, transforms
+            rot, transforms = prepared[entity]
             local_origin = (np.array(origin)-pose.position) @ rot
             local_direction = np.asarray(direction) @ rot
             pair = (query_index, local_origin, local_direction, rot, pose.position)
@@ -169,17 +166,16 @@ def try_markers(arena, vehicles, arena_methods):
         for part_index, triangle, distance in rows:
             pair = chunk[part_index][4]
             query = queries[pair[0]]
-            if query[3] is None or distance < query[3][0]:
-                query[3] = distance, pair
+            if query[4] is None or distance < query[4][0]:
+                query[4] = distance, pair
         offset = stop
     result = {}
-    for vehicle, hit, end, closest in queries:
+    for vehicle, hit, end, direction, closest in queries:
         if closest is None:
             point = tuple(hit[3]) if hit[0] >= 0 else end
         else:
-            distance, (_, origin, direction, rot, position) = closest
-            point = tuple(map(float, (origin+direction*distance) @ rot.T+position))
-        _, direction = arena.shot_ray(vehicle)
+            distance, (_, local_origin, local_direction, rot, position) = closest
+            point = tuple(map(float, (local_origin+local_direction*distance) @ rot.T+position))
         result[vehicle.entity_id] = point, direction
     stats = getattr(arena, 'marker_batch_stats', None)
     if stats is None:

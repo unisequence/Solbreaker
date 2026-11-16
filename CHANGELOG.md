@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.1.0-alpha.12
+
+- Choose Mad Games from the battle-rules menu for a solo battle with bots or
+  a training room. Tanks at tiers V–X use the ability pairs from the pinned
+  client catalog.
+- Use the extra ability slot for Chameleon, Discharge, and other active
+  abilities. Passive ability icons sit above the health bar. Tab shows the
+  regular provisions.
+- Spotting, ability effects, and bot behavior follow the rules of Mad Games.
+  On reconnect, the client restores the current abilities and battle state.
+- Keep movement going after Time Stop and apply stored damage in stages.
+  The reticle groups the reload and distance readouts around the aim point.
+  Switching shell type preserves the current reload progress.
+
 ## 0.1.0-alpha.11
 
 - Try Time Stop in sandbox battles. Press F8 to enter a private timeline and

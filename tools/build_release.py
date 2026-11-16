@@ -44,8 +44,10 @@ def download(url, path, expected, limit):
         raise ValueError(f'Download differs from pinned SHA-256: {path.name}')
 
 
-def verify_native_source(*, rebuilt_crates=()):
-    paths = ['tools/build_native.py', 'tools/build_contact_queries.py', 'solbreaker/native/contact_queries.c']
+def verify_native_source(*, rebuilt_crates=(), rebuilt_contact=False):
+    paths = ['tools/build_native.py']
+    if not rebuilt_contact:
+        paths.extend(('tools/build_contact_queries.py', 'solbreaker/native/contact_queries.c'))
     paths += [f'solbreaker/native/{crate}/{name}' for crate in WINDOWS_LIBRARIES
               if crate not in rebuilt_crates
               for name in ('Cargo.toml', 'Cargo.lock', 'abi.h', 'build.rs', 'src')]
@@ -54,8 +56,8 @@ def verify_native_source(*, rebuilt_crates=()):
         raise ValueError('Windows native sources differ from the accepted build. Refresh the reviewed Windows inputs.')
 
 
-def stage_windows(directory, native_archive, *, rebuilt_crates=()):
-    verify_native_source(rebuilt_crates=rebuilt_crates)
+def stage_windows(directory, native_archive, *, rebuilt_crates=(), windows_contact=None):
+    verify_native_source(rebuilt_crates=rebuilt_crates, rebuilt_contact=windows_contact is not None)
     if native_archive is None:
         native_archive = directory/WINDOWS_INPUT_ZIP
         download(WINDOWS_INPUT_URL, native_archive, WINDOWS_INPUT_SHA256, updates.MAX_DOWNLOAD)
@@ -65,7 +67,10 @@ def stage_windows(directory, native_archive, *, rebuilt_crates=()):
     native = directory/'native'
     native.mkdir()
     inputs = {native/name: f'solbreaker/native/{crate}/{name}' for crate, name in WINDOWS_LIBRARIES.items()}
-    inputs[native/'_contact_queries.pyd'] = 'solbreaker/_contact_queries.pyd'
+    if windows_contact is None:
+        inputs[native/'_contact_queries.pyd'] = 'solbreaker/_contact_queries.pyd'
+    else:
+        shutil.copyfile(windows_contact, native/'_contact_queries.pyd')
     inputs[directory/WHEEL] = f'wheels/{WHEEL}'
     with ZipFile(native_archive) as archive:
         for destination, name in inputs.items():
@@ -100,13 +105,15 @@ def release_version(tag):
     return tag[1:]
 
 
-def build(tag, output, native_archive, linux_native=None, windows_physics=None, windows_rapier=None):
+def build(tag, output, native_archive, linux_native=None, windows_physics=None, windows_rapier=None,
+          windows_contact=None):
     version = release_version(tag)
     with tempfile.TemporaryDirectory(prefix='solbreaker-release-') as temporary:
         work = Path(temporary)
         rebuilt_crates = {crate for crate, path in (('physics_core', windows_physics),
                                                     ('rapier_dynamic', windows_rapier)) if path is not None}
-        native = stage_windows(work, native_archive, rebuilt_crates=rebuilt_crates)
+        native = stage_windows(work, native_archive, rebuilt_crates=rebuilt_crates,
+                               windows_contact=windows_contact)
         source = work/f'Solbreaker-{version}-source.zip'
         windows = work/f'Solbreaker-{version}-windows-x64.zip'
         server = work/f'Solbreaker-{version}-server-windows-x64.zip'
@@ -140,5 +147,7 @@ if __name__ == '__main__':
     parser.add_argument('--linux-native', type=Path, help='Freshly built Linux native crate directory')
     parser.add_argument('--windows-physics', type=Path, help='Ground controller DLL built from this checkout')
     parser.add_argument('--windows-rapier', type=Path, help='Rapier DLL built from this checkout')
+    parser.add_argument('--windows-contact', type=Path, help='Contact query module built from this checkout')
     args = parser.parse_args()
-    build(args.tag, args.output, args.windows_input, args.linux_native, args.windows_physics, args.windows_rapier)
+    build(args.tag, args.output, args.windows_input, args.linux_native, args.windows_physics,
+          args.windows_rapier, args.windows_contact)

@@ -483,6 +483,23 @@ def armor_contacts(world, projectile, start, delta, before, after, left, right, 
     return sorted(contacts,key=lambda item:(item[0],item[1]))
 
 
+def missile_guidance_target(projectile, gun, hull_position, shot_ray, *, locked=False, camera=None):
+    if camera is not None:
+        return tuple(p+d*projectile.shell.max_distance for p, d in zip(projectile.position, camera))
+    point = gun.point
+    if point is None:
+        origin, direction = shot_ray()
+        return tuple(p+d*projectile.shell.max_distance for p, d in zip(origin, direction))
+    if gun.local:
+        point = tuple(p+offset for p, offset in zip(hull_position, point))
+    if locked or sum((p-q)*v for p, q, v in zip(point, projectile.position, projectile.velocity)) > 0:
+        return point
+    # Keep the reticle's direction when its point lies behind a rocket that
+    # has already cleared part of the map.
+    origin, _ = shot_ray()
+    return tuple(q+p-o for q, p, o in zip(projectile.position, point, origin))
+
+
 def _missile_velocity(projectile, position, velocity, target, dt):
     flight = projectile.shell.missile
     speed = _vector_length(velocity)

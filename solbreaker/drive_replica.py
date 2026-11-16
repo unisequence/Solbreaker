@@ -106,6 +106,7 @@ class ReplicaSpec:
     wall_trampoline: bool
     sprung_tracks: bool
     trace_dynamic_contacts: bool
+    gravity: float
 
 
 def _path(value):
@@ -208,7 +209,7 @@ def build_spec(world, *, include_armor=False):
         dict(world.poses), dict(world.gun_angles), frozenset(world.destroyed),
         _owner_static_layout(world, static_paths), bool(world.experimental_6dof),
         bool(world.experimental_ground_impacts), bool(world.wall_trampoline),
-        bool(world.sprung_tracks), bool(world.trace_dynamic_contacts))
+        bool(world.sprung_tracks), bool(world.trace_dynamic_contacts), world.GRAVITY)
 
 
 class _RejectDrive(Exception):

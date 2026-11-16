@@ -73,6 +73,26 @@ def terrain():
     return result
 
 
+class MassModelTests(unittest.TestCase):
+    def test_cache_keeps_the_exact_mass_model_at_different_turret_angles(self):
+        from solbreaker.mass_properties import VehicleMassModel, from_named_meshes
+        from solbreaker.orientation import matrix
+
+        assets = QueryAssets('flat')
+        self.addCleanup(assets.mesh_files.close)
+        model = VehicleMassModel(assets.definition, assets.tank_shapes, assets.turret_node)
+        masses = {'hull': 5500., 'chassis_track_L': 1500., 'chassis_track_R': 1500.,
+                  'turret': 1500.}
+        for yaw in (0., .32, -1.7, 2.9, 0.):
+            with self.subTest(yaw=yaw):
+                pivot = np.asarray(assets.definition.aiming.turret_position)
+                shapes = tuple((name, vertices @ matrix(yaw).T + pivot
+                                if name == assets.turret_node else vertices)
+                               for name, vertices in assets.tank_shapes)
+                self.assertEqual(model.at_yaw(yaw), from_named_meshes(shapes, masses))
+        self.assertIs(model.at_yaw(0.), model.at_yaw(0.))
+
+
 class NativeLibraryTests(unittest.TestCase):
     def test_invalid_backend_setting_is_rejected(self):
         with patch.dict(os.environ, SOLBREAKER_NATIVE_PHYSICS='auto'):
@@ -277,6 +297,17 @@ class NativePhysicsTests(unittest.TestCase):
         world.move(.01,0.,200,dt=1/60)
         self.assertTrue(world._native_physics.query(operation='contacts',entity=200,skin=world.SKIN))
 
+    def test_drive_batch_publishes_a_previous_python_hull_move(self):
+        world = self.world(self.assets('flat'))
+        physics = world._native_physics
+        with physics.sensor_batch(world) as dirty:
+            world.relocate_training_body(201, Pose((0., 0., 2.), .3))
+            world.set_turret(.7, 201)
+            dirty.add(201)
+            world.move(.01, 0., 200, dt=1/60)
+            self.assertFalse(dirty)
+            self.assertTrue(physics.query(operation='contacts', entity=200, skin=world.SKIN))
+
     def test_suspended_sensor_exits_native_ground_contacts_without_relocation(self):
         world = self.world(self.assets('flat'))
         physics = world._native_physics
@@ -402,6 +433,28 @@ class NativePhysicsTests(unittest.TestCase):
                     world.dynamic_commit(1/60, piloted=(200,))
                     self.assertLess(world.poses[200].position[2], limit)
                 self.assertLess(world.motion[200].velocity[2], 8.)
+
+    def test_bullet_flight_handoff_queries_the_world_only_near_contact(self):
+        with patch.dict(os.environ, SOLBREAKER_DYNAMIC_BACKEND='bullet'):
+            world = self.world(self.assets('wall'))
+        clear = Pose((0., .1, 1.8), 0.)
+        world.relocate_training_body(200, clear)
+        with patch('solbreaker.collision.bullet.performCollisionDetection',
+                   side_effect=AssertionError('A clear spawn must not need a world pass')):
+            self.assertTrue(world.set_flight_velocity(200, (0., 1., 0.), (0., 0., 0.)))
+        self.assertAlmostEqual(world.poses[200].position[2], clear.position[2])
+
+        shallow = Pose((0., .1, 2.08), 0.)
+        world.relocate_training_body(200, shallow)
+        self.assertTrue(world.set_flight_velocity(200, (0., 1., 0.), (0., 0., 0.)))
+        self.assertLess(world.poses[200].position[2], 2.)
+        self.assertAlmostEqual(world.poses[200].position[1], shallow.position[1])
+
+        deep = Pose((0., .1, 2.22), 0.)
+        world.relocate_training_body(200, deep)
+        self.assertFalse(world.set_flight_velocity(200, (0., 1., 0.), (0., 0., 0.)))
+        self.assertNotIn(200, world.dynamic_bodies)
+        self.assertEqual(world.poses[200], deep)
 
     def test_red_border_preserves_ground_motion_along_the_wall(self):
         for native in (False, True):

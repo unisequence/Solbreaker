@@ -3,7 +3,7 @@ from dataclasses import dataclass
 import math
 import struct
 
-from . import big_boss
+from . import big_boss, mad_games
 from .mercury import variable8
 
 PREFIX = b'TFS-LAB-S'
@@ -102,8 +102,10 @@ def receive(endpoint, addr, client, arena, body, now):
     if not body.startswith(PREFIX):
         return False
     boss = arena.big_boss if getattr(arena, 'big_boss_mode', False) is True else None
-    player = arena.players.get(client.account_id) if boss is not None else None
-    ability = player is not None
+    mad = getattr(arena, 'mad_games_mode', False) is True
+    player = arena.players.get(client.account_id) if boss is not None or mad else None
+    ability = player is not None and (boss is not None
+        or mad_games.irradiator_state(arena.vehicles[player.vehicle_id]) is not None)
     if (arena is None or client.reconnect_replay
             or not client.battle_spawned or body[-1:] != b'\x01'):
         return True

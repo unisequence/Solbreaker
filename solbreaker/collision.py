@@ -6,7 +6,7 @@ that could impart unexplained impulses to the client-controlled tank.
 """
 from collections.abc import Mapping
 from dataclasses import dataclass
-from functools import cached_property
+from functools import cached_property, partial
 import json
 import math
 import os
@@ -27,12 +27,12 @@ try:
     from . import _contact_queries
 except (ImportError, OSError):
     _contact_queries = None
-if getattr(_contact_queries, 'API_VERSION', None) != 1:
+if getattr(_contact_queries, 'API_VERSION', None) not in (1, 2):
     _contact_queries = None
 
 from .dava_scene import scene, geometry, components, active_nodes, world_vertices, Archive
 from .dvpl import read
-from .mass_properties import vehicle_mass_properties
+from .mass_properties import VehicleMassModel
 from .orientation import matrix, quaternion
 from .mesh_files import MeshFiles
 from .map_catalog import load_map_spec
@@ -451,6 +451,8 @@ class SupportLayout:
 
 
 class CollisionWorld:
+    # A private timeline can bound its active hull without modifying map assets.
+    movement_circle = None  # (entity, center_x, center_z, radius)
     SKIN = .008
     STEP = .06
     GRAVITY = 9.81
@@ -611,6 +613,7 @@ class CollisionWorld:
         self._rapier_angular_states = {}
         self.dynamic_shapes = {}
         self._shared_dynamic_shapes = {}
+        self._mass_models = {}
         self._kinematic_shapes = {}
         self.dynamic_bounds = {}
         self.dynamic_fall_peak = {}
@@ -1254,11 +1257,13 @@ class CollisionWorld:
         cube's inertia merely because it has left the ground.
         """
         assets = self.assets_for(entity)
-        shapes = [(name, np.asarray(vertices, dtype=float) @ matrix(turret_yaw).T
-                  if name == assets.turret_node else vertices)
-                 for name, vertices in assets.tank_shapes]
-        return vehicle_mass_properties(assets.definition, shapes,
-                                       assets.turret_node)
+        cached = self._mass_models.get(id(assets))
+        if cached is None:
+            model = VehicleMassModel(assets.definition, assets.tank_shapes, assets.turret_node)
+            self._mass_models[id(assets)] = (assets, model)
+        else:
+            _, model = cached
+        return model.at_yaw(turret_yaw)
 
     @staticmethod
     def _pose_from_quaternion(position, orientation, reference=None, *, rotation=None):
@@ -1325,7 +1330,34 @@ class CollisionWorld:
         _, (yaw, pitch, roll) = min(candidates, key=lambda item: item[0])
         return Pose(tuple(float(value) for value in position), yaw, pitch, roll)
 
-    def _activate_dynamic(self, entity, pose, velocity, angular_velocity=(0.,0.,0.)):
+    def _dynamic_start_contact(self, body, obstacles):
+        """Use the contact manifold only if a nearby collider overlaps."""
+        low, high = bullet.getAABB(body, physicsClientId=self.cid)
+        low = tuple(value-self.SKIN for value in low)
+        high = tuple(value+self.SKIN for value in high)
+        nearby = {other for other, _ in bullet.getOverlappingObjects(
+            low, high, physicsClientId=self.cid) or () if other in obstacles}
+        # A hull corrected away from a surface can still be within the query
+        # skin. Only actual overlap needs another full-world manifold pass.
+        if not any(bullet.getClosestPoints(body, other, 0., physicsClientId=self.cid)
+                   for other in nearby):
+            return None
+        # Pair queries can report a different normal at a mesh edge. Preserve
+        # the original depenetration direction whenever there is contact.
+        bullet.performCollisionDetection(physicsClientId=self.cid)
+        points = bullet.getContactPoints(bodyA=body, physicsClientId=self.cid)
+        return min((point for point in points if point[2] in obstacles and point[8] < -self.SKIN),
+                   key=lambda point: point[8], default=None)
+
+    @staticmethod
+    def _center_velocity(velocity, angular, offset):
+        vx, vy, vz = velocity
+        wx, wy, wz = angular
+        x, y, z = offset
+        return vx + (wy*z - wz*y), vy + (wz*x - wx*z), vz + (wx*y - wy*x)
+
+    def _activate_dynamic(self, entity, pose, velocity, angular_velocity=(0.,0.,0.),
+                          *, initialize_bullet_velocity=True):
         """Transfer a released hull to Bullet, returning its corrected pose."""
         if not self.experimental_6dof or entity in self.dynamic_bodies:
             return None
@@ -1367,9 +1399,10 @@ class CollisionWorld:
         self.dynamic_fall_peak[entity] = 0.
         self.dynamic_fall_gap[entity] = 0
         properties = self._dynamic_mass_properties(entity,turret_yaw)
+        launch_orientation = quaternion(pose.yaw, pose.pitch, pose.roll)
         body = bullet.createMultiBody(baseMass=properties.mass, baseCollisionShapeIndex=shape,
                     basePosition=pose.position,
-                    baseOrientation=quaternion(pose.yaw, pose.pitch, pose.roll),
+                    baseOrientation=launch_orientation,
                     baseInertialFramePosition=properties.center_of_mass,
                     baseInertialFrameOrientation=(0., 0., 0., 1.),
                     physicsClientId=self.cid)
@@ -1380,26 +1413,17 @@ class CollisionWorld:
         bullet.changeDynamics(body, -1, collisionMargin=.001, lateralFriction=contact_friction, restitution=.02,
                               rollingFriction=.01, spinningFriction=.01,
                               linearDamping=self.DYNAMIC_LINEAR_DAMPING, angularDamping=.025,
-                              physicsClientId=self.cid)
-        bullet.changeDynamics(body, -1,
                               localInertiaDiagonal=properties.inertia_diagonal,
                               physicsClientId=self.cid)
-        rotation = np.asarray(bullet.getMatrixFromQuaternion(
-            quaternion(pose.yaw, pose.pitch, pose.roll)), dtype=float).reshape(3,3)
-        com_offset = rotation @ np.asarray(properties.center_of_mass, dtype=float)
-        com_velocity = np.asarray(velocity, dtype=float) + np.cross(
-            np.asarray(launch_angular, dtype=float), com_offset)
         obstacles = self.map_bodies | self.terrain_bodies
-        obstacles.update(body_id for body_id, other in self.body_entities.items() if other != entity)
-        obstacles.update(dynamic.body for other, dynamic in self.dynamic_bodies.items()
-                         if other != entity)
+        # Explicit pair queries do not check the collision masks. Include each
+        # flying tank through its rigid hull and exclude its disabled sensor.
+        obstacles.update(body_id for body_id, other in self.body_entities.items()
+                         if other != entity and other not in self.dynamic_bodies)
+        obstacles.update(dynamic.body for dynamic in self.dynamic_bodies.values())
         corrected_by = 0.
+        contact = self._dynamic_start_contact(body, obstacles)
         for _ in range(8):
-            bullet.performCollisionDetection(physicsClientId=self.cid)
-            contact = min((point for point in bullet.getContactPoints(
-                            bodyA=body, physicsClientId=self.cid)
-                           if point[2] in obstacles and point[8] < -self.SKIN),
-                          key=lambda point: point[8], default=None)
             if contact is None:
                 break
             depth = -float(contact[8]) + self.SKIN
@@ -1410,26 +1434,23 @@ class CollisionWorld:
                 break
             normal /= length
             correction = normal * depth
-            center = np.asarray(bullet.getBasePositionAndOrientation(
-                body, physicsClientId=self.cid)[0], dtype=float)
-            orientation = bullet.getBasePositionAndOrientation(
-                body, physicsClientId=self.cid)[1]
+            center, orientation = bullet.getBasePositionAndOrientation(body, physicsClientId=self.cid)
+            center = np.asarray(center, dtype=float)
             center += correction
             bullet.resetBasePositionAndOrientation(body, tuple(center), orientation,
                                                     physicsClientId=self.cid)
             corrected_by += depth
-        else:
-            bullet.performCollisionDetection(physicsClientId=self.cid)
-            contact = next((point for point in bullet.getContactPoints(bodyA=body,
-                            physicsClientId=self.cid)
-                            if point[2] in obstacles and point[8] < -self.SKIN), None)
+            contact = self._dynamic_start_contact(body, obstacles)
         if contact is not None:
             bullet.removeBody(body, physicsClientId=self.cid)
             self._sensor_filter(entity, _TRACKED_GROUP, _DYNAMIC_GROUP)
             return None
-        bullet.resetBaseVelocity(body, linearVelocity=tuple(com_velocity),
-                                 angularVelocity=launch_angular,
-                                 physicsClientId=self.cid)
+        if initialize_bullet_velocity:
+            launch_rotation = np.asarray(bullet.getMatrixFromQuaternion(launch_orientation)).reshape(3, 3)
+            offset = launch_rotation @ properties.center_of_mass
+            com_velocity = self._center_velocity(velocity, launch_angular, offset)
+            bullet.resetBaseVelocity(body, linearVelocity=com_velocity,
+                                     angularVelocity=launch_angular, physicsClientId=self.cid)
         center, orientation = bullet.getBasePositionAndOrientation(
             body, physicsClientId=self.cid)
         rotation = np.asarray(bullet.getMatrixFromQuaternion(orientation),
@@ -1878,18 +1899,16 @@ class CollisionWorld:
     def set_flight_velocity(self, entity, velocity, angular):
         pose, state = self.poses[entity], self.motion[entity]
         if entity not in self.dynamic_bodies:
-            active = self._activate_dynamic(entity, pose, state.velocity)
+            # Bullet receives the requested velocity below before it can step.
+            active = self._activate_dynamic(entity, pose, state.velocity, initialize_bullet_velocity=False)
             if active is None:
                 return False
             pose = self.poses[entity] = active
             self.pending_dynamics.pop(entity, None)
             self.short_flight_spins.pop(entity, None)
         dynamic = self.dynamic_bodies[entity]
-        ox, oy, oz = matrix(pose.yaw, pose.pitch, pose.roll) @ dynamic.center_of_mass
-        wx, wy, wz = angular
-        com_velocity = (velocity[0] + (wy*oz-wz*oy),
-                        velocity[1] + (wz*ox-wx*oz),
-                        velocity[2] + (wx*oy-wy*ox))
+        offset = matrix(pose.yaw, pose.pitch, pose.roll) @ dynamic.center_of_mass
+        com_velocity = self._center_velocity(velocity, angular, offset)
         if self._rapier is not None:
             self._rapier.set_velocity(entity, com_velocity, angular)
             self._rapier_angular_states[entity] = angular
@@ -1925,6 +1944,8 @@ class CollisionWorld:
             vx = 0.
         if (z - pose.position[2]) * vz < 0.:
             vz = 0.
+        clipped, (vx, vy, vz) = self._clip_circle(entity, clipped, (vx, vy, vz))
+        x, y, z = clipped.position
         low, high = bounds
         up = rotation[1]
         down = -float(np.minimum(up * low, up * high).sum())
@@ -2322,6 +2343,7 @@ class CollisionWorld:
         self.dynamic_bodies.clear()
         self.dynamic_shapes.clear()
         self._shared_dynamic_shapes.clear()
+        self._mass_models.clear()
         self._kinematic_shapes.clear()
         self.dynamic_bounds.clear()
         self.dynamic_fall_peak.clear()
@@ -2374,13 +2396,13 @@ class CollisionWorld:
         bullet.resetBasePositionAndOrientation(body, pose.position,
                     quaternion(pose.yaw, pose.pitch, pose.roll), physicsClientId=self.cid)
 
-    def training_placement(self, entity, x, z, yaw, *, stationary=False):
+    def training_placement(self, entity, x, z, yaw, *, stationary=False, reference=None):
         """Find a supported placement without leaving a speculative sensor pose."""
         low_x, low_z, high_x, high_z = self.assets.bounds
         if not (low_x < x < high_x and low_z < z < high_z):
             return None
         previous = self.poses[entity]
-        pose = self.ground_pose(x, z, yaw, entity=entity)
+        pose = self.ground_pose(x, z, yaw, reference, entity=entity)
         try:
             if stationary:
                 valid = self._inside(pose, entity) and not self._contacts(pose, entity, suspension=True)
@@ -2390,21 +2412,72 @@ class CollisionWorld:
             self.set_pose(self.bodies[entity], previous)
         return pose if valid else None
 
-    def relocate_training_body(self, entity, pose):
-        """Move an existing body into a fresh grounded contact episode."""
+    def first_stationary_placement(self, entity, positions, yaw, reference):
+        """Sample several nearby footprints together, then check poses in order."""
+        low_x, low_z, high_x, high_z = self.assets.bounds
+        positions = [(x, z) for x, z in positions if low_x < x < high_x and low_z < z < high_z]
+        if not positions:
+            return None
+        layout = self._support_layout(entity)
+        # Keep the ray plan within the native sampler's 256-station limit.
+        batch_size = max(1, min(8, 256 // len(layout.a)))
+        c, s = math.cos(yaw), math.sin(yaw)
+        previous = self.poses[entity]
+        try:
+            for offset in range(0, len(positions), batch_size):
+                group = positions[offset:offset+batch_size]
+                centers = np.asarray(group)
+                xs = centers[:, 0, None] + c*layout.a + s*layout.b
+                zs = centers[:, 1, None] - s*layout.a + c*layout.b
+                ground = self._ground_heights(xs.ravel(), zs.ravel(), reference, entity).reshape(xs.shape)
+                # Support hints and the first unobstructed pose depend on this order.
+                for (x, z), row_x, row_z, heights in zip(group, xs, zs, ground):
+                    pose = self._support_pose(x, z, yaw, reference, entity=entity,
+                                              _sample=(layout, row_x, row_z, heights))
+                    if self._inside(pose, entity) and not self._placement_blocked(pose, entity):
+                        return pose
+        finally:
+            self.set_pose(self.bodies[entity], previous)
+        return None
+
+    def can_resume_pose(self, entity, pose, *, grounded):
+        """Validate the exact attitude and altitude against the live map."""
+        if not self._inside(pose, entity):
+            return False
+        x, y, z = pose.position
+        floor = self.held_pose(x, z, pose.yaw, pose.pitch, pose.roll, y, entity=entity)
+        suspension = grounded and self._has_suspension(entity)
+        gap = y-floor.position[1]
+        compression = self.SUSPENSION_TRAVEL if suspension else 0.
+        if gap < -compression-self.SKIN or grounded and gap > self.SUPPORT_REACH:
+            return False
+        previous = self.poses[entity]
+        try:
+            return not self._contacts(pose, entity, suspension=suspension)
+        finally:
+            self.set_pose(self.bodies[entity], previous)
+
+    def relocate_training_body(self, entity, pose, *, motion=None, road=None, lean=None):
+        """Move an existing body and start contact from the supplied physical state."""
         self.pending_dynamics.pop(entity, None)
-        self._road_poses[entity] = pose
+        road = pose if road is None else road
+        self._road_poses[entity] = road
         if entity in self.dynamic_bodies:
             self._deactivate_dynamic(entity, pose, (0., 0., 0.))
         self.poses[entity] = pose
-        self.motion[entity] = Motion()
+        self.motion[entity] = state = Motion() if motion is None else motion
         self.ground_motion[entity] = GroundMotion()
         self._fall_peaks.pop(entity, None)
         self._spring_rates.pop(entity, None)
         self._lean_states.pop(entity, None)
         self._drive_blocked.pop(entity, None)
         self._wall_recoil_latches.pop(entity, None)
-        self._seed_support_memory(entity, pose, 0.)
+        if state.grounded:
+            self._seed_support_memory(entity, road, state.velocity[1])
+            if lean is not None:
+                self._lean_states[entity] = lean
+        else:
+            self._begin_fall(entity, pose)
         self.set_pose(self.bodies[entity], pose)
         self._synced[entity] = (pose, self.motion[entity])
 
@@ -2455,6 +2528,8 @@ class CollisionWorld:
             bullet.removeBody(old_body, physicsClientId=self.cid)
             del self.body_entities[old_body]
             self.body_entities[body] = entity
+            if all(current is not previous for current in self.vehicle_assets.values()):
+                self._mass_models.pop(id(previous), None)
             return placed
         finally:
             if placed is None:
@@ -2984,6 +3059,20 @@ class CollisionWorld:
             for body in bodies:
                 points.extend(bullet.getClosestPoints(player, body, self.SKIN,
                                                        physicsClientId=self.cid))
+        return CollisionWorld._blocking_contacts(self, pose, entity, suspension, points)
+
+    def _placement_blocked(self, pose, entity):
+        if (getattr(_contact_queries, 'API_VERSION', None) != 2
+                or getattr(self._contacts, '__func__', None) is not _CONTACTS_IMPL):
+            return bool(self._contacts(pose, entity, suspension=True))
+        player = self.bodies[entity]
+        self.set_pose(player, pose)
+        return _contact_queries.gather(bullet, self.cid, player, self.SKIN,
+            self.map_bodies, self.body_entities,
+            getattr(self, '_contact_query_observer', None), entity,
+            partial(self._blocking_contacts, pose, entity, True))
+
+    def _blocking_contacts(self, pose, entity, suspension, points):
         return [p for p in points if p[8] < self.SKIN
                 and not (p[2] in self.map_bodies and p[7][1]>.65 and p[8]>-.025)
                 and not (suspension and p[3] in self.track_links.get(entity,())
@@ -3120,6 +3209,11 @@ class CollisionWorld:
                                     max(abs(low[2]),abs(high[2]))) for low,high in bounds)+1e-7
             cached = self._chassis_bounds[id(assets)] = (assets, bounds, radius)
         x,_,z = pose.position
+        circle = self.movement_circle
+        if circle is not None and (self.primary_id if entity is None else entity) == circle[0]:
+            _, cx, cz, radius = circle
+            if math.hypot(x-cx, z-cz) > radius + 1e-9:
+                return False
         margin = self.SKIN+cached[2]
         if (all(math.isfinite(value) for value in (*pose.position,pose.yaw,pose.pitch,pose.roll))
                 and lo_x+margin <= x <= hi_x-margin and lo_z+margin <= z <= hi_z-margin):
@@ -3135,6 +3229,21 @@ class CollisionWorld:
                             lo_z+self.SKIN <= v[2] <= hi_z-self.SKIN):
                         return False
         return True
+
+    def _clip_circle(self, entity, pose, velocity=(0., 0., 0.)):
+        circle = self.movement_circle
+        if circle is None or entity != circle[0]:
+            return pose, velocity
+        _, cx, cz, radius = circle
+        x, y, z = pose.position
+        distance = math.hypot(x-cx, z-cz)
+        if distance <= radius:
+            return pose, velocity
+        nx, nz = (x-cx)/distance, (z-cz)/distance
+        vx, vy, vz = velocity
+        outward = max(0., vx*nx+vz*nz)
+        return (Pose((cx+nx*radius, y, cz+nz*radius), pose.yaw, pose.pitch, pose.roll),
+                (vx-outward*nx, vy, vz-outward*nz))
 
     def _border_pose(self, pose, entity, *, flight_bounds=None, rotation=None):
         """Project the hull onto the playable rectangle, independently on both axes."""
@@ -3176,6 +3285,11 @@ class CollisionWorld:
         dx, dz = ((math.sin(yaw) * distance, math.cos(yaw) * distance)
                   if displacement is None else displacement)
         candidate = Pose((x + dx, y, z + dz), yaw, pose.pitch, pose.roll)
+        limited, _ = self._clip_circle(entity, candidate)
+        if limited is not candidate:
+            dx, dz = limited.position[0]-x, limited.position[2]-z
+            displacement = dx, dz
+            candidate = limited
         clipped = self._border_pose(candidate, entity)
         if clipped is candidate:
             return displacement
@@ -3343,7 +3457,18 @@ class CollisionWorld:
             else:
                 moved,rest = False,dt
                 if state.grounded:
-                    if self._native_physics is not None:
+                    circle = self.movement_circle
+                    near_circle = False
+                    if circle is not None and entity == circle[0]:
+                        _, cx, cz, radius = circle
+                        x, _, z = self.poses[entity].position
+                        travel = math.hypot(*planar_displacement) if planar_displacement is not None else abs(distance)
+                        near_circle = math.hypot(x-cx, z-cz) + travel >= radius - self.SKIN
+                    if near_circle:
+                        # Native drive replicas know the map rectangle. The
+                        # Python solver checks the circle on each contact step.
+                        native = None
+                    elif self._native_physics is not None:
                         native = self._native_physics.move(self,entity,distance,yaw_delta,dt,state,
                                                           planar_displacement)
                     else:
@@ -3471,18 +3596,20 @@ class CollisionWorld:
                 continue
             body = self.bodies[entity]
             cached = getattr(self, '_sensor_aabb_cache', {}).get(entity)
-            bounds = ([cached] if cached is not None else
-                      [bullet.getAABB(body,link,physicsClientId=self.cid)
-                       for link in range(-1,bullet.getNumJoints(body,physicsClientId=self.cid))])
-            low = np.min(np.asarray([value[0] for value in bounds]),axis=0)-distance
-            high = np.max(np.asarray([value[1] for value in bounds]),axis=0)+distance
-            near = bullet.getOverlappingObjects(low.tolist(),high.tolist(),
-                                                 physicsClientId=self.cid) or ()
-            other_entities = sorted({self.body_entities.get(other) for other,_ in near
-                                     if self.body_entities.get(other) is not None
-                                     and self.body_entities[other] > entity})
+            if cached is None:
+                low, high = bullet.getAABB(body, physicsClientId=self.cid)
+                for link in range(bullet.getNumJoints(body, physicsClientId=self.cid)):
+                    link_low, link_high = bullet.getAABB(body, link, physicsClientId=self.cid)
+                    low = tuple(map(min, low, link_low))
+                    high = tuple(map(max, high, link_high))
+            else:
+                low, high = cached
+            near = bullet.getOverlappingObjects(tuple(v-distance for v in low),
+                tuple(v+distance for v in high), physicsClientId=self.cid) or ()
+            other_entities = sorted({other_entity for other, _ in near
+                if (other_entity := self.body_entities.get(other)) is not None and other_entity > entity})
             for other_entity in other_entities:
-                if (other_entity in self.dynamic_bodies
+                if ((entity, other_entity) in pairs or other_entity in self.dynamic_bodies
                         or other_entity in self.pending_dynamics
                         or not self.motion[other_entity].grounded):
                     continue
@@ -3491,8 +3618,7 @@ class CollisionWorld:
                     physicsClientId=self.cid)
                 if not points:
                     continue
-                if (min(point[8] for point in points) <= distance
-                        and (entity,other_entity) not in pairs):
+                if min(point[8] for point in points) <= distance:
                     point_a,point_b,normal,separation = self._ground_contact_record(points)
                     pairs[(entity,other_entity)] = {
                         'point_a':point_a,
@@ -4430,6 +4556,9 @@ class CollisionWorld:
                 dx, vx = clipped.position[0] - x, 0.
             if clipped.position[2] != candidate.position[2]:
                 dz, vz = clipped.position[2] - z, 0.
+            limited, (vx, vy, vz) = self._clip_circle(entity, clipped, (vx, vy, vz))
+            if limited is not clipped:
+                dx, dz = limited.position[0] - x, limited.position[2] - z
             for attempt in range(3):
                 ground = self._landing_support(x+dx,z+dz,pose.yaw,y,entity)
                 landing = y+dy <= ground.position[1]
@@ -4614,7 +4743,7 @@ class CollisionWorld:
         return snapshots
 
     def shot_path(self, origin, direction, distance=500, *, ignore_entity=None,
-                  movable_armor_states=None):
+                  movable_armor_states=None, ignore_entities=()):
         armor_states = self._armor_state_snapshot_map(movable_armor_states)
         end = tuple(o+d*distance for o,d in zip(origin,direction))
         # Driving convex hulls are deliberately excluded from shell queries.
@@ -4624,7 +4753,7 @@ class CollisionWorld:
         ignore_entity = self.primary_id if ignore_entity is None else ignore_entity
         closest = None
         for entity,pose in self.poses.items():
-            if entity == ignore_entity or entity in self.suspended_entities:
+            if entity == ignore_entity or entity in self.suspended_entities or entity in ignore_entities:
                 continue
             yaw,pitch = self.gun_angles[entity]
             rotation = self._dynamic_rotation(entity)
@@ -4649,6 +4778,7 @@ class CollisionWorld:
 # Keep replaced samplers and fit callbacks on their original Python path.
 _SUPPORT_PLANE_IMPL = CollisionWorld._support_plane.__func__
 _TERRAIN_HEIGHTS_IMPL = CollisionWorld._terrain_heights
+_CONTACTS_IMPL = CollisionWorld._contacts
 
 
 _DRIVE_PREFIX_METHODS={name:getattr(CollisionWorld,name) for name in (

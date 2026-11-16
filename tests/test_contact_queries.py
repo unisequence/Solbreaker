@@ -104,6 +104,20 @@ class ContactQueriesTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'closest failure'):
             _contact_queries.gather(*args)
 
+    @unittest.skipUnless(getattr(_contact_queries, 'API_VERSION', 0) >= 2,
+                         'Early contact rejection is unavailable')
+    def test_blocking_query_stops_after_one_rejected_body(self):
+        calls = []
+        api = SimpleNamespace(getNumJoints=bullet.getNumJoints, getAABB=bullet.getAABB,
+            getOverlappingObjects=lambda *args, **kwargs: [(self.wall, -1), (self.other, -1)],
+            getClosestPoints=lambda player, body, *args, **kwargs: calls.append(body) or (body,))
+        args = (api, self.cid, self.player, self.skin, self.maps, self.vehicles.values(), None, 10)
+        self.assertTrue(_contact_queries.gather(*args, bool))
+        self.assertEqual(len(calls), 1)
+        calls.clear()
+        self.assertFalse(_contact_queries.gather(*args, lambda rows: False))
+        self.assertEqual(set(calls), {self.wall, self.other})
+
     def test_world_filter_matches_without_accelerator(self):
         from solbreaker.collision import CollisionWorld, Pose
         world = SimpleNamespace(primary_id=10, bodies=self.vehicles, cid=self.cid,

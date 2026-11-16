@@ -291,6 +291,7 @@ solbreaker/__init__.py
 solbreaker/__main__.py
 solbreaker/account.py
 solbreaker/aiming.py
+solbreaker/ammunition.py
 solbreaker/arena.py
 solbreaker/arena_commands.py
 solbreaker/arena_loading.py
@@ -309,6 +310,8 @@ solbreaker/assets/build-11.21.0.1235_7376187-files.json.gz
 solbreaker/assets/icon-source.json
 solbreaker/assets/launcher-cover-source.json
 solbreaker/assets/launcher-cover.png
+solbreaker/assets/solbreaker-reticle.packed.webp
+solbreaker/assets/solbreaker-reticle@2x.packed.webp
 solbreaker/assets/solbreaker.ico
 solbreaker/assets/solbreaker.png
 solbreaker/assets/time-stop-clock.packed.webp
@@ -383,6 +386,7 @@ solbreaker/loadout_effects.py
 solbreaker/loadouts.py
 solbreaker/localization.py
 solbreaker/login_preferences.py
+solbreaker/mad_games.py
 solbreaker/management.py
 solbreaker/management_tasks.py
 solbreaker/map_cache.py
@@ -510,6 +514,7 @@ tests/test_discovery.py
 tests/test_launcher_stdin.py
 tests/test_loadout_prices.py
 tests/test_login_preferences.py
+tests/test_mad_games.py
 tests/test_map_cache.py
 tests/test_management.py
 tests/test_missiles.py

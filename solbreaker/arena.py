@@ -7,9 +7,13 @@ import random
 import time
 import uuid
 
-from . import big_boss, diagnostics
-from .ballistics import Projectile, ReconContact, SweepCache, TrackContact, advance, body_states, interpolate
+from . import big_boss, diagnostics, mad_games
+from .ballistics import (Projectile, ReconContact, SweepCache, TrackContact, advance, body_states,
+                         interpolate, missile_guidance_target)
 from .armor import MovableArmorStateSnapshot
+from .ammunition import (advance_pump, apply_burst_shell_switch, apply_queued_shell,
+                         finish_magazine_reload, magazine_reload_allowed, spend_round,
+                         start_pump_refill, switch_shell)
 from .collision import CollisionWorld, Pose
 from .marker_batch import try_markers as _try_marker_batch
 from .entities import BattleEvent, BattleResult, MotionFrame, MotionSample, Player, Vehicle
@@ -17,7 +21,8 @@ from .motion import game_tick
 from .aiming import GunAim, wrap
 from .roster import TEAMS, validate_teams, training_spawn, training_yaw
 from .orientation import matrix
-from .consumables import ACTIVE, COOLDOWN, HEAL, RESTORE, ConsumableSpec, ConsumableState
+from .consumables import (ACTIVE, COOLDOWN, HEAL, RESTORE, SHIELDED_SHELL_KINDS,
+                          ConsumableSpec, ConsumableState)
 
 from .loadout_effects import ANTI_HE_PROVISION
 from .internal_geometry import GeometryConfiguration, PreparedInternalGeometry
@@ -28,10 +33,10 @@ from .track_fall_damage import evaluate_track_fall
 from .landing_skid import MAX_DURATION as LANDING_MAX_DURATION, grip_fraction, touchdown_skid
 from .track_drive import (TrackDriveMotion, passive_track_step,
                           COAST_DRAG_RATE, BOTH_DRAG_RATE)
-from .mobility import (TerrainMobility,engine_acceleration,resolve_terrain_mobility,
-                       rolling_acceleration)
+from .mobility import (advance_speed, braking_acceleration, powered_acceleration,
+                       rolling_acceleration, skid_velocity, slope_grip_acceleration, terrain_at)
 from .recon import ReconState
-from .bot_ai import TrainingBot
+from .bot_ai import BotDirector, TrainingBot
 from .bot_roster import vehicle_class
 from .base_capture import BaseCapture
 from .supremacy import Supremacy
@@ -48,7 +53,6 @@ _GUN_EXTRA = 36  # gunHealth: the external gun, not gunBreech
 # commander/driver/gunner1/2/loader1/2 Health; all wire states native-verified.
 # A crew member still needs its own geometry binding before it can be damaged.
 _CREW_EXTRAS = frozenset((39, 40, 41, 42, 43, 44))
-_SHIELDED_KINDS = ('ARMOR_PIERCING','ARMOR_PIERCING_CR','HOLLOW_CHARGE')
 _INTERNAL_KINDS = ('ARMOR_PIERCING','ARMOR_PIERCING_CR','HOLLOW_CHARGE')
 
 
@@ -123,7 +127,10 @@ class Arena:
         rules = (training.battle_mode if training.bots_enabled else 'elimination') if solo else room_mode
         self.gravity_mode = rules == 'gravity'
         self.big_boss_mode = rules == big_boss.MODE
-        self.time_stop_enabled &= not self.gravity_mode
+        self.mad_games_mode = rules == mad_games.MODE
+        self.mad_irradiated = {}
+        self._mad_games_game = (bot_game or recon_game) if self.mad_games_mode else None
+        self.time_stop_enabled &= not (self.gravity_mode or self.mad_games_mode)
         self.big_boss = None
         self.boss_role_picker = self.big_boss_mode and not solo and room_settings is not None
         self.boss_pending_roles = {}
@@ -157,10 +164,11 @@ class Arena:
         self.map_spec = map_spec
         self.map_id = map_spec.map_id if map_spec is not None else 6
         point = getattr(map_spec, 'capture_point', None)
-        capture_enabled = rules == 'encounter'
+        strategic_points = getattr(map_spec, 'strategic_points', ())
+        capture_enabled = rules == 'encounter' or (self.mad_games_mode and not strategic_points)
         self.base_capture = BaseCapture(point) if point is not None and capture_enabled else None
-        self.supremacy = (Supremacy(getattr(map_spec, 'strategic_points', ()))
-                         if rules == 'supremacy' else None)
+        self.supremacy = (Supremacy(strategic_points)
+                         if rules == 'supremacy' or (self.mad_games_mode and strategic_points) else None)
         self.client_map_id = self.map_id | (0x10000 if self.supremacy is not None or self.big_boss_mode else 0)
         self.battle_seconds = 420 if self.base_capture is not None or self.supremacy is not None else 600
         if settings.minutes:
@@ -209,8 +217,10 @@ class Arena:
         self.rng = random.Random(self.result_id)
         # Separate stream: gun chance draws must not shift penetration rolls.
         self.module_rng = random.Random(self.result_id+':modules')
-        # Recon is deliberately opt-in until native marker and aim inputs are
-        # verified. Its dedicated stream must never alter ballistics or damage.
+        # Mad Games supplies team spotting and the native detection lamp.
+        # Recon's personal locks would mask those markers and replace the lamp.
+        recon_enabled = recon_enabled and not self.mad_games_mode
+        # The dedicated stream must never alter ballistics or damage.
         self.recon_rng = random.Random(self.result_id+':recon') if recon_enabled else None
         self.recon = ReconState(random_sample=self.recon_rng.random) if recon_enabled else None
         self.recon_game = recon_game if recon_enabled else None
@@ -434,6 +444,9 @@ class Arena:
                 resource.close()
             self._owned_bot_scenes.clear()
             raise
+        if self.mad_games_mode:
+            for vehicle in self.vehicles.values():
+                self._install_mad_games_ability(vehicle)
         if self.big_boss_mode:
             self.big_boss = big_boss.BigBoss(self.vehicles, self.result_id, endless=self.endless)
             for vehicle in self.vehicles.values():
@@ -468,7 +481,6 @@ class Arena:
             self._owned_bot_scenes.clear()
             raise
         if self.training_bots and self.bot_director is None:
-            from .bot_ai import BotDirector
             self.bot_director = BotDirector(self)
 
     def _configure_bot_scene(self, scene, definition):
@@ -502,7 +514,6 @@ class Arena:
                     self.time_stop_enabled = False
                     self.emit('time_stop_worker_error', reason=str(error))
         if self.training_bots:
-            from .bot_ai import BotDirector
             from .bot_navigation import Navigation
             if self.bot_director is None:self.bot_director=BotDirector(self)
             if self.bot_director.navigation is None:
@@ -788,6 +799,15 @@ class Arena:
         modifiers = [4] if self._fire_active(vehicle) else []
         modifiers.extend(extra for part,extra in _TRACK_EXTRAS.items()
                          if part in vehicle.tracks and vehicle.tracks[part].broken)
+        if vehicle.alive and self.mad_games_mode:
+            if vehicle.entity_id in self.mad_irradiated:
+                modifiers.append(mad_games.IRRADIATED_MODIFIER)
+            if vehicle.mad_coordinator_allies:
+                modifiers.append(mad_games.COORDINATOR_MODIFIER)
+            if vehicle.consumable_status.get(mad_games.REFLECTOR.ident) == ACTIVE:
+                modifiers.append(mad_games.REFLECTOR_MODIFIER)
+            if vehicle.mad_revenge:
+                modifiers.append(mad_games.TOXIC_STARE_MODIFIER)
         if vehicle.alive and self.big_boss is not None:
             if vehicle.entity_id in self.big_boss.bosses:
                 modifiers.append(big_boss.BOSS_AURA_MODIFIER)
@@ -1243,6 +1263,8 @@ class Arena:
         at = max(self.module_clock, min(now, contact.at))
         self._advance_tracks(target, at)
         state = target.tracks[contact.hit.part]
+        if self.mad_games_mode:
+            damage = mad_games.track_damage(target, damage, at)
         before = state.broken,state.critical
         applied = min(state.health,damage)
         state.damage(damage, at)
@@ -1287,6 +1309,18 @@ class Arena:
         if kind == 'interval':
             return nominal / vehicle.reload_speed_factor * vehicle.interval_factor
         return nominal / self._full_reload_rate(vehicle)
+
+    def _magazine_duration(self, vehicle, kind):
+        weapon = vehicle.definition.weapon if vehicle.definition else None
+        if kind == 'interval':
+            nominal = weapon.interval if weapon else .1
+        else:
+            nominal = weapon.reload if weapon else 6.
+        return self._reload_duration(vehicle, kind, nominal)
+
+    @staticmethod
+    def _burst_duration(vehicle):
+        return vehicle.definition.weapon.burst_interval / vehicle.reload_speed_factor * vehicle.interval_factor
 
     def _set_fast_reload(self, vehicle, enabled):
         if vehicle.sandbox_fast_reload == enabled:
@@ -1386,13 +1420,7 @@ class Arena:
     # discards refill progress. Each refill takes times[clip] and only moves a
     # spare shell (ammo counts the magazine) into the clip: never free ammo.
     def _pump_segment(self, vehicle, start):
-        times = vehicle.pump_times
-        vehicle.pump_waiting = False
-        if vehicle.clip < len(times) and vehicle.ammo > vehicle.clip:
-            vehicle.pump_total = self._reload_duration(vehicle, 'reload', times[vehicle.clip])
-            vehicle.pump_at = start+vehicle.pump_total
-        else:
-            vehicle.pump_at = vehicle.pump_total = 0.
+        start_pump_refill(vehicle, start, lambda nominal: self._reload_duration(vehicle, 'reload', nominal))
 
     def _emit_pump(self, vehicle, now):
         """Immutable refill snapshot; readyGun is loaded with no intershot pending."""
@@ -1411,12 +1439,7 @@ class Arena:
         """Complete refills through until at their exact times, not tick ends."""
         if not vehicle.pump_times:
             return
-        if vehicle.pump_waiting and vehicle.reload_at and vehicle.reload_at <= until:
-            self._pump_segment(vehicle,vehicle.reload_at)
-        while vehicle.pump_at and vehicle.pump_at <= until:
-            at,total = vehicle.pump_at,vehicle.pump_total
-            vehicle.clip += 1
-            self._pump_segment(vehicle,at)
+        for total in advance_pump(vehicle, until, lambda at: self._pump_segment(vehicle, at)):
             self.emit('ammo',vehicle.entity_id)
             if vehicle.clip == 1 and not vehicle.reload_at:
                 self.emit('reload',vehicle.entity_id,delay=0.,total=total)
@@ -1648,7 +1671,7 @@ class Arena:
         if target_id is not None and (type(target_id) is not int or target_id <= 0):
             raise ValueError('Invalid recon target ID')
         target = self.vehicles.get(target_id)
-        if target is None or target.team == observer.team or not target.alive:
+        if target is None or target.team == observer.team or not target.alive or mad_games.concealed(target, observer.team):
             target_id = None
         was_marked = (target_id is not None and
                       self.recon.personal_visible(observer.entity_id, target_id, self.simulation_time))
@@ -1770,6 +1793,10 @@ class Arena:
             if self.recon is not None:
                 for vehicle in self.vehicles.values():
                     self._update_recon_camouflage(vehicle, self.started)
+            if self.mad_games_mode:
+                for vehicle in self.vehicles.values():
+                    mad_games.charge_shield(vehicle, now)
+                self._update_mad_games(now)
             self._record_motion_frame(self.started)
             self.emit('period',period=3,seconds=0 if self.endless else self.battle_seconds,winner=0)
             if self.boss_role_picker:
@@ -1832,8 +1859,10 @@ class Arena:
                 timeline.toggle(account_id)
             return
         if timeline and account_id == timeline.account:
-            if control.token == sandbox.token(self) and control.flags & sandbox.GRAVITY_JUMP:
-                timeline.request_ability()
+            if control.token == sandbox.token(self):
+                timeline.missile_control(control)
+                if control.flags & sandbox.GRAVITY_JUMP:
+                    timeline.request_ability()
             return
         if control.flags in (sandbox.BOSS_PICK_ROLE, sandbox.BOSS_RESPAWN):
             if (self.boss_role_picker and player and player.attached and player.loaded
@@ -1846,7 +1875,8 @@ class Arena:
                         self._damage_health(vehicle, vehicle.health, None, self.simulation_time,
                                             shell_hit=False, manual_respawn=True)
             return
-        if (not (self.sandbox_enabled or self.gravity_mode or self.big_boss_mode) or control.token != sandbox.token(self)
+        if (not (self.sandbox_enabled or self.gravity_mode or self.big_boss_mode or self.mad_games_mode)
+                or control.token != sandbox.token(self)
                 or not player or not player.attached or not player.loaded
                 or not self.started or self.finished_at or not self.vehicle_for(account_id).alive):
             return
@@ -1869,6 +1899,10 @@ class Arena:
                         self._activate_boss_role_ability(vehicle, state, self.simulation_time)
             elif self.gravity_mode:
                 self._gravity_jump(self.vehicle_for(account_id))
+            elif self.mad_games_mode:
+                vehicle = self.vehicle_for(account_id)
+                if (state := mad_games.irradiator_state(vehicle)) is not None:
+                    self._activate_mad_irradiator(vehicle, state, self.simulation_time, None)
         if self.practice:
             vehicle = self.vehicle_for(account_id)
             if control.flags & sandbox.NEXT_TARGET:
@@ -2051,8 +2085,8 @@ class Arena:
         effects = self.big_boss.vehicle_effects(vehicle.entity_id)
         self.emit('boss_vehicle_effects', vehicle.entity_id, effects=effects)
 
-    def _consume_boss_shield(self, target, at):
-        if self.big_boss is None or not self.big_boss.take_shield(target.entity_id, at):
+    def _consume_boss_shield(self, target, at, *, ident=None):
+        if self.big_boss is None or not self.big_boss.take_shield(target.entity_id, at, ident=ident):
             return False
         self._emit_boss_vehicle_effects(target)
         return True
@@ -2069,9 +2103,22 @@ class Arena:
             self.emit('health', source.entity_id, target.entity_id, health=target.health, healed=healed)
         return max(0, healed)
 
+    def _mad_heal(self, source, target, amount):
+        if self._heal_health(source, target, amount):
+            self.emit('mad_regenerator_fx', target.entity_id, source.entity_id)
+
     def _boss_heal(self, source, target, amount):
-        self._heal_health(source, target, amount)
+        healed = self._heal_health(source, target, amount)
         if self.big_boss.poison.pop(target.entity_id, None):
+            self._emit_boss_vehicle_effects(target)
+            return True
+        return healed > 0
+
+    def _grant_regenerator_shield(self, target, level, at):
+        if self._fire_active(target):
+            self._stop_fire(target, at, 'energy_shield')
+        if target.alive:
+            self.big_boss.grant_shield(target.entity_id, at, big_boss.SHIELD_DURATION[level])
             self._emit_boss_vehicle_effects(target)
 
     def _boss_healing_shot(self, shooter, target, shell, at):
@@ -2084,12 +2131,7 @@ class Arena:
         shield = next((slot for slot in shooter.consumables
                        if slot and slot.spec in big_boss.SHIELD_SPECS), None)
         if shield is not None and shield.activate(at):
-            duration = big_boss.SHIELD_DURATION[self.big_boss.levels[shooter.entity_id]]
-            if self._fire_active(target):
-                self._stop_fire(target, at, 'energy_shield')
-            if target.alive:
-                self.big_boss.shields[target.entity_id] = (at, at+duration)
-                self._emit_boss_vehicle_effects(target)
+            self._grant_regenerator_shield(target, self.big_boss.levels[shooter.entity_id], at)
 
     def _boss_poison(self, shooter, target, level, at):
         effects = self.big_boss.poison.setdefault(target.entity_id, {})
@@ -2120,8 +2162,8 @@ class Arena:
                         self.emit('boss_role_effect', target.entity_id,
                                   compact_id=big_boss.HEAL_SHOT_EFFECTS[boss.levels[source.entity_id]])
                     self._boss_heal(source, target, target.max_health*fraction)
-        for entity, (_, expires) in tuple(boss.shields.items()):
-            if now >= expires:
+        for entity, shield in tuple(boss.shields.items()):
+            if now >= shield.expires:
                 del boss.shields[entity]
                 self._emit_boss_vehicle_effects(self.vehicles[entity])
         for entity, poisons in tuple(boss.poison.items()):
@@ -2236,6 +2278,10 @@ class Arena:
                 setattr(restored, field, getattr(previous, field))
         restored.consumable_clock = self.simulation_time
         self._configure_battle_vehicle(restored, self.world.assets_for(entity))
+        if self.mad_games_mode:
+            self._clear_mad_irradiator(restored)
+            self._install_mad_games_ability(restored)
+            mad_games.charge_shield(restored, self.simulation_time)
         restored.movable_armor_state = self._movable_armor_snapshot_at(restored, self.simulation_time)
         self.world.relocate_training_body(entity, pose)
         self.world.set_turret(0., entity)
@@ -2280,9 +2326,7 @@ class Arena:
                 or boss.lives.get(self.players[account_id].vehicle_id, 1) > 0)
 
     def cancel_time_stop(self, account_id):
-        if (timeline := getattr(self, 'time_stop', None)) is not None and timeline.account == account_id:
-            timeline.abort()
-            timeline.rearm = True
+        if (timeline := getattr(self, 'time_stop', None)) is not None and timeline.cancel(account_id):
             self.motion_frame = None
 
     def reenter_training(self, account_id, scene, shells, consumables, *, camouflage=0):
@@ -2290,6 +2334,8 @@ class Arena:
 
         previous = self.vehicle_for(account_id)
         entity = previous.entity_id
+        if self.time_stop is not None and self.time_stop.entity == entity:
+            raise TrainingSpawnUnavailable('Time Stop return is waiting for a safe spawn')
         # Validate the persistent loadout before changing the physics body.
         candidate = Vehicle(entity, account_id, previous.nickname, previous.team,
                             scene.definition.descriptor, previous.pose,
@@ -2311,7 +2357,8 @@ class Arena:
                            for enemy_x, _, enemy_z in enemy_positions)
 
             spawns = sorted(spawns, key=clearance, reverse=True)
-        if scene is self.world.assets_for(entity):
+        changed_geometry = scene is not self.world.assets_for(entity)
+        if not changed_geometry:
             pose = next((placement for x, z, yaw in spawns if
                          (placement := self.world.training_placement(entity, x, z, yaw,
                                                                      stationary=True)) is not None), None)
@@ -2322,6 +2369,8 @@ class Arena:
         self._lose_target(entity)
         self._restore_vehicle(entity, pose,
                               replacement=(scene.definition.descriptor, shells, consumables, camouflage))
+        if changed_geometry and self.time_stop is not None:
+            self.time_stop.refresh_geometry()
         self.hangar_players.remove(account_id)
         self.emit('training_reentry', entity)
 
@@ -2404,7 +2453,7 @@ class Arena:
             vehicle.gun.set_angles(vehicle.gun.yaw,vehicle.gun.pitch)
             return True
         target = self.vehicles.get(target_id)
-        if (target is None or not target.alive or target.team==vehicle.team
+        if (target is None or not target.alive or target.team==vehicle.team or mad_games.concealed(target, vehicle.team)
                 or target.account_id is not None and not self.players[target.account_id].attached):
             # A target can die/leave between the client's selection and receipt.
             # Acknowledge that loss instead of keeping a different old target.
@@ -2427,9 +2476,10 @@ class Arena:
         vehicle.autoaim_target,vehicle.autoaim_offset = target_id,offset
         return True
 
-    def _lose_target(self, entity):
+    def _lose_target(self, entity, *, include_owner=True):
         for vehicle in self.vehicles.values():
-            if vehicle.autoaim_target and (vehicle.autoaim_target==entity or vehicle.entity_id==entity):
+            if vehicle.autoaim_target and (vehicle.autoaim_target == entity
+                                           or include_owner and vehicle.entity_id == entity):
                 lost = vehicle.autoaim_target
                 vehicle.autoaim_target,vehicle.autoaim_offset = 0,None
                 vehicle.gun.set_angles(vehicle.gun.yaw,vehicle.gun.pitch)
@@ -2479,20 +2529,20 @@ class Arena:
             vehicle.burst_switch_shell = shell_id
             return True
         old_clip, old_reload_at = vehicle.clip, vehicle.reload_at
-        vehicle.ammo_by_shell[vehicle.shell_id] = vehicle.ammo
-        vehicle.selected_shell = shell_id
+        switch_shell(vehicle, shell_id)
         vehicle.next_shell = 0
-        vehicle.ammo = vehicle.ammo_by_shell[shell_id]
         if vehicle.pump_times:
-            # Local rule: a switch unloads the whole pump clip back into its
-            # own count (already included in ammo) and restarts from index 0
-            # with the new type. Any intershot and refill progress is dropped.
-            vehicle.clip = 0
-            vehicle.reload_at = 0.
-            self._pump_segment(vehicle,self.simulation_time)
+            # Keep any intershot and refill already in progress.
+            if not (vehicle.reload_at or vehicle.pump_waiting or vehicle.pump_at):
+                self._pump_segment(vehicle,self.simulation_time)
             self.emit('shell_selected',vehicle.entity_id,shell=shell_id)
             self.emit('ammo',vehicle.entity_id)
-            self._emit_pump_gate(vehicle,self.simulation_time)
+            if vehicle.reload_at:
+                self.emit('reload', vehicle.entity_id,
+                          delay=max(0., vehicle.reload_at-self.simulation_time),
+                          total=vehicle.reload_total)
+            elif not vehicle.clip:
+                self._emit_pump_gate(vehicle,self.simulation_time)
             self._emit_pump(vehicle,self.simulation_time)
             return True
         # Sandbox rule: selecting another available type changes the loaded
@@ -2512,15 +2562,12 @@ class Arena:
         vehicle = self.vehicle_for(account_id)
         player = self.players[account_id]
         if (not self.started or self.finished_at or not player.attached or not player.loaded
-                or not vehicle.alive or vehicle.clip_size <= 1 or vehicle.pump_times
-                or vehicle.burst_pending or vehicle.clip <= 0
-                or vehicle.clip >= vehicle.clip_size or vehicle.clip >= vehicle.ammo
-                or vehicle.reload_at and vehicle.reload_kind != 'interval'):
+                or not vehicle.alive or vehicle.pump_times or vehicle.burst_pending
+                or not magazine_reload_allowed(vehicle)):
             return False
-        weapon = vehicle.definition.weapon if vehicle.definition else None
         vehicle.clip = 0
         vehicle.reload_kind = 'reload'
-        vehicle.reload_total = self._reload_duration(vehicle, 'reload', weapon.reload if weapon else 6.)
+        vehicle.reload_total = self._magazine_duration(vehicle, 'reload')
         vehicle.reload_at = self.simulation_time + vehicle.reload_total
         self.emit('ammo',vehicle.entity_id)
         self.emit('reload',vehicle.entity_id,delay=vehicle.reload_total)
@@ -2535,9 +2582,12 @@ class Arena:
             armor_states = {entity: target.movable_armor_state
                             for entity,target in self.vehicles.items()
                             if target.movable_armor_state is not None}
+            concealed = {entity for entity, target in self.vehicles.items()
+                         if mad_games.concealed(target, vehicle.team)} if self.mad_games_mode else ()
+            options = {'ignore_entities': concealed} if concealed else {}
             body,point,_ = self.world.shot_path(origin,direction,self.shell_for(vehicle).max_distance,
                                                 ignore_entity=vehicle.entity_id,
-                                                movable_armor_states=armor_states or None)
+                                                movable_armor_states=armor_states or None, **options)
             entity = next((e for e,b in self.world.bodies.items() if b==body),None)
             return entity,point
         # Flat-world tests only. Production always has the installed collision scene.
@@ -2592,7 +2642,7 @@ class Arena:
             # One accepted Fire starts its whole XML group.  Only rounds which
             # really remain in the current clip and selected ammunition are
             # scheduled, so a short final loadout cannot create free shells.
-            delay = weapon.burst_interval/vehicle.reload_speed_factor*vehicle.interval_factor
+            delay = self._burst_duration(vehicle)
             vehicle.burst_shell,vehicle.burst_effect = shell,shot_effect
             vehicle.burst_remaining = following
             vehicle.reload_kind = 'interval'
@@ -2606,9 +2656,7 @@ class Arena:
             return
         # Berserk's speed applies to both cycles; NewAutoloader only to the intershot.
         vehicle.reload_kind = 'interval' if vehicle.clip else 'reload'
-        nominal = (weapon.interval if vehicle.clip else weapon.reload) if weapon else (
-            .1 if vehicle.clip else 6.)
-        delay = self._reload_duration(vehicle, vehicle.reload_kind, nominal)
+        delay = self._magazine_duration(vehicle, vehicle.reload_kind)
         vehicle.reload_at = now+delay
         vehicle.reload_total = delay
         self._emit_shot(vehicle,fired_shell,origin,velocity,now,shot_effect)
@@ -2619,14 +2667,50 @@ class Arena:
         """Fire only when the server collision query actually sees the target."""
         controller = ai or self.training_bots.get(bot.entity_id)
         if (controller is None or self.finished_at or not self.started
-                or not bot.alive or target is None or not target.alive
+                or not bot.alive or target is None or not target.alive or mad_games.concealed(target, bot.team)
                 or self.world is None or bot.reload_at or bot.ammo <= 0
                 or not controller.shot_check_due(now)):
             return
         visible,_ = self.aim_hit(bot)
         if (visible == target.entity_id if ai is None else
                 controller.sight_confirmed(target.entity_id, visible == target.entity_id, now)):
+            if self.mad_games_mode:
+                if bot.mad_cloaked and bot.flags & TrainingBot.REVERSE:
+                    return
+                self._training_bot_mad_attack(bot, target, now)
             self._fire_vehicle(bot,now)
+
+    def _training_bot_mad_attack(self, bot, target, now):
+        if self.gun_destroyed(bot) or bot.pump_times and not bot.clip or bot.burst_pending:
+            return
+        state = next((slot for slot in bot.consumables if slot and slot.spec in (
+            mad_games.DISCHARGE, mad_games.IRRADIATOR)), None)
+        if state is None or now < state.ready_at:
+            return
+        if state.spec is mad_games.IRRADIATOR:
+            self._activate_mad_irradiator(bot, state, now, target.entity_id)
+        elif bot.health > bot.max_health * .30:
+            self._activate_consumable(bot, state, now)
+
+    def _training_bot_mad_mobility(self, bot, target, now):
+        state = next((slot for slot in bot.consumables if slot and slot.spec in (
+            mad_games.HIGH_OCTANE, mad_games.ACCELERATOR, mad_games.CHAMELEON)), None)
+        if state is None or now < state.ready_at:
+            return
+        if state.spec is mad_games.CHAMELEON:
+            if (target is not None and bot.flags & TrainingBot.REVERSE
+                    and bot.health <= bot.max_health * .50 and bot.reload_at > now + 1.):
+                self._activate_consumable(bot, state, now)
+            return
+        if bot.flags != TrainingBot.FORWARD or bot.speed < 2.:
+            return
+        if state.spec is mad_games.HIGH_OCTANE:
+            self._activate_consumable(bot, state, now)
+        elif target is not None:
+            dx = target.pose.position[0] - bot.pose.position[0]
+            dz = target.pose.position[2] - bot.pose.position[2]
+            if 12. <= math.hypot(dx, dz) <= 48. and abs(wrap(math.atan2(dx, dz) - bot.pose.yaw)) < .18:
+                self._activate_mad_dash(bot, state, now)
 
     def _training_bot_closing_speed(self, bot, target):
         """Relative horizontal approach speed from real motion, in m/s."""
@@ -2679,10 +2763,7 @@ class Arena:
                 if s and s.spec in big_boss.ROLE_ACTIVE[role])
             shell = big_boss.role_shell(shell, role, level, poisoned=poisoned)
         vehicle.shots += 1
-        if not (self.unlimited_ammo or (self.practice and vehicle.account_id is not None)):
-            vehicle.ammo -= 1
-        vehicle.ammo_by_shell[vehicle.shell_id] = vehicle.ammo
-        vehicle.clip -= 1
+        spend_round(vehicle, self.unlimited_ammo or self.practice and vehicle.account_id is not None)
         self.next_shot += 1
         origin,direction = self.shot_ray(vehicle)
         velocity = tuple(v*shell.speed for v in direction)
@@ -2745,6 +2826,7 @@ class Arena:
         self.world.set_flight_velocity(entity, (vx+fz*drift, vy, vz-fx*drift), spin)
 
     def _emit_shot(self, vehicle, shell, origin, velocity, now, shot_effect, shooting_count=1):
+        self._end_mad_cloak(vehicle, now)
         if getattr(shell, 'railgun', False):
             shot_effect = shell.effect_index
         self.projectiles[self.next_shot].trace_effect = shot_effect
@@ -2758,28 +2840,16 @@ class Arena:
     def _missile_target(self, projectile):
         shooter = self.vehicles[projectile.shooter]
         player = self.players.get(shooter.account_id)
-        if not (player and player.attached and shooter.alive):
+        if not (player and self._player_attached(shooter) and shooter.alive):
             return None
+        camera = None
         if self.sandbox_enabled:
             control = self._active_sandbox_control(shooter, self.simulation_time)
             if control and control.flags & sandbox.MISSILE_VIEW and control.shot == projectile.shot:
-                return tuple(p + d*projectile.shell.max_distance
-                             for p,d in zip(projectile.position,control.direction()))
-        # _aim has already refreshed the gun's world point from the current
-        # target pose when the player has an active lock.
-        point = shooter.gun.point
-        if point is None:
-            origin,direction = self.shot_ray(shooter)
-            return tuple(p + d*projectile.shell.max_distance for p,d in zip(origin,direction))
-        if shooter.gun.local:
-            point = tuple(p + offset for p,offset in zip(shooter.pose.position,point))
-        if shooter.autoaim_target or sum((p-q)*v for p,q,v in
-                                         zip(point,projectile.position,projectile.velocity)) > 0:
-            return point
-        # The reticle can land on a nearby wall while the missile is already
-        # beyond it. Use that sight bearing to keep steering from its position.
-        origin,_ = self.shot_ray(shooter)
-        return tuple(q + p - o for q,p,o in zip(projectile.position,point,origin))
+                camera = control.direction()
+        return missile_guidance_target(projectile, shooter.gun, shooter.pose.position,
+                                       lambda: self.shot_ray(shooter), locked=bool(shooter.autoaim_target),
+                                       camera=camera)
 
     def _fire_burst_next(self, vehicle, now):
         shell,shot_effect = vehicle.burst_shell,vehicle.burst_effect
@@ -2802,7 +2872,7 @@ class Arena:
         origin,velocity,shell = self._launch(vehicle,shell,now)
         vehicle.burst_remaining -= 1
         if vehicle.burst_remaining:
-            delay = weapon.burst_interval/vehicle.reload_speed_factor*vehicle.interval_factor
+            delay = self._burst_duration(vehicle)
             vehicle.reload_kind = 'interval'
             vehicle.reload_at = now+delay
             vehicle.reload_total = delay
@@ -2816,15 +2886,8 @@ class Arena:
         # The initial event already started this group's muzzle/audio sequence.
         # Its remaining physical projectiles still each need their own tracer.
         self._emit_shot(vehicle,shell,origin,velocity,now,shot_effect,0)
-        if not vehicle.burst_pending:
-            pending = vehicle.burst_switch_shell
-            vehicle.burst_switch_shell = 0
-            if pending and pending!=vehicle.shell_id and vehicle.ammo_by_shell.get(pending,0)>0:
-                vehicle.ammo_by_shell[vehicle.shell_id] = vehicle.ammo
-                vehicle.selected_shell = pending
-                vehicle.ammo = vehicle.ammo_by_shell[pending]
-                vehicle.clip = min(vehicle.clip,vehicle.ammo)
-                self.emit('shell_selected',vehicle.entity_id,shell=pending)
+        if not vehicle.burst_pending and (pending := apply_burst_shell_switch(vehicle)):
+            self.emit('shell_selected',vehicle.entity_id,shell=pending)
         self.emit('ammo',vehicle.entity_id)
         self.emit('reload',vehicle.entity_id,delay=delay)
 
@@ -2841,13 +2904,7 @@ class Arena:
             vehicle.reload_total = delay
             vehicle.pump_waiting = True
         else:
-            pending = vehicle.next_shell
-            if pending and pending!=vehicle.shell_id and vehicle.ammo_by_shell.get(pending,0)>0:
-                vehicle.ammo_by_shell[vehicle.shell_id] = vehicle.ammo
-                vehicle.selected_shell = pending
-                vehicle.ammo = vehicle.ammo_by_shell[pending]
-                switched = pending
-            vehicle.next_shell = 0
+            switched = apply_queued_shell(vehicle)
             vehicle.reload_at = 0.
             self._pump_segment(vehicle,now)
         self._emit_shot(vehicle,shell,origin,velocity,now,shot_effect)
@@ -2888,8 +2945,11 @@ class Arena:
         if not self.started or self.finished_at or not player.attached or not player.loaded or not vehicle.alive:
             reason = 'Vehicle cannot use consumables now'
         elif (type(ident) is not int or state is None or extra and not (
-                role_input and ident in big_boss.GRAVITON_INPUT_IDS and len(extra) == 36)):
+                role_input and ident in big_boss.GRAVITON_INPUT_IDS and len(extra) == 36
+                or state.spec is mad_games.IRRADIATOR and len(extra) == 4)):
             reason = 'Consumable is not installed or extra arguments are unsupported'
+        elif state.spec is mad_games.URANIUM_SHIELD:
+            reason = 'Uranium Shield activates automatically'
         elif state.spec is big_boss.MEGASHOT or state.spec in big_boss.SHIELD_SPECS:
             reason = 'This ability activates on firing'
         elif state.spec.action == 'extinguish' and not self._fire_active(vehicle):
@@ -2907,6 +2967,11 @@ class Arena:
             return False
         if state.spec is GRAVITY_JUMP_SPEC:
             return self._gravity_jump(vehicle)
+        if state.spec is mad_games.ACCELERATOR:
+            return self._activate_mad_dash(vehicle, state, now)
+        if state.spec is mad_games.IRRADIATOR:
+            requested = int.from_bytes(extra, 'little') if extra else None
+            return self._activate_mad_irradiator(vehicle, state, now, requested)
         if state.spec is big_boss.BLAST_WAVE:
             return self._boss_blast(vehicle)
         if state.spec in big_boss.ACTIVE_SPECS:
@@ -2915,6 +2980,154 @@ class Arena:
             self.emit('consumable_rejected', vehicle.entity_id, ident=ident,
                       reason='Consumable is cooling down or has no live target', at=now)
             return False
+        return True
+
+    def _install_mad_games_ability(self, vehicle):
+        game = self._mad_games_game
+        limit = sandbox.FAST_RELOAD_SECONDS if vehicle.sandbox_fast_reload else None
+        mad_games.install_ability(vehicle, vehicle_class(game, vehicle.definition), game, cooldown_limit=limit)
+        vehicle.mad_unspotted = True
+
+    def _activate_mad_irradiator(self, vehicle, state, now, requested):
+        entity, _ = self.aim_hit(vehicle)
+        target = self.vehicles.get(entity)
+        if (target is None or not target.alive or target.team == vehicle.team or mad_games.concealed(target, vehicle.team)
+                or not self._player_attached(target) or requested not in (None, entity)):
+            return False
+        if (mark := self.mad_irradiated.get(entity)) and now < mark.end:
+            return False
+        if not self._activate_consumable(vehicle, state, now):
+            return False
+        mark = mad_games.Irradiated(vehicle.team, now, state.active_until)
+        self.mad_irradiated[entity] = mark
+        self._set_mad_spotted(vehicle, True, now)
+        self._publish_state_modifiers(target)
+        self.emit('mad_vehicle_effects', entity, effects=mad_games.irradiation_effects(mark))
+        return True
+
+    def _clear_mad_irradiator(self, vehicle):
+        if self.mad_irradiated.pop(vehicle.entity_id, None) is not None:
+            self._publish_state_modifiers(vehicle)
+            self.emit('mad_vehicle_effects', vehicle.entity_id, effects=())
+
+    def _mad_outgoing_factor(self, shooter, target, at):
+        factor = mad_games.discharge_factor(shooter, at)
+        mark = self.mad_irradiated.get(target.entity_id)
+        if mark is not None and mark.team == shooter.team and mark.start <= at < mark.end:
+            factor *= mad_games.IRRADIATED_DAMAGE
+        return factor
+
+    def _update_mad_games(self, now):
+        living = tuple(vehicle for vehicle in self.vehicles.values()
+                       if vehicle.alive and self._player_attached(vehicle))
+        for vehicle in living:
+            if vehicle.mad_revenge:
+                self._expire_mad_revenge(vehicle, now)
+            if vehicle.mad_passive != mad_games.COORDINATOR:
+                continue
+            allies = min(mad_games.COORDINATOR_LIMIT, sum(
+                other is not vehicle and other.team == vehicle.team
+                and math.dist(vehicle.pose.position, other.pose.position) <= mad_games.COORDINATOR_RADIUS
+                for other in living))
+            if allies != vehicle.mad_coordinator_allies:
+                vehicle.mad_coordinator_allies = allies
+                vehicle.aiming_time_factor = 1. / (1. + allies * mad_games.COORDINATOR_BONUS)
+                self._publish_state_modifiers(vehicle)
+                self.emit('targeting', vehicle.entity_id, yaw_rate=vehicle.gun.yaw_rate,
+                          pitch_rate=vehicle.gun.pitch_rate)
+        self._update_mad_spotting(living, now)
+        for entity, mark in tuple(self.mad_irradiated.items()):
+            target = self.vehicles[entity]
+            if (not target.alive or mad_games.concealed(target, mark.team)
+                    or not self._player_attached(target) or now >= mark.end):
+                self._clear_mad_irradiator(target)
+
+    def _set_mad_spotted(self, vehicle, spotted, now=None):
+        was_hidden = vehicle.mad_cloaked or vehicle.mad_unspotted
+        vehicle.mad_unspotted = not spotted
+        self._publish_mad_visibility(vehicle, was_hidden, self.simulation_time if now is None else now)
+
+    def _publish_mad_visibility(self, vehicle, was_hidden, now):
+        hidden = vehicle.mad_cloaked or vehicle.mad_unspotted
+        if hidden != was_hidden:
+            if hidden:
+                self._lose_target(vehicle.entity_id, include_owner=False)
+            self.emit('mad_cloak', vehicle.entity_id, enabled=hidden, pose=vehicle.pose)
+        if hidden or not vehicle.alive:
+            vehicle.mad_observation_due = None
+            if vehicle.mad_observation_warning:
+                vehicle.mad_observation_warning = False
+                self.emit('mad_observation_warning', vehicle.entity_id, observed=False)
+        elif not vehicle.mad_observation_warning:
+            if vehicle.mad_observation_due is None:
+                delay = (mad_games.SABOTEUR_WARNING_DELAY if vehicle.mad_passive == mad_games.SABOTEUR
+                         else mad_games.OBSERVATION_WARNING_DELAY)
+                vehicle.mad_observation_due = now + delay
+            if now >= vehicle.mad_observation_due:
+                vehicle.mad_observation_due = None
+                vehicle.mad_observation_warning = True
+                self.emit('mad_observation_warning', vehicle.entity_id, observed=True)
+
+    def _update_mad_spotting(self, living, now, targets=None):
+        targets = living if targets is None else targets
+        spotted = set()
+        candidates, starts, ends = [], [], []
+        for observer in living:
+            x, y, z = observer.pose.position
+            sight = mad_games.view_range(observer)
+            for target in targets:
+                if target.team == observer.team or target.mad_cloaked or target.entity_id in spotted:
+                    continue
+                distance = math.dist(observer.pose.position, target.pose.position)
+                if distance <= mad_games.PROXIMITY_RANGE or self.world is None and distance <= sight:
+                    spotted.add(target.entity_id)
+                elif distance <= sight:
+                    tx, ty, tz = target.pose.position
+                    candidates.append(target.entity_id)
+                    starts.append((x, y + 1.4, z))
+                    ends.append((tx, ty + 1.1, tz))
+        if candidates:
+            hits = self.world._visibility_rays(starts, ends)
+            spotted.update(entity for entity, hit in zip(candidates, hits)
+                           if hit[0] < 0 or hit[2] >= .999)
+        for vehicle in targets:
+            if vehicle.mad_cloaked:
+                vehicle.mad_spotted_until = 0.
+                self._set_mad_spotted(vehicle, False, now)
+                continue
+            if vehicle.entity_id in spotted:
+                retention = mad_games.SPOT_RETENTION
+                if vehicle.mad_passive == mad_games.SABOTEUR:
+                    retention *= mad_games.SABOTEUR_RETENTION_FACTOR
+                vehicle.mad_spotted_until = now + retention
+            visible = (now < vehicle.mad_spotted_until
+                       or mad_games.active(vehicle, mad_games.IRRADIATOR, now))
+            self._set_mad_spotted(vehicle, visible, now)
+
+    def _expire_mad_revenge(self, vehicle, now):
+        before = len(vehicle.mad_revenge)
+        for key, end in tuple(vehicle.mad_revenge.items()):
+            entity, generation = key
+            target = self.vehicles[entity]
+            if now >= end or not target.alive or target.generation != generation:
+                del vehicle.mad_revenge[key]
+        if len(vehicle.mad_revenge) != before:
+            self._publish_mad_revenge(vehicle)
+
+    def _publish_mad_revenge(self, vehicle):
+        self._publish_state_modifiers(vehicle)
+        self.emit('mad_revenge_targets', vehicle.entity_id)
+
+    def _activate_mad_dash(self, vehicle, state, now):
+        engine = self.engines.get(vehicle.entity_id)
+        if (self.world is None or self._vehicle_airborne(vehicle)
+                or any(track.critical or track.broken for track in vehicle.tracks.values())
+                or engine is not None and (engine.critical or engine.destroyed)):
+            return False
+        if not self._activate_consumable(vehicle, state, now):
+            return False
+        flags = self._active_control_flags(vehicle, now)
+        vehicle.mad_dash_direction = -1 if flags & 2 and not flags & 1 else 1
         return True
 
     def _activate_consumable(self, vehicle, state, at, *, fire_advanced=False):
@@ -2938,8 +3151,17 @@ class Arena:
             if not self._needs_restoration(vehicle):
                 return False
             self._consumables(vehicle, max(vehicle.consumable_clock, self.simulation_time, at))
-        if not state.activate(at):
+        if state.spec is mad_games.URANIUM_SHIELD:
             return False
+        cost = (max(1, round(vehicle.max_health * mad_games.DISCHARGE_HP_COST))
+                if state.spec is mad_games.DISCHARGE else 0)
+        if vehicle.health <= cost or not state.activate(at):
+            return False
+        if cost:
+            vehicle.health -= cost
+            self.emit('health', vehicle.entity_id, vehicle.entity_id, health=vehicle.health)
+            self.emit('provision_effect', vehicle.entity_id, compact_id=state.spec.compact_id,
+                      allies_only=mad_games.concealed(vehicle, 3 - vehicle.team))
         if state.spec.action == 'repair':
             self._repair_tracks(vehicle, at)
         elif state.spec.action == HEAL:
@@ -2959,6 +3181,12 @@ class Arena:
                   interval_factor=vehicle.interval_factor)
         return True
 
+    def _end_mad_cloak(self, vehicle, at):
+        if vehicle.mad_cloaked:
+            state = next(slot for slot in vehicle.consumables if slot and slot.spec is mad_games.CHAMELEON)
+            state.stop(max(at, vehicle.consumable_clock))
+            self._consumables(vehicle, max(at, vehicle.consumable_clock))
+
     def _consumables(self, vehicle, now, *, sync_movable=True, refresh_cooldowns=False):
         # Fixed steps cross expiry by at most STEP. Split the rate change at
         # the exact simulation timestamp, preserving completed reload work.
@@ -2972,6 +3200,8 @@ class Arena:
         role_rate = big_boss.RELOAD_RATE if boss else 1.
         if self.big_boss is not None and self.big_boss.roles.get(vehicle.entity_id) == big_boss.CATALYST:
             role_rate = 1. / big_boss.CATALYST_RELOAD[self.big_boss.levels[vehicle.entity_id]]
+        if vehicle.mad_coordinator_allies:
+            role_rate *= 1. + vehicle.mad_coordinator_allies * mad_games.COORDINATOR_BONUS
         for at in (*expiries, now):
             self._advance_pump(vehicle, at, now)
             views = [s.state_at(at) for s in vehicle.consumables if s]
@@ -3053,9 +3283,28 @@ class Arena:
             previous = vehicle.consumable_status.get(state.spec.ident)
             if previous != view.state or (refresh_cooldowns and view.state == COOLDOWN):
                 vehicle.consumable_status[state.spec.ident] = view.state
+                if state.spec is mad_games.CHAMELEON and vehicle.mad_cloaked != (view.state == ACTIVE):
+                    was_hidden = vehicle.mad_cloaked or vehicle.mad_unspotted
+                    vehicle.mad_cloaked = view.state == ACTIVE
+                    if vehicle.mad_cloaked:
+                        self.emit('mad_chameleon_fx', vehicle.entity_id, active=True, spotted=not was_hidden)
+                        vehicle.mad_unspotted = True
+                        vehicle.mad_spotted_until = 0.
+                        self._clear_mad_irradiator(vehicle)
+                    self._publish_mad_visibility(vehicle, was_hidden, now)
+                    if not vehicle.mad_cloaked and vehicle.alive:
+                        observers = tuple(v for v in self.vehicles.values()
+                                          if v.alive and self._player_attached(v))
+                        self._update_mad_spotting(observers, now, targets=(vehicle,))
+                        self.emit('mad_chameleon_fx', vehicle.entity_id, active=False,
+                                  spotted=not vehicle.mad_unspotted)
                 if (ACTIVE in (previous, view.state)
-                        and state.spec in big_boss.ROLE_ACTIVE[big_boss.CATALYST]):
+                        and (state.spec in big_boss.ROLE_ACTIVE[big_boss.CATALYST]
+                             or state.spec is mad_games.REFLECTOR)):
                     self._publish_state_modifiers(vehicle)
+                    if state.spec is mad_games.REFLECTOR:
+                        self.emit('mad_reflector_fx', vehicle.entity_id, active=view.state == ACTIVE,
+                                  spotted=not mad_games.concealed(vehicle, 3 - vehicle.team))
                 self.emit('consumable_state', vehicle.entity_id, ident=state.spec.ident,
                           compact_id=state.spec.compact_id, state=view.state,
                           remaining=view.remaining, total=view.total, at=now,
@@ -3165,8 +3414,11 @@ class Arena:
     def finish(self, winner=0, reason='timeout', now=None):
         if self.finished_at:
             return
-        if getattr(self, 'time_stop', None) is not None:
-            self.time_stop.abort()
+        timeline = getattr(self, 'time_stop', None)
+        if timeline is not None:
+            if timeline.defer_finish(winner, reason, now):
+                return
+            timeline.abort(battle_ended=True)
         at = self.simulation_time if now is None else now
         for vehicle in self.vehicles.values():
             if vehicle.alive:
@@ -3185,6 +3437,8 @@ class Arena:
             self.emit('shot_end',projectile.shooter,shot=projectile.shot,point=projectile.position,
                       **({'guided':True} if projectile.shell.missile is not None else {}))
         self.projectiles.clear()
+        for entity in tuple(self.mad_irradiated):
+            self._clear_mad_irradiator(self.vehicles[entity])
         if self.big_boss is not None:
             for entity in tuple(self.big_boss.heal_waves):
                 del self.big_boss.heal_waves[entity]
@@ -3275,7 +3529,9 @@ class Arena:
             self.world.destroy(event.obstacle,event.direction[::2],damage=shell.damage)
         shell = event.shell or self.shell_for(shooter)
         target = self.vehicles.get(event.target)
-        if (shell and shell.healing_level is not None and event.result.hit is not None
+        heals_ally = shell is not None and (shell.healing_level is not None or
+            shooter.mad_passive == mad_games.REGENERATOR and shell.kind in mad_games.HEALING_SHELLS)
+        if (heals_ally and event.result.hit is not None
                 and target is not None and target.alive and target.team == shooter.team
                 and target is not shooter):
             self._apply_impact(event, event.result, event.target, direct=True, shell=shell, fire_at=fire_at)
@@ -3343,6 +3599,13 @@ class Arena:
             self.emit('shot_end', event.shooter, shot=event.shot, point=event.point,
                       guided=shell.missile is not None)
             return
+        if (direct and target is not None and target.alive and not enemy and target is not shooter
+                and shell is not None and shell.kind in mad_games.HEALING_SHELLS
+                and shooter.mad_passive == mad_games.REGENERATOR and result.hit is not None):
+            self._mad_heal(shooter, target, shell.damage * mad_games.ALLY_HEAL)
+            self.emit('shot_end', event.shooter, shot=event.shot, point=event.point,
+                      guided=shell.missile is not None)
+            return
         if enemy and target.alive:
             self._advance_fire(target, fire_at)
         # Local spall liner rule: the target's own factor scales the final rolled
@@ -3361,9 +3624,21 @@ class Arena:
             anti_he_factor = getattr(target.definition,'he_damage_factor',1.)
             factor *= anti_he_factor
         elif (not detonate_ammo_rack and enemy and shell is not None
-              and shell.kind in _SHIELDED_KINDS):
+              and shell.kind in SHIELDED_SHELL_KINDS):
             factor *= self._shield_factor(target,event.at)
         raw = result.damage
+        reflected = 0.
+        if self.mad_games_mode and enemy and target.alive:
+            factor *= self._mad_outgoing_factor(shooter, target, event.at)
+            if direct and (result.hit is not None or raw > 0):
+                expiry = shooter.mad_revenge.pop((target.entity_id, target.generation), None)
+                if expiry is not None:
+                    if event.at < expiry:
+                        factor *= mad_games.REVENGE_DAMAGE
+                    self._publish_mad_revenge(shooter)
+            if (shell is not None and (raw > 0 or direct and result.hit is not None)
+                    and mad_games.active(target, mad_games.REFLECTOR, event.at)):
+                reflected = shell.damage * mad_games.REFLECTED_DAMAGE
         mitigated = factor!=1 and raw>0 and target.alive
         if mitigated:
             result = dataclasses.replace(result,damage=int(factor*raw+.5))
@@ -3371,7 +3646,14 @@ class Arena:
             result = dataclasses.replace(result, outcome='not_penetrated', damage=0)
             detonate_ammo_rack = False
         damage = (target.health if detonate_ammo_rack and enemy and target.alive
-                  else min(target.health,result.damage) if enemy else 0)
+                  else result.damage if enemy else 0)
+        if self.mad_games_mode and enemy and target.alive and not detonate_ammo_rack:
+            shielded = self._mad_shield_damage(target, damage, fire_at)
+            if shielded != damage:
+                result = dataclasses.replace(result, damage=shielded)
+                damage = shielded
+        if enemy:
+            damage = min(target.health, damage)
         if damage > 0 and self._consume_boss_shield(target, fire_at):
             damage = 0
             result = dataclasses.replace(result, damage=0, outcome='not_penetrated')
@@ -3395,6 +3677,7 @@ class Arena:
                   result=result,applied_damage=damage,at=event.at,**({'raw_damage':raw} if mitigated else {}),
                   **({'blocked_damage':blocked} if blocked else {}),
                   **({'hit_effect':hit_effect} if hit_effect is not None else {}),
+                  **({'reflector_hit':True} if reflected and hit_effect is not None else {}),
                   **({'guided':True} if direct and shell and shell.missile is not None else {}))
         if mitigated and damage and he and anti_he_factor != 1:
             # Semantic FX only: no timer or invulnerability; wire framing is root-owned.
@@ -3415,22 +3698,49 @@ class Arena:
                 target.piercings_received += 1
             self.emit('feedback',event.shooter,target.entity_id,outcome=result.outcome)
         if damage:
-            self._damage_health(target, damage, event.shooter, fire_at, shell_hit=True,
-                                hit_effect=hit_effect)
+            damage = self._damage_health(target, damage, event.shooter, fire_at, shell_hit=True,
+                                         hit_effect=hit_effect, reflector_hit=bool(reflected and hit_effect))
             if target.alive and shell is not None and shell.poison_level is not None:
                 self._boss_poison(shooter, target, shell.poison_level, fire_at)
+            if direct and target.alive and shooter.alive and target.mad_passive == mad_games.TOXIC_STARE:
+                key = (shooter.entity_id, shooter.generation)
+                already_marked = key in target.mad_revenge
+                target.mad_revenge[key] = fire_at + mad_games.REVENGE_DURATION
+                if not already_marked:
+                    self._publish_mad_revenge(target)
+        if reflected:
+            self._apply_mad_reflected_damage(target, shooter,
+                damage * mad_games.REFLECTED_DAMAGE if damage else reflected, fire_at)
+        if (self.mad_games_mode and enemy and direct and shell is not None
+                and target.entity_id in self.training_bots and target.alive
+                and (damage or result.hit is not None and not result.hit.external)):
+            # React to the completed hit. Only later projectiles can be
+            # reflected, even if the first hit arrived during our reload.
+            state = next((slot for slot in target.consumables
+                          if slot and slot.spec is mad_games.REFLECTOR), None)
+            if state is not None:
+                self._activate_consumable(target, state, fire_at)
 
-    def _damage_health(self, target, amount, source, at, *, shell_hit, hit_effect=None, kinetic=False, manual_respawn=False):
+    def _apply_mad_reflected_damage(self, reflector, attacker, amount, at):
+        if attacker.alive and not attacker.sandbox_god_mode:
+            self._damage_health(attacker, int(amount+.5), reflector.entity_id, at,
+                                shell_hit=False, reflected=True)
+
+    def _damage_health(self, target, amount, source, at, *, shell_hit, hit_effect=None,
+                       kinetic=False, manual_respawn=False, reflected=False, reflector_hit=False):
         """True clamped HP damage, shared death/stats, no invented impact RPC."""
         if not target.alive or target.entity_id in self._suspended_entities():
             return 0
         if kinetic and self.big_boss is not None:
             amount = int(amount * self.big_boss.damage_factor(target.entity_id) + .5)
+        shooter = self.vehicles[source] if source is not None else None
+        enemy = shooter is not None and shooter.team != target.team
+        if self.mad_games_mode and enemy and not (shell_hit or kinetic or reflected):
+            amount = int(amount * self._mad_outgoing_factor(shooter, target, at) + .5)
         damage = min(target.health, amount)
         if damage <= 0:
             return 0
-        shooter = self.vehicles[source] if source is not None else None
-        enemy = shooter is not None and shooter.team != target.team
+        self._end_mad_cloak(target, at)
         if shell_hit and enemy:
             shooter.hits += 1
         if enemy:
@@ -3451,7 +3761,10 @@ class Arena:
         self.emit('health', source or 0, target.entity_id, health=target.health,
                   **({'received_damage': damage} if shell_hit and shooter is not None
                      and shooter.entity_id != target.entity_id else {}),
+                  **({'reflector_hit':True} if reflector_hit else {}),
                   **({'hit_effect':hit_effect} if hit_effect is not None else {}))
+        if enemy and not kinetic and shooter.mad_passive == mad_games.REGENERATOR:
+            self._mad_heal(shooter, shooter, damage * mad_games.LIFESTEAL)
         if enemy and self.big_boss is not None and shooter.entity_id in self.big_boss.roles:
             entity = shooter.entity_id
             progress = self.big_boss.role_progress(entity, shooter.max_health)
@@ -3467,6 +3780,12 @@ class Arena:
                     self.emit('boss_role_progress', entity, role=self.big_boss.roles[entity],
                               level=self.big_boss.levels[entity], progress=updated)
         if not target.alive:
+            if self.mad_games_mode:
+                self._set_mad_spotted(target, True, at)
+                if target.mad_revenge:
+                    target.mad_revenge.clear()
+                    self._publish_mad_revenge(target)
+                self._clear_mad_irradiator(target)
             death_blast = None
             if (not manual_respawn and self.big_boss is not None and self.world is not None
                     and self.big_boss.roles.get(target.entity_id) == big_boss.BOMBER):
@@ -3583,7 +3902,9 @@ class Arena:
             if fraction >= 1.:
                 # A new severe peak breaks the belt even if a few repair HP
                 # regenerated since the earlier contact in this episode.
-                amount = track.health
+                amount = max(track.health, amount)
+            if self.mad_games_mode:
+                amount = mad_games.track_damage(vehicle, amount, at)
             applied = min(track.health,amount)
             track.damage(amount,at)
             if applied:
@@ -3592,27 +3913,6 @@ class Arena:
             if before != (track.broken,track.critical) or track.broken and applied:
                 self._module_changed(vehicle, part, 1 if track.broken else 0, at,
                                      track_just_broke=track.broken and not before[0])
-
-    @staticmethod
-    def _skid_velocity(previous, yaw, speed, grip_step):
-        """Preserve world-space momentum that tracks cannot turn in one tick."""
-        fx,fz = math.sin(yaw),math.cos(yaw)
-        along = previous[0]*fx+previous[1]*fz
-        lateral_x,lateral_z = previous[0]-along*fx,previous[1]-along*fz
-        lateral = math.hypot(lateral_x,lateral_z)
-        residual = max(0.,lateral-grip_step)
-        if lateral > 1e-8:
-            factor = residual/lateral
-            lateral_x,lateral_z = lateral_x*factor,lateral_z*factor
-        vx,vz = speed*fx+lateral_x,speed*fz+lateral_z
-        # Turning changes the direction of velocity, not its energy. Engine
-        # acceleration may raise the limit through ``speed``; leftover slip
-        # alone must never push the tank beyond that limit.
-        limit = max(math.hypot(*previous),abs(speed))
-        magnitude = math.hypot(vx,vz)
-        if magnitude > limit and magnitude > 0.:
-            vx,vz = vx*limit/magnitude,vz*limit/magnitude
-        return (vx,vz),residual
 
     def _ground_impact(self, impact, at):
         """Emit one resolved tank-pair impact and apply its ram HP damage.
@@ -3625,24 +3925,66 @@ class Arena:
         actor = details.pop('entity_a')
         target = details.pop('entity_b')
         damage = {}
+        healing = []
+        reflectors = set()
+        reflected = []
         if details.get('ram'):
             a, b = self.vehicles[actor], self.vehicles[target]
-            if a.alive and b.alive and a.team != b.team:
-                for vehicle, energy in ((a, details['ram_energy_a']),
-                                        (b, details['ram_energy_b'])):
+            if a.alive and b.alive and (a.team != b.team or self.mad_games_mode):
+                self._end_mad_cloak(a, at)
+                self._end_mad_cloak(b, at)
+                for vehicle, other, energy in ((a, b, details['ram_energy_a']),
+                                               (b, a, details['ram_energy_b'])):
                     protection = getattr(getattr(vehicle.definition,
                                                  'module_protection', None),
                                          'ramming_absorption_percent', 0.)
-                    damage[vehicle.entity_id] = min(vehicle.health,
-                        int(self.RAM_DAMAGE_PER_KILOJOULE*energy/1000
-                            *(1-protection/100)+.5))
+                    nominal = self.RAM_DAMAGE_PER_KILOJOULE*energy/1000 * (1-protection/100)
+                    if vehicle.team == other.team:
+                        if other.mad_passive == mad_games.REGENERATOR:
+                            healing.append((other, vehicle, nominal * mad_games.ALLY_HEAL))
+                        continue
+                    if other.mad_passive == mad_games.RAMMER:
+                        nominal *= mad_games.RAM_OUTGOING
+                    if vehicle.mad_passive == mad_games.RAMMER:
+                        nominal *= mad_games.RAM_INCOMING
+                    if self.mad_games_mode:
+                        # Driving can stop the dash at this tick's end when it
+                        # hits a hull. The collision still happened during it.
+                        if mad_games.active(vehicle, mad_games.ACCELERATOR, math.nextafter(at, -math.inf)):
+                            nominal *= mad_games.DASH_RAM_DAMAGE_FACTOR
+                        nominal *= self._mad_outgoing_factor(other, vehicle, at)
+                    amount = int(nominal+.5)
+                    if self.mad_games_mode:
+                        amount = self._mad_shield_damage(vehicle, amount, at)
+                        if mad_games.active(vehicle, mad_games.REFLECTOR, at):
+                            reflectors.add(vehicle.entity_id)
+                    damage[vehicle.entity_id] = min(vehicle.health, amount)
             details.update(ram_damage_a=damage.get(actor, 0),
                            ram_damage_b=damage.get(target, 0))
         self.emit('ground_impact', actor, target, **details)
         for entity, source in ((actor, target), (target, actor)):
             if damage.get(entity):
-                self._damage_health(self.vehicles[entity], damage[entity], source, at,
-                                    shell_hit=False, kinetic=True)
+                applied = self._damage_health(self.vehicles[entity], damage[entity], source, at,
+                                              shell_hit=False, kinetic=True)
+                attacker = self.vehicles[source]
+                defender = self.vehicles[entity]
+                if attacker.mad_passive == mad_games.REGENERATOR:
+                    healing.append((attacker, attacker, applied * mad_games.LIFESTEAL))
+                if entity in reflectors:
+                    reflected.append((defender, attacker, applied * mad_games.REFLECTED_DAMAGE))
+        for defender, attacker, amount in reflected:
+            self._apply_mad_reflected_damage(defender, attacker, amount, at)
+        for source, receiver, amount in healing:
+            self._mad_heal(source, receiver, amount)
+
+    def _mad_shield_damage(self, target, damage, at):
+        if damage <= target.max_health * mad_games.SHIELD_THRESHOLD:
+            return damage
+        for slot in target.consumables:
+            if slot and slot.spec is mad_games.URANIUM_SHIELD and slot.activate(at):
+                self.emit('provision_effect', target.entity_id, compact_id=slot.spec.compact_id)
+                return int(damage * mad_games.SHIELD_DAMAGE + .5)
+        return damage
 
     @staticmethod
     def _shield_factor(vehicle, at):
@@ -3659,62 +4001,20 @@ class Arena:
 
     @staticmethod
     def _powered_acceleration(vehicle, forward, *, speed=None, resistance=1., mode_power=1.):
-        """Return the grounded drive acceleration for a complete vehicle definition.
-
-        XML exposes vehicle mass and engine horsepower, but not the native
-        gearbox/traction equation.  This is deliberately a small, explicit
-        local drivetrain rather than a claim to have recovered that equation:
-        it caps launch acceleration at 5 m/s² and limits longitudinal force
-        by engine power with a fixed low-gear speed. Thus a light, powerful
-        vehicle keeps accelerating longer than a heavy vehicle with the same
-        caps, while the existing collision and airborne solvers stay intact.
-
-        ``None`` preserves the legacy kinematic path for minimal fixtures and
-        incomplete definitions.  It is also used for braking: XML brake-force
-        units have not yet been calibrated against a native trace, so applying
-        them here would silently make stopping behaviour worse.
-        """
-        definition = getattr(vehicle, 'definition', None)
-        drive = getattr(definition, 'drive', None)
-        mass = getattr(definition, 'mass', None)
-        power_hp = getattr(drive, 'engine_power_hp', None)
-        if (forward not in (-1, 1) or isinstance(mass, bool)
-                or not isinstance(mass, (int, float)) or not math.isfinite(mass) or mass <= 0
-                or isinstance(power_hp, bool) or not isinstance(power_hp, (int, float))
-                or not math.isfinite(power_hp) or power_hp <= 0):
+        if forward not in (-1, 1):
             return None
-        # Timed boosts multiply the currently installed engine only.  Permanent
-        # fuel/oil modifications are already baked into ``engine_power_hp`` by
-        # apply_definition(), so they must not be applied twice here.
-        factor = vehicle.engine_factor * (sandbox.BOOST_POWER if getattr(vehicle,'sandbox_boost',False) else 1.)
-        factor *= mode_power
-        if (isinstance(factor, bool) or not isinstance(factor, (int, float))
-                or not math.isfinite(factor) or factor <= 0):
-            return None
-        power_watts = power_hp * 735.49875 * factor
-        # The fixed low gear avoids a singular P/v at rest while retaining
-        # the effect of power/mass during launch. Terrain cannot amplify P.
+        # Installed power includes permanent fuel/oil. Only timed boosts apply here.
+        factor = getattr(vehicle, 'engine_factor', 1.) * (
+            sandbox.BOOST_POWER if getattr(vehicle, 'sandbox_boost', False) else 1.)
         speed = vehicle.speed if speed is None else speed
-        return forward*engine_acceleration(power_watts,mass,speed,resistance)
+        acceleration = powered_acceleration(getattr(vehicle, 'definition', None), speed, resistance, factor * mode_power)
+        return forward * acceleration if acceleration is not None else None
 
     def _terrain_mobility(self, vehicle):
-        drive = getattr(vehicle.definition,'drive',None)
-        coefficients = getattr(drive,'terrain_resistance',None)
-        if coefficients is None:
-            return TerrainMobility(1.,1.,1,'unavailable')
-        sampler = getattr(self.terrain,'mobility_index',None)
-        index = (sampler(vehicle.pose.position[0],vehicle.pose.position[2])
-                 if callable(sampler) else None)
-        try:
-            fallback = resolve_terrain_mobility(coefficients)
-        except ValueError:
-            return TerrainMobility(1.,1.,1,'unavailable')
-        if index is None:
-            return fallback
-        try:
-            return resolve_terrain_mobility(coefficients,index)
-        except ValueError:
-            return fallback
+        mobility = terrain_at(self.terrain, vehicle.definition, vehicle.pose.position)
+        if self.mad_games_mode and mad_games.active(vehicle, mad_games.HIGH_OCTANE, self.simulation_time):
+            mobility = dataclasses.replace(mobility, resistance=mobility.resistance*mad_games.TERRAIN_RESISTANCE_FACTOR)
+        return mobility
 
     def _drive_pitch(self, vehicle):
         """Road slope for forces, independent of suspension body lean."""
@@ -3723,50 +4023,11 @@ class Arena:
 
     @staticmethod
     def _braking_acceleration(vehicle):
-        """Return a bounded local braking deceleration in m/s².
-
-        Pinned 11.21 converts chassis ``brakeForce`` through ``g`` before its
-        own controller, so force divided by assembled mass is a useful local
-        starting point.  It is not the complete recovered controller: stock
-        XML includes sentinel-scale outliers (near zero and hundreds of m/s²).
-        Keep those on the established 12 m/s² fallback rather than allowing a
-        malformed or not-yet-understood definition to make a vehicle coast
-        indefinitely or stop in a single fixed step.
-        """
-        definition = getattr(vehicle, 'definition', None)
-        drive = getattr(definition, 'drive', None)
-        mass = getattr(definition, 'mass', None)
-        brake_force = getattr(drive, 'brake_force', None)
-        if (isinstance(mass, bool) or not isinstance(mass, (int, float))
-                or not math.isfinite(mass) or mass <= 0
-                or isinstance(brake_force, bool) or not isinstance(brake_force, (int, float))
-                or not math.isfinite(brake_force) or brake_force <= 0):
-            return 12.
-        deceleration = 9.81 * brake_force / mass
-        # The broad stock catalog has proven values below 0.001 and above 179.
-        # 1–20 covers the measured M41/T30/Maus scale while retaining the
-        # former behaviour for anomalous definitions and fast light vehicles.
-        return deceleration if 1. <= deceleration <= 20. else 12.
+        return braking_acceleration(getattr(vehicle, 'definition', None))
 
     @staticmethod
     def _slope_grip_acceleration(assets, pitch, gravity):
-        """Longitudinal grip limit beyond the pinned chassis climb angle.
-
-        This is a local traction approximation, not a recovered surface or
-        gearbox coefficient. Below the effective grip angle the ordinary
-        drive and brake response is unchanged. Above it, tracks cannot hold against
-        the downhill component of gravity, even with W or S held.
-        """
-        limit = getattr(assets, 'max_slope', None)
-        if (not isinstance(limit, (int, float)) or isinstance(limit, bool)
-                or not math.isfinite(limit) or not 0 < limit < math.pi/2
-                or not math.isfinite(pitch) or not math.isfinite(gravity)
-                or gravity <= 0):
-            return None
-        grip_coefficient = math.tan(limit)*Arena.SLOPE_GRIP_FACTOR
-        if abs(pitch) <= math.atan(grip_coefficient):
-            return None
-        return gravity * grip_coefficient * math.cos(pitch)**2
+        return slope_grip_acceleration(assets, pitch, gravity, Arena.SLOPE_GRIP_FACTOR)
 
     def _player_attached(self, vehicle):
         if (timeline := getattr(self, 'time_stop', None)) is not None and timeline.entity == vehicle.entity_id:
@@ -3847,6 +4108,10 @@ class Arena:
             factor *= self.big_boss.mobility(vehicle.entity_id)
         if self.gravity_mode:
             factor *= 1.35
+        if self.mad_games_mode and mad_games.active(vehicle, mad_games.HIGH_OCTANE, self.simulation_time):
+            factor *= mad_games.SPEED_FACTOR
+        if vehicle.mad_cloaked:
+            factor *= mad_games.CHAMELEON_SPEED_FACTOR
         if getattr(vehicle, 'sandbox_boost', False):
             factor *= sandbox.BOOST_SPEED
         return factor
@@ -3931,7 +4196,42 @@ class Arena:
             return done.value
         raise RuntimeError('Drive yielded more than one movement request')
 
+    def _drive_mad_dash(self, vehicle, state, dt, now):
+        # The final slice can be shorter than one physics tick. Consume only
+        # the part of this tick during which the drive impulse still applies.
+        active = max(0., min(now, state.active_until) - max(now-dt, state.activated_at))
+        distance = vehicle.mad_dash_direction * mad_games.DASH_SPEED * active
+        start = vehicle.pose
+        vehicle.pose, moved = yield ((distance, 0.), dict(entity=vehicle.entity_id, dt=dt))
+        motion = self.world.motion[vehicle.entity_id]
+        fx, fz = math.sin(start.yaw), math.cos(start.yaw)
+        vx, _, vz = motion.velocity
+        vehicle.speed = vx*fx + vz*fz
+        dx = vehicle.pose.position[0]-start.position[0]
+        dz = vehicle.pose.position[2]-start.position[2]
+        travelled = vehicle.mad_dash_direction * (dx*fx + dz*fz)
+        blocked = travelled < abs(distance)*.5
+        if not motion.grounded:
+            self._update_airborne_control_episode(vehicle, True, now)
+            self.emit('airborne', vehicle.entity_id, position=vehicle.pose.position,
+                      velocity=motion.velocity, at=now)
+        if blocked or not motion.grounded or now >= state.active_until:
+            state.stop(now)
+            vehicle.mad_dash_direction = 0
+            if motion.grounded:
+                vehicle.speed = max(-mad_games.DASH_EXIT_SPEED, min(mad_games.DASH_EXIT_SPEED, vehicle.speed))
+        return moved
+
     def _drive_steps(self, vehicle, dt, now):
+        if vehicle.mad_dash_direction:
+            state = next(slot for slot in vehicle.consumables if slot and slot.spec is mad_games.ACCELERATOR)
+            if (vehicle.alive and self._player_attached(vehicle) and not self._vehicle_airborne(vehicle)
+                    and now-dt < state.active_until):
+                if now > state.activated_at:
+                    return (yield from self._drive_mad_dash(vehicle, state, dt, now))
+            else:
+                state.stop(now)
+                vehicle.mad_dash_direction = 0
         initial_yaw = vehicle.pose.yaw
         airborne = self._vehicle_airborne(vehicle)
         self._update_airborne_control_episode(vehicle, airborne, now)
@@ -4003,10 +4303,6 @@ class Arena:
             vehicle.speed = (landing.velocity[0]*math.sin(vehicle.pose.yaw)
                              + landing.velocity[1]*math.cos(vehicle.pose.yaw))
         previous_speed = vehicle.speed
-        assets = self.world.assets_for(vehicle.entity_id) if self.world else None
-        pitch = self._drive_pitch(vehicle)
-        surface_cos = max(.05,math.cos(pitch)) if not airborne else 1.
-        mobility = self._terrain_mobility(vehicle)
         if broken:
             forward = turn = 0
         engine = self.engines.get(vehicle.entity_id)
@@ -4016,62 +4312,65 @@ class Arena:
             forward = turn = 0
             if not airborne and not ground_motion_active and landing is None:
                 vehicle.speed = 0.
+        # Held track input still drives engine audio during flight.
         drive_mask = flags & 15 if forward or turn else 0
         vehicle.engine_mode = ((0,0) if not vehicle.alive or engine is not None and engine.destroyed
                                else (3,drive_mask) if drive_mask else (1,0))
-        # Timed speed biases add once to the permanent caps (which already
-        # carry gear oil); shared assets and the definition are never changed.
-        # The pinned client exposes crew injury state. The official client
-        # support rule explicitly halves a shell-shocked driver's top speed;
-        # it does not provide a numeric acceleration or turn-rate multiplier.
-        # Apply only the documented cap here. The factor is queried from the
-        # per-vehicle CrewState on every fixed step, so a medkit restores the
-        # current drive without mutating shared assets.
-        driver_factor = self._drive_speed_factor(vehicle)
-        boost = getattr(vehicle, 'sandbox_boost', False)
-        top_forward = ((assets.forward_speed if assets else 11.5) + vehicle.forward_speed_bias) * driver_factor
-        top_reverse = ((assets.reverse_speed if assets else 5.) + vehicle.reverse_speed_bias) * driver_factor
-        target = forward*(top_forward if forward>0 else top_reverse)*surface_cos
-        # Turn rate takes only the timed rotation factor, never the engine one.
-        turn_rate = ((assets.rotation_speed if assets else math.radians(35))
-                     *vehicle.rotation_factor*mobility.turn_factor)
-        if pull is not None:
-            target = math.copysign(min(abs(target)*big_boss.TRAP_DRIVE_SPEED_FACTOR,
-                                       big_boss.TRAP_DRIVE_SPEED_CAP), target)
-            turn_rate *= big_boss.TRAP_TURN_FACTOR
-        # A complete native definition uses the bounded local P/v drivetrain.
-        # Braking now has a separate guarded force/mass approximation; neither
-        # branch changes gravity or collision response.
-        drive = getattr(vehicle.definition, 'drive', None)
-        fuel = drive.power_bonus_factor if drive is not None else 1.
-        acceleration = (self._braking_acceleration(vehicle)
-                        if not forward or vehicle.speed*forward<0 else None)
-        if acceleration is None:
-            mode_power = 1.5 if self.gravity_mode else 1.
-            powered = self._powered_acceleration(vehicle,forward,
-                speed=vehicle.speed/surface_cos,resistance=mobility.resistance,mode_power=mode_power)
-            acceleration = (abs(powered) if powered is not None else
-                            5*fuel*vehicle.engine_factor*mode_power*(sandbox.BOOST_POWER if boost else 1.))
-        if broken:
-            # An input lease expiring is not a brake impulse. The broken
-            # belts supply their passive contact drag below, including when
-            # both are torn; they cannot power or pivot a stopped hull.
-            acceleration = 0.
-        # Engine/brake forces act along the road. `speed` is horizontal,
-        # while engine power and the stock speed cap describe surface speed.
-        acceleration *= surface_cos
-        track_yaw_delta = turn*turn_rate*dt
-        yaw_delta = track_yaw_delta
-        planar_displacement = None
-        planar_velocity = None
+        track_yaw_delta = yaw_delta = drive_acceleration = 0.
+        planar_displacement = planar_velocity = None
         damped_ground_yaw_rate = 0.
-        if ground_mode and not airborne and track_motion is None:
-            if ground_motion_active:
+        if not airborne:
+            assets = self.world.assets_for(vehicle.entity_id) if self.world else None
+            pitch = self._drive_pitch(vehicle)
+            surface_cos = max(.05, math.cos(pitch))
+            mobility = self._terrain_mobility(vehicle)
+            # Timed speed biases add once to the permanent caps (which already
+            # carry gear oil); shared assets and the definition are never changed.
+            # The pinned client exposes crew injury state. The official client
+            # support rule explicitly halves a shell-shocked driver's top speed;
+            # it does not provide a numeric acceleration or turn-rate multiplier.
+            # Apply only the documented cap here. The factor is queried from the
+            # per-vehicle CrewState on every fixed step, so a medkit restores the
+            # current drive without mutating shared assets.
+            driver_factor = self._drive_speed_factor(vehicle)
+            boost = getattr(vehicle, 'sandbox_boost', False)
+            top_forward = ((assets.forward_speed if assets else 11.5) + vehicle.forward_speed_bias) * driver_factor
+            top_reverse = ((assets.reverse_speed if assets else 5.) + vehicle.reverse_speed_bias) * driver_factor
+            target = forward*(top_forward if forward>0 else top_reverse)*surface_cos
+            # Turn rate takes only the timed rotation factor, never the engine one.
+            turn_rate = ((assets.rotation_speed if assets else math.radians(35))
+                         *vehicle.rotation_factor*mobility.turn_factor)
+            if pull is not None:
+                target = math.copysign(min(abs(target)*big_boss.TRAP_DRIVE_SPEED_FACTOR,
+                                           big_boss.TRAP_DRIVE_SPEED_CAP), target)
+                turn_rate *= big_boss.TRAP_TURN_FACTOR
+            # A complete native definition uses the bounded local P/v drivetrain.
+            # Braking now has a separate guarded force/mass approximation; neither
+            # branch changes gravity or collision response.
+            drive = getattr(vehicle.definition, 'drive', None)
+            fuel = drive.power_bonus_factor if drive is not None else 1.
+            acceleration = (self._braking_acceleration(vehicle)
+                            if not forward or vehicle.speed*forward<0 else None)
+            if acceleration is None:
+                mode_power = 1.5 if self.gravity_mode else 1.
+                powered = self._powered_acceleration(vehicle,forward,
+                    speed=vehicle.speed/surface_cos,resistance=mobility.resistance,mode_power=mode_power)
+                acceleration = (abs(powered) if powered is not None else
+                                5*fuel*vehicle.engine_factor*mode_power*(sandbox.BOOST_POWER if boost else 1.))
+            if broken:
+                # An input lease expiring is not a brake impulse. The broken
+                # belts supply their passive contact drag below, including when
+                # both are torn; they cannot power or pivot a stopped hull.
+                acceleration = 0.
+            # Engine/brake forces act along the road. `speed` is horizontal,
+            # while engine power and the stock speed cap describe surface speed.
+            acceleration *= surface_cos
+            track_yaw_delta = turn*turn_rate*dt
+            yaw_delta = track_yaw_delta
+            if ground_motion_active and track_motion is None:
                 damped_ground_yaw_rate = (ground_motion.yaw_rate *
                     math.exp(-self.world.GROUND_YAW_DAMPING*dt))
                 yaw_delta += damped_ground_yaw_rate*dt
-        drive_acceleration = 0.
-        if not airborne:
             # `speed` is horizontal metres/second along the hull heading.  The
             # support solver already fitted the hull's pitch from its four
             # carrying points, so gravity's matching horizontal longitudinal
@@ -4095,11 +4394,8 @@ class Arena:
                     # stopped hull still has static brake contact. Do not let
                     # an arbitrarily gentle grade start a perpetual pivot.
                     rolling_step += min(abs(slope), self._braking_acceleration(vehicle))*dt
-            external = vehicle.speed+slope*dt
-            external -= math.copysign(min(abs(external),rolling_step),external)
-            traction_step = max(-acceleration*dt,min(acceleration*dt,target-external))
-            drive_acceleration = traction_step/dt
-            vehicle.speed = external+traction_step
+            vehicle.speed, drive_acceleration = advance_speed(
+                vehicle.speed, target, acceleration, slope, rolling_step, dt)
         if track_motion is not None:
             before_drag = vehicle.speed
             passive = passive_track_step(vehicle.speed,track_motion.yaw_rate,
@@ -4118,7 +4414,7 @@ class Arena:
             middle_yaw = vehicle.pose.yaw+yaw_delta*.5
             along = velocity[0]*math.sin(middle_yaw)+velocity[1]*math.cos(middle_yaw)
             grip = getattr(self.world,'GROUND_LATERAL_GRIP',17.658) if self.world else 17.658
-            planar_velocity,residual_slip = self._skid_velocity(
+            planar_velocity,residual_slip = skid_velocity(
                 velocity,middle_yaw,along,grip*dt)
             planar_displacement = tuple(v*dt for v in planar_velocity)
         effort = getattr(self.world,'set_drive_effort',None) if self.world else None
@@ -4139,14 +4435,14 @@ class Arena:
             middle_yaw = vehicle.pose.yaw+yaw_delta*.5
             along = velocity[0]*math.sin(middle_yaw)+velocity[1]*math.cos(middle_yaw)
             grip = getattr(self.world,'GROUND_LATERAL_GRIP',17.658) if self.world else 17.658
-            planar_velocity,residual_slip = self._skid_velocity(velocity,middle_yaw,
+            planar_velocity,residual_slip = skid_velocity(velocity,middle_yaw,
                 along,grip*grip_fraction(landing.elapsed)*dt)
             planar_displacement = (planar_velocity[0]*dt,planar_velocity[1]*dt)
         elif ground_mode and not airborne and track_motion is None:
             old_velocity = (ground_motion.velocity if ground_motion_active else
                 (math.sin(vehicle.pose.yaw)*previous_speed,
                  math.cos(vehicle.pose.yaw)*previous_speed))
-            planar_velocity,residual_slip = self._skid_velocity(old_velocity,
+            planar_velocity,residual_slip = skid_velocity(old_velocity,
                 vehicle.pose.yaw+yaw_delta*.5,vehicle.speed,
                 self.world.GROUND_LATERAL_GRIP*dt)
             planar_displacement = (planar_velocity[0]*dt,planar_velocity[1]*dt)
@@ -4295,9 +4591,19 @@ class Arena:
 
     def _drive_vehicles(self, vehicles, dt, now):
         world = self.world
-        if getattr(world, '_native_physics', None) is not None:
+        native = getattr(world, '_native_physics', None)
+        if native is not None:
             self._last_drive_parallel = False
-            return {v.entity_id:self._drive(v,dt,now) for v in vehicles}
+            results = {}
+            # Each ordered drive can change its own hull, including when it
+            # uses the Python fallback. Publish those changes before the next
+            # native move, with one full sync at the phase boundary.
+            with native.sensor_batch(world) as dirty:
+                for vehicle in vehicles:
+                    entity = vehicle.entity_id
+                    results[entity] = self._drive(vehicle, dt, now)
+                    dirty.add(entity)
+            return results
         adaptive = (os.environ.get('SOLBREAKER_SIM_WORKERS','auto') == 'auto'
             or os.environ.get('SOLBREAKER_ADAPTIVE_DRIVE') == '1')
         pool = self.drive_workers
@@ -4429,7 +4735,7 @@ class Arena:
     def _aim(self, vehicle, dt, previous_yaw=None):
         if vehicle.autoaim_target:
             target = self.vehicles.get(vehicle.autoaim_target)
-            if (target is None or not target.alive or
+            if (target is None or not target.alive or mad_games.concealed(target, vehicle.team) or
                     target.account_id is not None and not self.players[target.account_id].attached):
                 lost = vehicle.autoaim_target
                 vehicle.autoaim_target,vehicle.autoaim_offset = 0,None
@@ -4491,9 +4797,11 @@ class Arena:
             self.accumulator = max(0.,self.accumulator-self.STEP)
             self.step_count += 1
             self.simulation_time = self.started+self.step_count*self.STEP
-            if self.time_stop is not None and not self.finished_at:
-                self.time_stop.tick(self.simulation_time)
             self._fixed_step(self.simulation_time)
+            if self.time_stop is not None and not self.finished_at:
+                # Return effects belong to the completed boundary. A rigid
+                # hull launched here first moves in the next physics step.
+                self.time_stop.tick(self.simulation_time)
             self._record_motion_frame(self.simulation_time)
         if deadline is not None and self.accumulator > self.MAX_CATCHUP:
             # Deferred work must not grow without bound during an overload.
@@ -4510,7 +4818,7 @@ class Arena:
         timeline = getattr(self, 'time_stop', None)
         phased = timeline.entity if timeline is not None else None
         markers = None
-        if os.environ.get('SOLBREAKER_MARKER_BATCH') == '1':
+        if not self.mad_games_mode and os.environ.get('SOLBREAKER_MARKER_BATCH') == '1':
             ready = [v for v in self.vehicles.values() if v.alive and v.entity_id != phased
                      and (p := self.players.get(v.account_id)) is not None and p.attached]
             markers = _try_marker_batch(self, ready, _MARKER_BATCH_ARENA_METHODS)
@@ -4533,6 +4841,8 @@ class Arena:
         dt = self.STEP
         phased = self.time_stop.entity if getattr(self, 'time_stop', None) is not None else None
         self._advance_supremacy(now)
+        if self.mad_games_mode and not self.finished_at and self.step_count % 6 == 0:
+            self._update_mad_games(now)
         for vehicle in self.vehicles.values():
             if vehicle.entity_id == phased:
                 continue
@@ -4549,16 +4859,9 @@ class Arena:
                     self.emit('reload',vehicle.entity_id,delay=0.,total=vehicle.reload_total)
                 self._emit_pump(vehicle,now)
             elif vehicle.reload_at and now>=vehicle.reload_at and not vehicle.burst_pending:
-                vehicle.reload_at = 0.
-                if vehicle.clip==0:
-                    pending = vehicle.next_shell
-                    if pending and pending!=vehicle.shell_id and vehicle.ammo_by_shell.get(pending,0)>0:
-                        vehicle.ammo_by_shell[vehicle.shell_id] = vehicle.ammo
-                        vehicle.selected_shell = pending
-                        vehicle.ammo = vehicle.ammo_by_shell[pending]
-                        self.emit('shell_selected',vehicle.entity_id,shell=pending)
-                    vehicle.next_shell = 0
-                    vehicle.clip = self._loaded_clip(vehicle)
+                switched = finish_magazine_reload(vehicle)
+                if switched:
+                    self.emit('shell_selected',vehicle.entity_id,shell=switched)
                 self.emit('ammo',vehicle.entity_id)
                 self.emit('reload',vehicle.entity_id,delay=0.,total=vehicle.reload_total)
         if self.practice and not self.finished_at:
@@ -4789,8 +5092,8 @@ class Arena:
                     fraction = max(0.,min(1.,(impact.at-(now-dt))/dt))
                     states = self._armor_frame_states(before, after, fraction, impact.at)
                 detonate_ammo_rack = False
-                shield = self.big_boss.shields.get(target.entity_id) if self.big_boss and target else None
-                if (not (shield and shield[0] <= impact.at < shield[1])
+                shield = self.big_boss.active_shield(target.entity_id, impact.at) if self.big_boss and target else None
+                if (shield is None
                         and self._internal_candidate(impact)):
                     fraction = max(0.,min(1.,(impact.at-(now-dt))/dt))
                     detonate_ammo_rack = self._internal_contact(
@@ -4822,7 +5125,7 @@ class Arena:
             # Let its already committed partner leave the barrel before the
             # elimination result clears reload state.  Direct leave/timeout
             # still finishes immediately and explicitly cancels the burst.
-            pending_burst = any(v.alive and v.burst_pending and
+            pending_burst = any(v.entity_id != phased and v.alive and v.burst_pending and
                                 (v.account_id is None or self.players[v.account_id].attached)
                                 for v in self.vehicles.values())
             if (not self.practice and self.solo and teams == {1} and self._combat_can_finish()
@@ -4862,7 +5165,7 @@ class Arena:
                             self._aim(bot, dt, before[entity].pose.yaw)
                             self._training_bot_fire(bot, target, now, gunner)
         for vehicle in self.vehicles.values():
-            if not vehicle.burst_pending:
+            if vehicle.entity_id == phased or not vehicle.burst_pending:
                 continue
             attached = vehicle.account_id is None or self.players[vehicle.account_id].attached
             if self.finished_at or not vehicle.alive or not attached:
@@ -4919,7 +5222,7 @@ class ArenaManager:
                       bot_roster=bot_roster, bot_game=bot_game, bot_scene_settings=bot_scene_settings,
                       prebattle_seconds=prebattle_seconds, sandbox_enabled=self.sandbox_enabled,
                       room_mode=room_mode, room_settings=room_settings)
-        if self.recon_point_tolerance is not None:
+        if self.recon_point_tolerance is not None and arena.recon is not None:
             arena.enable_recon_point_probe(tolerance=self.recon_point_tolerance)
         self.arenas[arena.result_id] = arena
         return arena
