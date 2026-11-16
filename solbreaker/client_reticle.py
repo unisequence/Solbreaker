@@ -12,7 +12,7 @@ from .connection import atomic_write
 _ROOT = 'UI/Screens/Battle/Aims'
 _HUD_OPTIONS = 'UI/Screens/Common/Settings/HUDOptionsPage.yaml.dvpl'
 _AIMS = ('AimDefault', 'Aim1', 'Aim2')
-_VERSION = 19
+_VERSION = 20
 _INK = [.94, .97, .98, 1.]
 _READY = [.62, 1., .72, 1.]
 _EDGE = [.025, .035, .045, .94]
@@ -22,10 +22,10 @@ _RELOADING = [1., .78, .43, 1.]
 _SPRITE_ROOT = 'Gfx/Battle/HUD/aim'
 _SPRITE = 'aim_camera-marker_snipe'
 _SPRITE_PATH = f'~res:/{_SPRITE_ROOT}/{_SPRITE}.psd'
-_READOUT_WIDTH = 58
-_READOUT_HEIGHT = 26
-_READOUT_X = 53
-_READOUT_Y = 0
+_READOUT_WIDTH = 52
+_READOUT_HEIGHT = 25
+_READOUT_X = 29
+_READOUT_Y = 45
 
 
 def _control(parent, name):
@@ -45,6 +45,24 @@ def _patch_aim(document):
     reload_container = _control(reload_group, 'reloadTimeContainer')
     distance = _control(rotate, 'distanceContainer')
     width = 2 * _READOUT_X + _READOUT_WIDTH
+    # One shared backing keeps the readouts below the aiming area in both
+    # views. The original text controls still own their live values and states.
+    rotate['children'].insert(rotate['children'].index(reload_group), {
+        'class': 'UIControl', 'name': 'solbreakerReadoutBar', 'input': False,
+        'size': [width, _READOUT_HEIGHT],
+        'components': {
+            'Anchor': {'hCenterAnchorEnabled': True, 'vCenterAnchorEnabled': True,
+                       'vCenterAnchor': _READOUT_Y},
+            'Background': {'drawType': 'DRAW_FILL', 'color': [.035, .052, .060, .74]},
+        },
+        'children': [{
+            'class': 'UIControl', 'name': 'divider', 'input': False, 'size': [1, 13],
+            'components': {
+                'Anchor': {'hCenterAnchorEnabled': True, 'vCenterAnchorEnabled': True},
+                'Background': {'drawType': 'DRAW_FILL', 'color': [.65, .77, .79, .47]},
+            },
+        }],
+    })
     for control in (reload_group, reload_container, distance):
         control['size'] = [width, _READOUT_HEIGHT]
         control['components'].pop('LinearLayout', None)
@@ -57,12 +75,12 @@ def _patch_aim(document):
     distance_left = _READOUT_X - _READOUT_WIDTH // 2
     for container, name, width, align, left in (
             (reload_container, 'reloadTime', _READOUT_WIDTH, 'HCENTER', reload_left),
-            (distance, 'distance', 37, 'RIGHT', distance_left),
-            (distance, 'm', 17, 'LEFT', distance_left + 39)):
+            (distance, 'distance', 33, 'RIGHT', distance_left),
+            (distance, 'm', 15, 'LEFT', distance_left + 35)):
         readout = _control(container, name)['components']
         readout['UIDynamicAtlasTextComponent'].update(align=[align, 'VCENTER'])
         if name != 'm':
-            readout['UIDynamicAtlasTextComponent']['fontSize'] = 22.
+            readout['UIDynamicAtlasTextComponent']['fontSize'] = 21.
         readout['Anchor'] = {'leftAnchorEnabled': True, 'leftAnchor': left,
                              'vCenterAnchorEnabled': True}
         readout['SizePolicy'] = {'horizontalPolicy': 'FixedSize', 'horizontalValue': width,
@@ -71,7 +89,7 @@ def _patch_aim(document):
     fuel['components']['Anchor'] = {'leftAnchorEnabled': True, 'leftAnchor': -_READOUT_X - 7,
                                    'topAnchorEnabled': True, 'topAnchor': _READOUT_HEIGHT + 3}
     drum = _control(sight, 'DrumReload')['components']['Anchor']
-    drum.update(hCenterAnchor=-_READOUT_X, vCenterAnchor=_READOUT_Y + 36)
+    drum.update(hCenterAnchor=-_READOUT_X, vCenterAnchor=_READOUT_Y + 32)
 
 
 def _patch_aim_style(document):
@@ -109,8 +127,10 @@ def _patch_readouts(document):
             rule['selectors'] = [selector[:-1] + '#' + name for name in names]
 
 
-def _hide_spread(document):
-    document['Prototypes'][0]['components']['UIOpacityComponent'] = {'opacity': 0.}
+def _show_spread(document):
+    # Restore the native marker, including in clients migrated from the HUD
+    # version that hid it. The engine positions the dots as dispersion changes.
+    document['Prototypes'][0]['components'].pop('UIOpacityComponent', None)
 
 
 def _hide_style_picker(document):
@@ -133,7 +153,7 @@ def install(lab, manifest):
         f'{_ROOT}/AimDefault.style.yaml.dvpl': _patch_aim_style,
         f'{_ROOT}/Aim.style.yaml.dvpl': _patch_aim_style,
         f'{_ROOT}/AimCont.style.yaml.dvpl': _patch_readouts,
-        f'{_ROOT}/AimSpread.yaml.dvpl': _hide_spread,
+        f'{_ROOT}/AimSpread.yaml.dvpl': _show_spread,
         _HUD_OPTIONS: _hide_style_picker,
     }
     resources = {}

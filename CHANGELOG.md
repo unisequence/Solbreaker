@@ -8,6 +8,8 @@
   Mark. Upgrades include Duplet and Chain Lightning.
 - Team spotting and the detection lamp now work across battle modes.
   Shell dispersion accounts for aiming time, movement and gun stats.
+- The aiming HUD shows the dynamic dispersion circle again. Reload and
+  range share one panel below the crosshair.
 - Leave Mad Games or Uprising from the pause menu. Time Stop shows a
   battle notification when active equipment prevents activation. Big Boss
   abilities continue to work after Time Stop and use the reticle's aim point.
