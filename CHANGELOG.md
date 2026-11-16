@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.0-alpha.14
+
+- Play Uprising in solo bot battles and training rooms. Tanks get three
+  lives. Earn elixir in battle and spend it on upgrades between lives.
+- Use each tank's Uprising ability, such as Time Jump, Moonwalk or Hunter's
+  Mark. Upgrades include Duplet and Chain Lightning.
+- Team spotting and the detection lamp now work across battle modes.
+  Shell dispersion accounts for aiming time, movement and gun stats.
+- Leave Mad Games or Uprising from the pause menu. Time Stop shows a
+  battle notification when active equipment prevents activation. Big Boss
+  abilities continue to work after Time Stop and use the reticle's aim point.
+
 ## 0.1.0-alpha.13
 
 - Choose Mad Games from the battle-rules menu for a solo battle with bots or

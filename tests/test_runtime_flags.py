@@ -14,6 +14,11 @@ from solbreaker.sim_native import backend_status
 
 
 class RuntimeFlagsTests(unittest.TestCase):
+    def test_experimental_recon_requires_an_explicit_opt_in(self):
+        self.assertFalse(requested_enabled({}))
+        self.assertTrue(requested_enabled({'SOLBREAKER_RECON_ENABLED': '1'}))
+        self.assertTrue(requested_enabled({'SOLBREAKER_RECON_SERVER_TEST': '1'}))
+
     def test_explicit_runtime_flags_and_validation(self):
         with patch.dict(os.environ, SOLBREAKER_SIM_BACKEND='python',
                         SOLBREAKER_SIM_WORKERS='3', SOLBREAKER_OWNER_IPC='socket',

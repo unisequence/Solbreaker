@@ -87,13 +87,11 @@ def change_tank_message(arena):
 
 
 def training_reentry_enabled(arena):
-    if (getattr(arena, 'room_settings', None) is None or not arena.unlimited_lives
-            or not arena.started or arena.finished_at or arena.closed or arena.retiring):
+    if (getattr(arena, 'room_settings', None) is None or not arena.started or arena.finished_at or arena.closed or arena.retiring):
         return False
     if getattr(arena, 'owner_backed', False):
         return getattr(arena, 'owner_training_reentry', False)
     return ((world := arena.world) is not None
-            and not arena.drive_workers
             and (world._rapier is None or hasattr(world._rapier.library, 'tfs_rapier_replace_vehicle')))
 
 

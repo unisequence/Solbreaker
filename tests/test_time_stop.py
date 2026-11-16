@@ -12,16 +12,16 @@ from unittest.mock import Mock, patch
 
 import numpy as np
 
-from solbreaker import armor_native, big_boss
+from solbreaker import armor_native, big_boss, uprising
 from solbreaker.arena import Arena, _MARKER_BATCH_ARENA_METHODS
-from solbreaker.arena_commands import ArenaCommand, apply_at_tick
+from solbreaker.arena_commands import ArenaCommand, apply_at_tick, decode_graviton_aim
 from solbreaker.arena_owner import Command
 from solbreaker.arena_owner_game import GameArenaHandler
 from solbreaker.arena_time_stop import BattleTimeStop
 from solbreaker.armor import ArmorHit, ArmorModel
 from solbreaker.ballistics import Projectile, TrackContact, body_states
 from solbreaker.battle import (
-    avatar_method, consumable_message, destructible_state, event_messages, gravity_traps_message,
+    avatar_method, consumable_message, destructible_state, event_messages, gravity_traps_message, pb_blob,
     missile_message, motion_messages, present_vehicles,
     provision_effect_message, received_damage_message, reconnect_message_parts, time_stop_message, time_stop_roster_message,
     vehicle_property,
@@ -32,7 +32,7 @@ from solbreaker.drive_replica import build_spec
 from solbreaker.entities import BattleEvent
 from solbreaker.marker_batch import try_markers
 from solbreaker.motion import vehicle_snapshot
-from solbreaker.modules import TrackSpec, TrackState
+from solbreaker.modules import GunSpec, GunState, TrackSpec, TrackState
 from solbreaker.recon import ReconState
 from solbreaker.sandbox import TIME_STOP, Control, token
 from solbreaker.time_stop import (
@@ -86,6 +86,56 @@ class TimeStopTests(TestCase):
         branch = TimelineSimulation(self.snapshot(), self.geometry, **options)
         self.addCleanup(branch.close)
         return branch
+
+    def test_shot_dispersion_is_shared_and_carries_bloom_into_time_stop(self):
+        aiming = SimpleNamespace(dispersion_radius=.4, aiming_time=2., after_shot_dispersion=4.,
+                                 movement_dispersion=.2, hull_rotation_dispersion=.1,
+                                 turret_rotation_dispersion=.12, damaged_gun_dispersion=2.)
+        self.owner.definition = SimpleNamespace(weapon=Weapon(12, 2, 1., 5., (self.shell,)),
+                                                aiming=aiming)
+        self.arena._configure_ammunition(self.owner)
+        _, live_direction = self.arena.shot_ray(self.owner)
+        with (patch.object(self.arena.dispersion_rng, 'random', return_value=1.),
+              patch.object(self.arena.dispersion_rng, 'uniform', return_value=0.)):
+            _, velocity, _ = self.arena._launch(self.owner, self.shell, self.arena.simulation_time)
+        live_ratio = math.tan(math.acos(sum(a*b/self.shell.speed for a, b in zip(live_direction, velocity))))
+        self.assertAlmostEqual(live_ratio, .004)
+        start = Pose((0., 0., 0.), 0.)
+        end = Pose((0., 0., 5.), math.radians(20.))
+        self.owner.gun.yaw = math.radians(30.)
+        self.owner.gun.update_dispersion(aiming, start, end, 0., 1., 1.)
+        peak = math.hypot(1., 18.*.2, 20.*.1, 30.*.12)
+        self.assertAlmostEqual(self.owner.gun.movement_dispersion, peak)
+        self.owner.gun.update_dispersion(aiming, end, end, self.owner.gun.yaw, 1., 1.)
+        settled = 1. + (peak - 1.) * math.exp(-.5)
+        self.assertAlmostEqual(self.owner.gun.movement_dispersion, settled)
+        gun_state = self.arena.guns[self.owner.entity_id] = GunState(GunSpec(100., 80., 0.))
+        gun_state.damage(10.)
+        branch = self.fork()
+        self.assertEqual(branch.snapshot.gun_loadout.shot_age, 0.)
+        self.assertAlmostEqual(branch.gun.movement_dispersion, settled)
+        _, branch_direction = branch._shot_ray()
+        with (patch.object(branch.dispersion_rng, 'random', return_value=1.),
+              patch.object(branch.dispersion_rng, 'uniform', return_value=0.)):
+            self.assertTrue(branch.fire(1))
+        velocity = branch.projectiles[1].velocity
+        ratio = math.tan(math.acos(sum(a*b/self.shell.speed for a, b in zip(branch_direction, velocity))))
+        self.assertAlmostEqual(ratio, .016 * 2. * settled)
+        self.assertAlmostEqual(_frame(branch).movement_dispersion, settled)
+
+    def test_frozen_motion_and_autoaim_preserve_team_spotting(self):
+        self.enemy.mad_unspotted = True
+        branch = self.fork()
+        hidden = self.enemy.entity_id
+        self.assertIn(hidden, branch.world.bodies)
+        self.assertFalse(branch.autoaim(hidden))
+        timeline = SimpleNamespace(account=1, snapshot=branch.snapshot, frame=None)
+        with patch.object(self.arena, 'time_stop', timeline):
+            result = motion_messages(self.arena, self.arena.players[1])
+        for tank in branch.snapshot.tanks:
+            pose = tank.body.pose
+            message = vehicle_snapshot(tank.identity.ident, pose.position, pose.yaw, pose.pitch, pose.roll)
+            self.assertEqual(message in result, tank.identity.ident != hidden)
 
     def test_server_rules_override_action_cost_and_duration(self):
         with (patch.dict(os.environ, SOLBREAKER_TIME_STOP_RULES='{"shot_cost":11,"duration":12}'),
@@ -668,6 +718,64 @@ class TimeStopTests(TestCase):
         self.assertEqual(branch.ledger.merge(arena).applied, (1,))
         self.assertNotIn(self.ally.entity_id, boss.poison)
 
+    def test_graviton_uses_native_camera_target_with_the_gun_aimed_elsewhere(self):
+        arena = self.arena
+        self.map_geometry('wall')
+        arena.big_boss = big_boss.BigBoss(arena.vehicles, 'graviton reticle')
+        arena.big_boss.bosses.discard(self.owner.entity_id)
+        arena.big_boss.roles[self.owner.entity_id] = big_boss.GRAVITON
+        arena.big_boss.levels[self.owner.entity_id] = 0
+        spec = big_boss.ROLE_ACTIVE[big_boss.GRAVITON][0]
+        self.owner.consumables = (ConsumableState(spec),)
+        self.owner.gun.yaw = math.pi / 2
+        self.assertTrue(arena.aim_point(1, (-8., 1., 12.)))
+        camera, target = (0., 1., 0.), (2., 1., 4.)
+
+        def vector(coords):
+            return b''.join(struct.pack('<Bf', tag, value)
+                            for tag, value in zip((13, 21, 29), coords) if value)
+
+        payload = pb_blob(3, pb_blob(1, vector(camera)) + pb_blob(2, vector(target)))
+        self.assertEqual(decode_graviton_aim(payload), (camera, target))
+        with self.assertRaises(ValueError):
+            decode_graviton_aim(payload[:-1])
+        now = arena.simulation_time
+        self.assertFalse(arena.use_consumable(1, spec.ident, payload[:-1], now))
+        branch = self.fork()
+        self.assertTrue(arena.use_consumable(1, spec.ident, payload, now))
+        trap, = arena.big_boss.traps
+        np.testing.assert_allclose(trap.center, target, atol=1e-5)
+
+        with patch.object(BattleTimeStop, '_warm'):
+            timeline = arena.time_stop = BattleTimeStop(arena)
+        timeline.snapshot, timeline.account = branch.snapshot, 1
+        self.assertTrue(timeline.accept(ArenaCommand(
+            1, 'consumable', (self.owner.entity_id, spec.ident, payload), now)))
+        action, _, args = timeline.actions[0]
+        self.assertTrue(branch.activate(action, *args))
+        _, private_trap = branch.traps[action]
+        np.testing.assert_allclose(private_trap.center, target, atol=1e-5)
+
+    def test_graviton_and_mark_can_follow_a_fresh_aim_point(self):
+        self.owner.gun.yaw = math.pi / 2
+        arena = self.arena
+        arena.uprising = uprising.BattleState(arena.rng)
+        mark = ConsumableState(uprising.HUNTERS_MARK)
+        self.owner.consumables = (mark,)
+        self.assertIsNone(arena.aim_hit(self.owner)[0])
+        self.assertTrue(arena.aim_point(1, (0., 1., 12.)))
+        self.assertTrue(arena.use_consumable(1, mark.spec.ident, now=arena.simulation_time))
+        self.assertIn(self.enemy.entity_id, arena.uprising.marks)
+
+        self.map_geometry('wall')
+        spec = big_boss.ROLE_ACTIVE[big_boss.GRAVITON][0]
+        self.owner.consumables = (ConsumableState(spec),)
+        branch = self.fork()
+        self.assertTrue(branch.aim_point((2., 1., 4.)))
+        self.assertTrue(branch.activate(1, spec.ident))
+        _, trap = branch.traps[1]
+        np.testing.assert_allclose(trap.center, (2., 1., 4.), atol=1e-5)
+
     def test_graviton_does_not_charge_for_the_sky_and_keeps_frozen_hulls_still(self):
         self.map_geometry('wall')
         spec = big_boss.ROLE_ACTIVE[big_boss.GRAVITON][0]
@@ -858,6 +966,7 @@ class TimeStopTests(TestCase):
         self.assertTrue(branch.ledger.charge(1, 5))
         branch.ledger.record(1, .1, Entity.of(self.enemy), 'impulse',
                              Impulse((0., 4., 0.), (0., .2, 0.)))
+        branch.gun.movement_dispersion = 1.5
         branch.finish()
         timeline.snapshot, timeline.account = branch.snapshot, 1
         timeline.frame = _frame(branch)
@@ -869,6 +978,7 @@ class TimeStopTests(TestCase):
 
         arena.step(start + arena.STEP)
         self.assertIsNone(timeline.entity)
+        self.assertEqual(self.owner.gun.movement_dispersion, 1.5)
         self.assertIn(entity, arena.world.dynamic_bodies)
         self.assertAlmostEqual(arena.world.poses[entity].position[1], height)
         self.assertAlmostEqual(arena.world.motion[entity].velocity[1], 4.)
@@ -877,7 +987,7 @@ class TimeStopTests(TestCase):
         arena.step(start + 2 * arena.STEP)
         self.assertGreater(arena.world.poses[entity].position[1], height)
 
-    def test_native_aim_batch_keeps_world_ray_and_ignores_suspended_hull(self):
+    def test_native_aim_batch_keeps_world_ray_and_ignores_unseen_hulls(self):
         if armor_native.load_library() is None:
             self.skipTest('Native armor library is unavailable')
         arena, enemy = self.arena, self.enemy
@@ -886,12 +996,13 @@ class TimeStopTests(TestCase):
         world.relocate_training_body(enemy.entity_id, enemy.pose)
         observers = self.owner, self.ally
         direction = arena.shot_ray(self.owner)[1]
-        for visible in (True, False):
-            world.set_tracked_presence(enemy.entity_id, visible)
+        for present, spotted in ((True, True), (False, True), (True, False)):
+            world.set_tracked_presence(enemy.entity_id, present)
+            enemy.mad_unspotted = not spotted
             markers = try_markers(arena, observers, _MARKER_BATCH_ARENA_METHODS)
             self.assertIsNotNone(markers)
             entity, point = arena.aim_hit(self.owner)
-            self.assertEqual(entity, enemy.entity_id if visible else None)
+            self.assertEqual(entity, enemy.entity_id if present and spotted else None)
             self.assertEqual(markers[self.owner.entity_id], (point, direction))
 
     def test_safe_return_searches_the_same_level_as_the_occupied_pose(self):
@@ -1014,6 +1125,34 @@ class TimeStopTests(TestCase):
         self.assertTrue(world.motion[entity].grounded)
         self.assertEqual(world.motion[entity].velocity, (0., 0., 0.))
         self.assertEqual(world.poses[self.enemy.entity_id], pose)
+
+    def test_worker_merge_preserves_live_boss_ability_dispatch(self):
+        arena = self.arena
+        arena.big_boss = boss = big_boss.BigBoss(arena.vehicles, 'worker-merge')
+        boss.bosses.add(self.owner.entity_id)
+        boss.roles.pop(self.owner.entity_id, None)
+        self.enemy.definition = SimpleNamespace(mass=30000.)
+        wave, megashot = big_boss.BLAST_WAVE, big_boss.MEGASHOT
+        self.owner.consumables = (ConsumableState(wave), ConsumableState(megashot))
+        now = arena.simulation_time
+        self.owner.consumables[1].start_cooldown(now, 3.)
+        branch = self.fork(level=Level(50, 2.))
+        branch.steps = round(2. / branch.STEP)
+        branch.finish()
+        completed = pickle.loads(pickle.dumps(_frame(branch)))
+        self.assertIsNot(completed.consumables[0].spec, wave)
+        self.assertIsNotNone(merge_frame(arena, branch.snapshot, completed))
+        arena.drain_events()
+
+        before = self.enemy.health
+        self.assertTrue(arena.use_consumable(1, wave.ident, now=now))
+        self.assertLess(self.enemy.health, before)
+        self.assertGreater(arena.world.motion[self.enemy.entity_id].velocity[2], 0.)
+        self.assertTrue(any(event.kind == 'boss_blast' for event in arena.drain_events()))
+        arena.fire(1, now=now)
+        projectile, = arena.projectiles.values()
+        self.assertEqual(projectile.shell.effect_index, big_boss.MEGASHOT_EFFECT)
+        self.assertEqual(self.owner.consumables[1].uses, 1)
 
     def test_merge_updates_hp_and_reports_hits_on_separate_ticks(self):
         arena = self.arena
@@ -1174,6 +1313,19 @@ class TimeStopTests(TestCase):
         frames = list(ticks[target].values())
         self.assertEqual((frames[0], frames[-1]), (0, 24))
         self.assertEqual(len(set(frames)), 15)
+
+    def test_active_consumable_rejection_uses_the_owners_battle_notice(self):
+        arena = self.arena
+        gear = ConsumableState(ConsumableSpec('afterburning', 14, 3835, 15., 45., engine_factor=1.2))
+        gear.activate(arena.simulation_time)
+        self.owner.consumables = (gear,)
+        with patch.object(BattleTimeStop, '_warm'):
+            timeline = arena.time_stop = BattleTimeStop(arena)
+        self.assertFalse(timeline.toggle(1))
+        events = arena.drain_events()
+        notice = time_stop_message(7, (0., 0., 0.))
+        self.assertIn(notice, event_messages(arena, arena.players[1], events))
+        self.assertNotIn(notice, event_messages(arena, arena.players[2], events))
 
     def test_queued_activation_uses_new_hulls_and_survives_worker_warmup(self):
         arena = self.arena

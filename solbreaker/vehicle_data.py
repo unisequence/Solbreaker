@@ -241,6 +241,12 @@ class Aiming:
     pitch_transition: float = .4
     # Native gun+16c/+170: envelope before equipment, then its own pair deltas.
     packed_limits: tuple | None = None
+    dispersion_radius: float = 0.  # Metres at 100 m.
+    after_shot_dispersion: float = 1.
+    movement_dispersion: float = 0.
+    hull_rotation_dispersion: float = 0.
+    turret_rotation_dispersion: float = 0.
+    damaged_gun_dispersion: float = 1.
 
     @property
     def packed_pitch_limits(self):
@@ -292,6 +298,42 @@ class Weapon:
 
 
 @dataclass(frozen=True)
+class SpottingProfile:
+    still: float = 0.
+    moving: float = 0.
+    at_shot: float = 1.
+    optics_bonus: float = 0.
+    net_bonus: float = 0.
+    net_still_time: float = 3.
+    net_still_factor: float = 2.
+
+
+@lru_cache(maxsize=4)
+def _spotting_devices(path):
+    try:
+        return ET.fromstring(read(path))
+    except FileNotFoundError:
+        return ET.Element('optionalDevices')
+
+
+def _spotting_profile(root, vehicle, turret, gun, listing):
+    devices = _spotting_devices(root/'common/optional_devices.xml.dvpl')
+    optics = 'coatedOptics/script/visionRadiusPercentageBonus'
+    net = 'camouflageNet/script'
+    vehicle_class = next((tag for tag in listing.findtext('tags', '').split()
+                          if devices.find(f'{optics}/{tag}') is not None), 'unknown')
+    turret_factor = float(turret.findtext('invisibilityFactor', '1'))
+    return SpottingProfile(
+        still=float(vehicle.findtext('invisibility/still', '0')) * turret_factor,
+        moving=float(vehicle.findtext('invisibility/moving', '0')) * turret_factor,
+        at_shot=float(gun.findtext('invisibilityFactorAtShot', '1')),
+        optics_bonus=float(devices.findtext(f'{optics}/{vehicle_class}', '0')) / 100.,
+        net_bonus=float(devices.findtext(f'{net}/bonus/{vehicle_class}', '0')),
+        net_still_time=float(devices.findtext(f'{net}/activateWhenStillSec', '3')),
+        net_still_factor=float(devices.findtext(f'{net}/activateBonusFactor', '2')))
+
+
+@dataclass(frozen=True)
 class VehicleDefinition:
     nation: str
     nation_id: int
@@ -332,6 +374,7 @@ class VehicleDefinition:
     armor_states_controller: ArmorStatesController | None = None
     tier: int = 1  # Actual vehicle level from the national catalog, not component level.
     view_range: float = 250.
+    spotting: SpottingProfile = SpottingProfile()
 
     def __post_init__(self):
         if type(self.tier) is not int or not 1 <= self.tier <= 10:
@@ -963,7 +1006,13 @@ def _load_vehicle(game: Path, nation, name, configuration, allow_movable=False):
             scalar(chassis,'brakeForce'),scalar(engine,'power')),
         Aiming(tp,numbers(turret,'gunPosition',3),pitch,
             math.radians(scalar(turret,'rotationSpeed')),math.radians(scalar(gun,'rotationSpeed')),
-            scalar(gun,'aimingTime'),sectors.get('back'),yaw_limits,sectors.get('front'),transition),
+            scalar(gun,'aimingTime'),sectors.get('back'),yaw_limits,sectors.get('front'),transition,
+            dispersion_radius=float(gun.findtext('shotDispersionRadius', '0')),
+            after_shot_dispersion=float(gun.findtext('shotDispersionFactors/afterShot', '1')),
+            movement_dispersion=float(chassis.findtext('shotDispersionFactors/vehicleMovement', '0')),
+            hull_rotation_dispersion=float(chassis.findtext('shotDispersionFactors/vehicleRotation', '0')),
+            turret_rotation_dispersion=float(gun.findtext('shotDispersionFactors/turretRotation', '0')),
+            damaged_gun_dispersion=float(gun.findtext('shotDispersionFactors/whileGunDamaged', '1'))),
         Weapon(int(scalar(gun,'maxAmmo')),clip,interval,scalar(gun,'reloadTime'),tuple(shells),ammunition,
                pump_times,burst_count,burst_interval),
         collision_asset,visual_asset,
@@ -971,7 +1020,8 @@ def _load_vehicle(game: Path, nation, name, configuration, allow_movable=False):
                              next(iter(local_shots)).tag),
         track_spec=track_spec,gun_spec=gun_spec,armor_states_controller=controller,
         tier=int(listing.findtext('level')),
-        view_range=float(turret.findtext('circularVisionRadius', '250')))
+        view_range=float(turret.findtext('circularVisionRadius', '250')),
+        spotting=_spotting_profile(root, vehicle, turret, gun, listing))
     for asset in (definition.collision_asset,definition.visual_asset):
         for suffix in ('.sc2.dvpl','.scg.dvpl'):
             if not Path(str(asset)+suffix).is_file():

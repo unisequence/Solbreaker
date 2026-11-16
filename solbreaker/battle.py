@@ -6,10 +6,11 @@ import math
 import time
 
 from .account import pickle_document, variable16
-from . import big_boss, mad_games
+from . import big_boss, mad_games, uprising
 from .mercury import packed_blob, read_blob, variable8
 from .motion import vehicle_snapshot
 from .destructibles import DestructibleState
+from .consumables import READY, COOLDOWN
 from .sandbox import (BRANCH_SHOT_BASE, FAST_RELOAD_SECONDS, HP_RESTORED, PRACTICE_NOTICE, TARGET_PLACED, TELEPORTED,
                       advertisement as sandbox_advertisement, boss_picker_message)
 
@@ -144,7 +145,7 @@ def boss_ability_cards(abilities):
                                              for ident, grade in abilities)
 
 
-def create_avatar_cell(space_id=SPACE_ID, team=1, respawns_left=0, abilities=()):
+def create_avatar_cell(space_id=SPACE_ID, team=1, respawns_left=0, abilities=(), *, enemy_reload=False):
     # Client ServerConnection::createCellPlayer 0x2818240 uses the vanilla
     # header, unlike current desktop WoT: space, vehicle, position, scale, dir.
     header = struct.pack("<II7f", space_id, 0, 0, 0, 0, 0.0076444, 0, 0, 0)
@@ -154,7 +155,7 @@ def create_avatar_cell(space_id=SPACE_ID, team=1, respawns_left=0, abilities=())
     # 0x180d4a1 compares it with Vehicle.publicInfo.team at +0xb0.
     # Avatar +0xec: array of (item compact descriptor, ability grade).
     props = (struct.pack("<BIBBfHB", team, 0, 0, 0, 0.0, 0, respawns_left)
-             + boss_ability_cards(abilities) + struct.pack("<fB", 0.0, 0)
+             + boss_ability_cards(abilities) + struct.pack("<fB", 0.0, enemy_reload)
              + b"\0\0" + struct.pack("<4I", 0, 0, 0, 0))
     return variable16(6, header + props)
 
@@ -186,12 +187,14 @@ def provision_effect_message(entity_id, compact_id, *, argument=0):
             or (compact_id not in (26109, big_boss.BLAST_WAVE.compact_id,
                                    mad_games.URANIUM_SHIELD.compact_id, mad_games.CHAMELEON.compact_id,
                                    mad_games.REFLECTOR.compact_id, mad_games.DISCHARGE.compact_id,
-                                   mad_games.REGENERATOR_EFFECT)
+                                   mad_games.REGENERATOR_EFFECT, uprising.CURSE.compact_id,
+                                   *(spec.compact_id for spec in uprising.CLOAKS))
                 and compact_id not in big_boss.ROLE_EFFECTS
                 and compact_id not in big_boss.HEAL_SHOT_EFFECTS)):
         raise ValueError('Unsupported short provision effect')
     max_argument = {mad_games.CHAMELEON.compact_id: 1, mad_games.REFLECTOR.compact_id: 1,
-                    mad_games.REGENERATOR_EFFECT: 0x7fffffff}.get(compact_id, 0)
+                    mad_games.REGENERATOR_EFFECT: 0x7fffffff, uprising.CURSE.compact_id: 1,
+                    **{spec.compact_id: 1 for spec in uprising.CLOAKS}}.get(compact_id, 0)
     if type(argument) is not int or not 0 <= argument <= max_argument:
         raise ValueError('Unsupported short provision effect argument')
     child = pb_int(1, entity_id) + pb_int(2, compact_id)
@@ -329,7 +332,8 @@ def targeting_info(vehicle=None, yaw_rate=None, pitch_rate=None):
     if pitch_rate is None:
         pitch_rate = vehicle.gun.pitch_rate if vehicle else math.radians(45)
     regular = pb_blob(1, pb_double(1, .1)) + pb_blob(2, pb_double(1, .1))
-    factors = pb_double(1, 1) + pb_double(2, .1) + pb_blob(3, pb_blob(1, regular))
+    factors = (pb_double(1, getattr(vehicle, 'shot_dispersion_factor', 1.))
+               + pb_double(2, .1) + pb_blob(3, pb_blob(1, regular)))
     aiming_time = config.aiming_time if config else 1.7
     aiming_time *= getattr(vehicle, 'aiming_time_factor', 1.)
     info = (pb_double(1, 0) + pb_double(2, 0) + pb_double(3, yaw_rate)
@@ -433,16 +437,25 @@ def battle_hints_message():
 def initial_messages(arena, player):
     boss = getattr(arena, 'big_boss', None)
     arcade = getattr(arena, 'mad_games_mode', False)
-    game_mode = big_boss.CLIENT_GAME_MODE if boss is not None else (
-        mad_games.CLIENT_GAME_MODE if arcade else 2)
+    resurrection = getattr(arena, 'uprising', None)
+    game_mode, lives = 2, 1
+    if boss is not None:
+        game_mode = big_boss.CLIENT_GAME_MODE
+        lives = boss.lives.get(player.vehicle_id, 1)
+    elif arcade:
+        game_mode = mad_games.CLIENT_GAME_MODE
+    elif resurrection is not None:
+        game_mode = uprising.CLIENT_GAME_MODE
+        lives = resurrection.remaining(player.vehicle_id)
     result = create_avatar({'nickname':player.nickname},player.avatar_id,arena.unique_id,
                            getattr(arena,'client_map_id',getattr(arena,'map_id',6)),
                            game_mode=game_mode)
-    lives = boss.lives.get(player.vehicle_id, 1) if boss is not None else 1
     abilities = ()
     if boss is not None:
         abilities = tuple((compact_id, 0) for compact_id in boss.abilities(player.vehicle_id))
-    result += create_avatar_cell(arena.space_id, player.team, future_respawns(lives), abilities)
+    enemy_reload = resurrection is not None and resurrection.has(player.vehicle_id, uprising.ENEMY_RELOAD)
+    result += create_avatar_cell(arena.space_id, player.team, future_respawns(lives), abilities,
+                                 enemy_reload=enemy_reload)
     if boss is not None:
         # The pinned client selects the BossMode HUD and effect handlers from
         # GameModeData.gameplayBehavior when constructing the battle UI.
@@ -456,6 +469,12 @@ def initial_messages(arena, player):
         arcade_name = mad_games.CLIENT_GAMEPLAY
         mode = (pb_blob(5, arcade_name) + pb_blob(7, arcade_name) + pb_blob(8, arcade_name)
                 + pb_int(9, arena.supremacy is not None) + pb_int(12, arena.base_capture is not None))
+        result += arena_update(18, pb_blob(17, mode))
+    elif resurrection is not None:
+        # Native mode table at 0x7077af maps hellgames to enum 23.
+        name = uprising.CLIENT_GAMEPLAY
+        mode = (pb_int(4, future_respawns(uprising.STARTING_LIVES)) + pb_blob(5, name) + pb_blob(7, name)
+                + pb_int(12, arena.base_capture is not None))
         result += arena_update(18, pb_blob(17, mode))
     return result
 
@@ -512,6 +531,33 @@ def boss_lives_message(lives):
     return b'\x13\xb1' + bytes([future_respawns(lives)])
 
 
+def uprising_elixir_message(balance):
+    # Private Avatar property 18 dispatches to the uint16 battlePoints slot
+    # at Avatar+0xe8 (0x1780cfc).
+    return b'\x13\xb0' + struct.pack('<H', balance)
+
+
+def uprising_respawn_time_message(seconds):
+    # Private Avatar property 21, timeRespawnLeft (Avatar+0xf8).
+    return b'\x13\xb3' + struct.pack('<f', seconds)
+
+
+def enemy_reload_visibility_message(enabled):
+    # Private Avatar property 22, canSeeEnemyReload (Avatar+0xfc).
+    return b'\x13\xb4' + bytes([enabled])
+
+
+def uprising_offers_message(offers):
+    # Private Avatar property 20, a vector of (compact item ID, status).
+    return b'\x13' + variable8(158 + 20, boss_ability_cards(offers))
+
+
+def uprising_wait_respawn_message(entity, killer):
+    # ClientArena::OnVehicleWaitRespawn 0x1d60840 consumes VehicleKilled,
+    # the same pair of vehicle IDs as the regular death update.
+    return arena_update(19, pb_blob(6, pb_int(1, entity) + pb_int(2, killer)))
+
+
 def boss_role_messages(arena):
     boss = arena.big_boss
     return tuple(boss_role_message(entity_id, boss.roles.get(entity_id), boss.levels.get(entity_id, 0),
@@ -525,12 +571,13 @@ def chameleon_pose(pose):
     return replace(pose, position=(-4096., 0., -4096.), yaw=0., pitch=0., roll=0.)
 
 
-def vehicle_spawn_parts(arena, vehicle, alias, *, pose=None):
+def vehicle_spawn_parts(arena, vehicle, alias, *, pose=None, health=None):
     pose = vehicle.pose if pose is None else pose
     critical, destroyed = module_snapshot(arena, vehicle)
     # Entity creation reads yaw/pitch/roll, detailed movement roll/pitch/yaw.
     yield create_vehicle({'nickname':battle_nickname(arena, vehicle)}, vehicle.descriptor, pose.position,
-        vehicle.health, vehicle.entity_id, vehicle.team, alias, (pose.yaw,pose.pitch,pose.roll),
+        vehicle.health if health is None else health, vehicle.entity_id, vehicle.team, alias,
+        (pose.yaw,pose.pitch,pose.roll),
         vehicle.max_health, vehicle.definition.optional_devices if vehicle.definition else (),
         critical, destroyed, gun_angles=vehicle.gun.packed(),
         # The client's particle tree is still being built for new entities.
@@ -542,8 +589,16 @@ def vehicle_spawn_parts(arena, vehicle, alias, *, pose=None):
         # Dynamic property16 is applied only after the Vehicle exists.
         yield armor_state
     boss = getattr(arena, 'big_boss', None)
-    effects = (boss.vehicle_effects(vehicle.entity_id) if boss else mad_games.irradiation_effects(
-        getattr(arena, 'mad_irradiated', {}).get(vehicle.entity_id)))
+    resurrection = getattr(arena, 'uprising', None)
+    if boss:
+        effects = boss.vehicle_effects(vehicle.entity_id)
+    elif resurrection is not None:
+        effects = resurrection.vehicle_effects(vehicle.entity_id)
+        if vehicle.entity_id in resurrection.curses and pose is vehicle.pose:
+            yield provision_effect_message(vehicle.entity_id, uprising.CURSE.compact_id)
+    else:
+        effects = mad_games.irradiation_effects(
+            getattr(arena, 'mad_irradiated', {}).get(vehicle.entity_id))
     if effects:
         yield vehicle_client_effects_message(arena, vehicle.entity_id, effects)
 
@@ -553,7 +608,8 @@ def spawn_message_parts(arena, player, *, include_owner_state=True):
     participants = participant_ids((v.entity_id,v.account_id) for v in arena.vehicles.values())
     present = tuple(present_vehicles(arena, player, include_phased=True))
     rows = b''.join(pb_blob(1,vehicle_info(v.entity_id,battle_nickname(arena,v),v.team,participants[v.entity_id],v.descriptor,
-                                         alive=v.alive or (getattr(arena, 'unlimited_lives', False)
+                                         alive=v.alive or ((getattr(arena, 'unlimited_lives', False)
+                                                            or getattr(arena, 'uprising', None) is not None)
                                                            and v.entity_id in arena.respawn_at),
                                          camouflage=v.camouflage))
                     for _,v in present)
@@ -567,7 +623,8 @@ def spawn_message_parts(arena, player, *, include_owner_state=True):
         parts.append(team_kill_score(arena, player))
     for alias,v in present:
         hidden = mad_games.concealed(v, player.team)
-        parts.extend(vehicle_spawn_parts(arena, v, alias,
+        health = _observer_health(arena, player, v)
+        parts.extend(vehicle_spawn_parts(arena, v, alias, health=health,
                                          pose=chameleon_pose(v.pose) if hidden else None))
     parts.append(b'\x14'+struct.pack('<III6f',player.avatar_id,arena.space_id,player.vehicle_id,0,0,0,0,0,0))
     if boss is not None:
@@ -575,13 +632,20 @@ def spawn_message_parts(arena, player, *, include_owner_state=True):
     # Creation/public vectors do not establish the owner's private crew
     # Health objects. Replay only that owner's wounds after control is set.
     own = arena.vehicles[player.vehicle_id]
-    if getattr(arena, 'mad_games_mode', False) and own.mad_observation_warning:
+    if own.mad_observation_warning:
         parts.append(observed_status_message(own.entity_id, True))
     for person in (getattr(arena, 'injured_crew', lambda vehicle: ())(own) if include_owner_state else ()):
         parts.append(module_damage_message(own.entity_id, 0, person.spec.extra_health_index))
     if arena.world:
         parts.extend(destructible_state(arena).spawn_parts())
     return tuple(parts)
+
+
+def _observer_health(arena, player, vehicle):
+    if (getattr(arena, 'uprising', None) is not None and vehicle.team != player.team
+            and uprising.active(vehicle, uprising.PLAY_DEAD, arena.simulation_time)):
+        return 0
+    return vehicle.health
 
 
 def spawn_messages(arena, player):
@@ -618,8 +682,19 @@ def ammo_message(vehicle):
     return _ammo_rows(counts.items(), vehicle.shell_id, vehicle.ammo, vehicle.clip)
 
 
+def _can_view_reload(arena, player, vehicle):
+    if vehicle.entity_id == player.vehicle_id:
+        return False
+    if vehicle.team == player.team:
+        return True
+    state = getattr(arena, 'uprising', None)
+    return (state is not None and vehicle.alive and not mad_games.concealed(vehicle, player.team)
+            and state.has(player.vehicle_id, uprising.ENEMY_RELOAD)
+            and not uprising.active(vehicle, uprising.PLAY_DEAD, arena.simulation_time))
+
+
 def allied_reload_message(arena, player, vehicle):
-    """Public UpdateArena15 for a teammate, never the owner's gun RPC.
+    """Public UpdateArena15 for a visible reload marker.
 
     Avatar13 updates the recipient's private gun regardless of its entity ID.
     Pinned opcode table0x4144240:15=RELOAD_TIME,14=PLAYER_NAME.
@@ -627,7 +702,7 @@ def allied_reload_message(arena, player, vehicle):
     time_left3(float) and clip_size_left4 for team-panel/marker consumers.
     A pump with usable rounds is ready while its spare round is refilling.
     """
-    if vehicle.entity_id == player.vehicle_id or vehicle.team != player.team:
+    if not _can_view_reload(arena, player, vehicle):
         return b''
     now = arena.simulation_time
     remaining = max(0., vehicle.reload_at-now) if vehicle.reload_at else 0.
@@ -645,7 +720,7 @@ def allied_reload_message(arena, player, vehicle):
 def _allied_reload_parts(arena, player):
     return tuple(allied_reload_message(arena,player,vehicle)
                  for _,vehicle in sorted(arena.vehicles.items())
-                 if vehicle.team == player.team and vehicle.entity_id != player.vehicle_id)
+                 if _can_view_reload(arena, player, vehicle))
 
 
 def gun_reload_configuration(vehicle, *, full_reload_factor=None):
@@ -714,7 +789,23 @@ def mad_games_passive_message(vehicle):
     # Ability provisions use the separate AbilitiesStatusPanel above the HP
     # bar. They share the native slot cursor with active abilities.
     compact_id = (ident << 8) | 0xfd
+    return _passive_ability_message(compact_id)
+
+
+def _passive_ability_message(compact_id):
     return avatar_method(17, struct.pack('<BIHBhh', 13, compact_id, 1, 1, 0, 0))
+
+
+def uprising_passive_message(state, entity):
+    return b''.join(_passive_ability_message(upgrade.compact_id)
+                    for upgrade in (uprising.ENEMY_RELOAD, uprising.DUPLET, uprising.GHOST)
+                    if state.has(entity, upgrade))
+
+
+def uprising_shot_upgrade_messages(state, entity, now):
+    return b''.join(consumable_message(compact_id, COOLDOWN if remaining else READY,
+                                       math.ceil(remaining), math.ceil(total))
+                    for compact_id, remaining, total in state.shot_upgrade_statuses(entity, now))
 
 
 def active_equipment_message(arena, vehicle, equipment=None):
@@ -929,7 +1020,7 @@ def temporal_motion(arena, player, timeline):
     local = timeline.frame
     for tank in timeline.snapshot.tanks:
         entity = tank.identity.ident
-        if entity not in present:
+        if entity not in present or not tank.visible:
             continue
         live = local is not None and entity == player.vehicle_id
         pose = local.pose if live else tank.body.pose
@@ -989,7 +1080,7 @@ def event_messages(arena, player, events):
                          and not mad_games.concealed(actor, player.team)
                          and not mad_games.concealed(arena.vehicles[event.target], player.team))
         if (event.kind in ('ready','reload','pump_reload') and not own
-                and actor is not None and actor.team == player.team):
+                and actor is not None and _can_view_reload(arena, player, actor)):
             allied_reload.add(event.actor)
         if event.kind == 'time_stop_begin':
             result += time_stop_message(1 if own else 2, d['position'],
@@ -1004,6 +1095,8 @@ def event_messages(arena, player, events):
                 pose = d['parked']
                 result += b'\x14'+struct.pack('<III6f', event.actor, arena.space_id, 0,
                                               *pose.position, pose.roll, pose.pitch, pose.yaw)
+        elif event.kind == 'time_stop_rejected' and own and d['reason'] == 'active_equipment':
+            result += time_stop_message(7, (0., 0., 0.))
         elif event.kind == 'time_stop_energy' and own:
             result += time_stop_message(5, (0., 0., 0.), energy=d['energy'])
         elif event.kind == 'time_stop_shot' and own:
@@ -1133,11 +1226,21 @@ def event_messages(arena, player, events):
             if boss is not None and not d.get('respawn'):
                 result += b''.join(boss_role_messages(arena))
             allied_reload.update(v.entity_id for v in arena.vehicles.values()
-                                 if v.team == player.team and v.entity_id != player.vehicle_id)
+                                 if _can_view_reload(arena, player, v))
             result += ammo_message(actor)
             if not d.get('respawn'):
                 result += b''.join(provision_messages(actor))
+            if (resurrection := getattr(arena, 'uprising', None)) is not None:
+                result += boss_lives_message(resurrection.remaining(actor.entity_id))
+                result += uprising_elixir_message(resurrection.elixir(actor.entity_id))
+                if d.get('respawn'):
+                    result += uprising_offers_message(())
+                    if resurrection.has(actor.entity_id, uprising.ENEMY_RELOAD):
+                        result += enemy_reload_visibility_message(True)
+                result += uprising_respawn_time_message(0.)
             for state in actor.consumables:
+                if state and state.spec is uprising.RESPAWN_CLOAK:
+                    continue
                 if state:
                     view = state.state_at(arena.simulation_time)
                     result += consumable_message(state.spec.compact_id, view.state, view.remaining, view.total)
@@ -1146,6 +1249,9 @@ def event_messages(arena, player, events):
                     # consumable slot cursor at AvatarGameLogic+0x5b4.
                     result += consumable_message(0, 0)
             result += mad_games_passive_message(actor)
+            if resurrection is not None:
+                result += uprising_passive_message(resurrection, actor.entity_id)
+                result += uprising_shot_upgrade_messages(resurrection, actor.entity_id, arena.simulation_time)
             result += avatar_method(7,struct.pack('<BI',0,actor.shell_id))+targeting_info(
                 actor,d.get('yaw_rate'),d.get('pitch_rate'))
             full_factor = actor.reload_speed_factor * getattr(
@@ -1251,6 +1357,37 @@ def event_messages(arena, player, events):
             result += avatar_method(13,struct.pack('<IBf',event.actor,state,nominal))
             result += arena_update(15,pb_blob(14,pb_blob(1,pb_int(1,event.actor)+pb_int(2,state)
                 +varint((3<<3)|5)+struct.pack('<f',value)+pb_int(4,d['clip']))))
+        elif event.kind == 'uprising_elixir' and own:
+            result += uprising_elixir_message(d['balance'])
+        elif event.kind == 'uprising_clock' and own:
+            result += uprising_respawn_time_message(d['seconds'])
+        elif event.kind == 'uprising_offers' and own:
+            result += uprising_offers_message(d['offers'])
+        elif event.kind == 'uprising_shot_upgrade':
+            if own:
+                seconds = math.ceil(d['cooldown'])
+                result += consumable_message(d['compact_id'], COOLDOWN, seconds, seconds)
+            if d['compact_id'] == uprising.INFERNO.compact_id:
+                # Avatar52 dispatches showSplash(entity, impact point).
+                result += avatar_method(52, struct.pack('<I3f', event.actor, *d['point']))
+        elif event.kind == 'uprising_shot_upgrade_ready' and own:
+            result += consumable_message(d['compact_id'], READY)
+        elif event.kind == 'uprising_shot_upgrade_cooldown' and own:
+            result += consumable_message(d['compact_id'], COOLDOWN,
+                                         math.ceil(d['remaining']), math.ceil(d['total']))
+        elif event.kind == 'uprising_lightning_fx':
+            # Avatar51 dispatches showLightning(vehicle ID, tracer ID, start, end).
+            start = arena.vehicles.get(d['start_entity'])
+            target = arena.vehicles.get(event.target)
+            if start and target and not (mad_games.concealed(start, player.team)
+                                         or mad_games.concealed(target, player.team)):
+                result += avatar_method(51, struct.pack('<II6f', start.entity_id, d['arc'],
+                                                      *d['start'], *d['end']))
+        elif event.kind == 'uprising_respawn':
+            if own:
+                result += uprising_offers_message(d['offers'])
+                result += uprising_respawn_time_message(d['seconds'])
+            result += uprising_wait_respawn_message(event.actor, event.target)
         elif event.kind == 'mad_observation_warning' and own:
             result += observed_status_message(event.actor, d['observed'])
         elif event.kind == 'mad_cloak':
@@ -1260,6 +1397,10 @@ def event_messages(arena, player, events):
                 pose = chameleon_pose(d['pose']) if d['enabled'] else d['pose']
                 result += b'\x14' + struct.pack('<III6f', event.actor, arena.space_id, 0,
                                                 *pose.position, pose.roll, pose.pitch, pose.yaw)
+                if not d['enabled'] and _can_view_reload(arena, player, actor):
+                    allied_reload.add(event.actor)
+        elif event.kind == 'uprising_cloak_fx' and actor.team == player.team:
+            result += provision_effect_message(event.actor, d['compact_id'], argument=int(d['active']))
         elif event.kind == 'mad_revenge_targets' and own:
             update_revenge_targets = True
         elif event.kind == 'mad_reflector_fx':
@@ -1305,8 +1446,26 @@ def event_messages(arena, player, events):
             result += provision_effect_message(event.actor, big_boss.BLAST_WAVE.compact_id)
         elif event.kind in ('bomber_blast', 'boss_role_effect'):
             result += provision_effect_message(event.actor, d['compact_id'])
-        elif event.kind in ('boss_vehicle_effects', 'mad_vehicle_effects'):
+        elif event.kind in ('boss_vehicle_effects', 'mad_vehicle_effects', 'uprising_mark_fx'):
             result += vehicle_client_effects_message(arena, event.actor, d['effects'])
+        elif event.kind == 'uprising_play_dead_fx' and actor.team != player.team:
+            # Only the observer's model and HP marker change. Arena kill,
+            # respawn and scoreboard messages still use the real tank state.
+            health = 0 if d['active'] else d['health']
+            result += vehicle_property(event.actor, 3, struct.pack('<h', health))
+            result += vehicle_property(event.actor, 1, bytes([health > 0]))
+            # Both edges must notify the native health listener. Calling
+            # it only on revival leaves the enemy HP marker in its dead state.
+            # Attacker zero gives the enemy observer the red damage marker
+            # without crediting the visual hit to that player.
+            result += health_changed(event.actor, health, 0)
+            if not d['active'] and _can_view_reload(arena, player, actor):
+                allied_reload.add(event.actor)
+        elif event.kind == 'uprising_curse_fx':
+            if not d['active'] or not mad_games.concealed(actor, player.team):
+                # CurseEffectHandler (0x1db2d50) starts with argument zero.
+                result += provision_effect_message(event.actor, uprising.CURSE.compact_id,
+                                                   argument=int(not d['active']))
         elif event.kind in ('gravitrap', 'gravitrap_expired', 'gravitrap_visual_change'):
             update_gravity_traps = True
         elif event.kind=='explosion' and not (own and d.get('skip_owner')):
@@ -1435,6 +1594,12 @@ def reconnect_message_parts(arena, player, *, refresh_period=True):
              b'\x13\xaa'+struct.pack('<I',own.assisted_damage)]
     if getattr(arena, 'mad_games_mode', False) and own.mad_revenge:
         parts.append(revenge_targets_message(arena, own))
+    if (resurrection := getattr(arena, 'uprising', None)) is not None:
+        parts.append(uprising_elixir_message(resurrection.elixir(own.entity_id)))
+        time_left = max(0., arena.respawn_at.get(own.entity_id, 0.) - arena.simulation_time)
+        if time_left and not arena.finished_at:
+            parts.append(uprising_offers_message(resurrection.offers(own.entity_id)))
+        parts.append(uprising_respawn_time_message(time_left))
     timeline = getattr(arena, 'time_stop', None)
     if timeline is not None and timeline.entity is not None and timeline.account != player.account_id:
         parts.append(time_stop_roster_message(timeline.entity))
@@ -1469,6 +1634,8 @@ def reconnect_message_parts(arena, player, *, refresh_period=True):
                    or (entity in arena.respawn_at and entity not in arena.boss_pending_roles))
         parts.append(boss_picker_message(arena, 2 if picking else 1))
     for state in own.consumables:
+        if state and state.spec is uprising.RESPAWN_CLOAK:
+            continue
         if state:
             view = state.state_at(arena.simulation_time)
             parts.append(consumable_message(state.spec.compact_id, view.state, view.remaining, view.total))
@@ -1476,6 +1643,11 @@ def reconnect_message_parts(arena, player, *, refresh_period=True):
             parts.append(consumable_message(0, 0))
     if passive := mad_games_passive_message(own):
         parts.append(passive)
+    if resurrection is not None:
+        parts.append(uprising_passive_message(resurrection, own.entity_id))
+        parts.append(uprising_shot_upgrade_messages(resurrection, own.entity_id, arena.simulation_time))
+        if resurrection.has(own.entity_id, uprising.ENEMY_RELOAD):
+            parts.append(enemy_reload_visibility_message(True))
     parts.extend((avatar_method(7, struct.pack('<BI', 0, own.shell_id)),
                   targeting_info(own), *_reconnect_reload_parts(arena, own)))
     parts.extend(_allied_reload_parts(arena, player))
@@ -1483,8 +1655,9 @@ def reconnect_message_parts(arena, player, *, refresh_period=True):
     # the new Avatar owns its vehicle.  This also covers client-side reset of
     # damaged-module visuals during a BaseApp replacement.
     for _, vehicle in present_vehicles(arena, player):
-        parts.append(vehicle_property(vehicle.entity_id, 1, bytes([vehicle.alive])))
-        parts.append(vehicle_property(vehicle.entity_id, 3, struct.pack('<h', vehicle.health)))
+        health = _observer_health(arena, player, vehicle)
+        parts.append(vehicle_property(vehicle.entity_id, 1, bytes([vehicle.alive and health > 0])))
+        parts.append(vehicle_property(vehicle.entity_id, 3, struct.pack('<h', health)))
         critical, destroyed = module_snapshot(arena, vehicle)
         parts.append(module_state_messages(vehicle.entity_id, critical, destroyed))
         parts.append(state_modifiers_message(vehicle.entity_id,
@@ -1496,9 +1669,14 @@ def reconnect_message_parts(arena, player, *, refresh_period=True):
                     arena, 'track_repair_status', lambda _: ())(vehicle):
                 parts.append(module_repair_message(vehicle.entity_id, extra, progress, duration))
         parts.append(active_equipment_message(arena, vehicle))
+        if resurrection is not None and vehicle.team == player.team and vehicle.mad_cloaked:
+            parts.extend(provision_effect_message(vehicle.entity_id, spec.compact_id, argument=1)
+                         for spec in uprising.CLOAKS if uprising.active(vehicle, spec, arena.simulation_time))
         armor_state = movable_armor_states_message(vehicle)
         if armor_state:
             parts.append(armor_state)
+    if resurrection is not None and time_left and not arena.finished_at:
+        parts.append(uprising_wait_respawn_message(own.entity_id, own.killer))
     for person in getattr(arena, 'injured_crew', lambda vehicle: ())(own):
         parts.append(module_damage_message(own.entity_id, 0, person.spec.extra_health_index))
     return tuple(part for part in parts if part)

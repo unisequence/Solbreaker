@@ -1,15 +1,17 @@
 """Authoritative arena state. No Mercury IDs, packet bytes or sockets here."""
 import dataclasses
 from collections import Counter, deque
+from copy import copy
 import math
 import os
 import random
 import time
 import uuid
 
-from . import big_boss, diagnostics, mad_games
+from . import big_boss, diagnostics, mad_games, uprising
 from .ballistics import (Projectile, ReconContact, SweepCache, TrackContact, advance, body_states,
                          interpolate, missile_guidance_target)
+from .arena_commands import decode_graviton_aim, decode_uprising_target
 from .armor import MovableArmorStateSnapshot
 from .ammunition import (advance_pump, apply_burst_shell_switch, apply_queued_shell,
                          finish_magazine_reload, magazine_reload_allowed, spend_round,
@@ -18,7 +20,7 @@ from .collision import CollisionWorld, Pose
 from .marker_batch import try_markers as _try_marker_batch
 from .entities import BattleEvent, BattleResult, MotionFrame, MotionSample, Player, Vehicle
 from .motion import game_tick
-from .aiming import GunAim, wrap
+from .aiming import GunAim, disperse_shot, wrap
 from .roster import TEAMS, validate_teams, training_spawn, training_yaw
 from .orientation import matrix
 from .consumables import (ACTIVE, COOLDOWN, HEAL, RESTORE, SHIELDED_SHELL_KINDS,
@@ -128,9 +130,16 @@ class Arena:
         self.gravity_mode = rules == 'gravity'
         self.big_boss_mode = rules == big_boss.MODE
         self.mad_games_mode = rules == mad_games.MODE
+        if result_id is not None and (type(result_id) is not str or len(result_id) != 32
+                                      or any(c not in '0123456789abcdef' for c in result_id)):
+            raise ValueError('Invalid arena identity')
+        self.result_id = uuid.uuid4().hex if result_id is None else result_id
+        self.uprising = (uprising.BattleState(random.Random(self.result_id + ':uprising'))
+                         if rules == uprising.MODE else None)
         self.mad_irradiated = {}
         self._mad_games_game = (bot_game or recon_game) if self.mad_games_mode else None
-        self.time_stop_enabled &= not (self.gravity_mode or self.mad_games_mode)
+        self._uprising_game = (bot_game or recon_game) if self.uprising is not None else None
+        self.time_stop_enabled &= not (self.gravity_mode or self.mad_games_mode or self.uprising is not None)
         self.big_boss = None
         self.boss_role_picker = self.big_boss_mode and not solo and room_settings is not None
         self.boss_pending_roles = {}
@@ -138,6 +147,8 @@ class Arena:
         self.boss_picker_refresh_at = 0.
         self._boss_game = (bot_game or recon_game) if self.big_boss_mode else None
         self.unlimited_lives |= self.big_boss_mode
+        if self.uprising is not None:
+            self.unlimited_lives = False
         self._gravity_game = bot_game if self.gravity_mode else None
         self.practice = sandbox_enabled and solo and not bot_enabled
         self.practice_clock_repeats = self.practice and settings.minutes is None
@@ -153,10 +164,6 @@ class Arena:
         self.hangar_players = set()
         self.training_swappers = set()
         self.practice_timer_at = 0.
-        if result_id is not None and (type(result_id) is not str or len(result_id) != 32
-                                      or any(c not in '0123456789abcdef' for c in result_id)):
-            raise ValueError('Invalid arena identity')
-        self.result_id = uuid.uuid4().hex if result_id is None else result_id
         self.unique_id = int(self.result_id[:15],16) or 1
         self.created_at = time.time()
         self.space_id, self.entity_base, self.solo = space_id,entity_base,solo
@@ -165,7 +172,7 @@ class Arena:
         self.map_id = map_spec.map_id if map_spec is not None else 6
         point = getattr(map_spec, 'capture_point', None)
         strategic_points = getattr(map_spec, 'strategic_points', ())
-        capture_enabled = rules == 'encounter' or (self.mad_games_mode and not strategic_points)
+        capture_enabled = rules in ('encounter', uprising.MODE) or (self.mad_games_mode and not strategic_points)
         self.base_capture = BaseCapture(point) if point is not None and capture_enabled else None
         self.supremacy = (Supremacy(strategic_points)
                          if rules == 'supremacy' or (self.mad_games_mode and strategic_points) else None)
@@ -215,11 +222,14 @@ class Arena:
         self.resolved_shots = set()
         self.destructions = {}
         self.rng = random.Random(self.result_id)
+        self.dispersion_rng = random.Random(self.result_id + ':dispersion')
         # Separate stream: gun chance draws must not shift penetration rolls.
         self.module_rng = random.Random(self.result_id+':modules')
-        # Mad Games supplies team spotting and the native detection lamp.
+        # Both special modes supply team spotting and the native detection lamp.
         # Recon's personal locks would mask those markers and replace the lamp.
-        recon_enabled = recon_enabled and not self.mad_games_mode
+        recon_enabled = recon_enabled and not (self.mad_games_mode or self.uprising is not None)
+        self.team_spotting = not recon_enabled
+        self._spotting_checks = {}
         # The dedicated stream must never alter ballistics or damage.
         self.recon_rng = random.Random(self.result_id+':recon') if recon_enabled else None
         self.recon = ReconState(random_sample=self.recon_rng.random) if recon_enabled else None
@@ -447,6 +457,12 @@ class Arena:
         if self.mad_games_mode:
             for vehicle in self.vehicles.values():
                 self._install_mad_games_ability(vehicle)
+        if self.uprising is not None:
+            for vehicle in self.vehicles.values():
+                self._install_uprising_ability(vehicle)
+        if self.team_spotting and collision_scene is not None:
+            for vehicle in self.vehicles.values():
+                vehicle.mad_unspotted = True
         if self.big_boss_mode:
             self.big_boss = big_boss.BigBoss(self.vehicles, self.result_id, endless=self.endless)
             for vehicle in self.vehicles.values():
@@ -981,7 +997,7 @@ class Arena:
         """Sandbox: chance draw, then nominal device damage. No natural recovery.
 
         chance 0 never damages and 1 always damages, without drawing. Hull HP,
-        hits and kills are untouched; zero dispersion and reload are unchanged.
+        hits and kills are untouched.
         """
         chance = gun.spec.projectile_chance
         if gun.destroyed or not probability_checked and (chance <= 0 or
@@ -1007,6 +1023,8 @@ class Arena:
                 and getattr(event, 'relative_direction', None) is not None
                 and target is not None and shooter is not None and target.alive
                 and target.team != shooter.team and not target.sandbox_god_mode
+                and (self.uprising is None or (event.shot, target.entity_id) not in self.uprising.protected_shots
+                     and not uprising.active(target, uprising.PLAY_DEAD, event.at))
                 # Internal-volume transforms have not accepted the rigid
                 # quaternion path yet. A flying target may take verified armor
                 # damage, but may not gain speculative module damage through
@@ -1246,6 +1264,8 @@ class Arena:
         if (not contact.penetrated or target is None or shooter is None or not target.alive
                 or target.team == shooter.team or target.sandbox_god_mode):
             return
+        if self.uprising is not None and self._uprising_blocks_shell(target, contact.shot, contact.at):
+            return
         gun = self.guns.get(target.entity_id)
         if (contact.hit.part not in target.tracks and gun is not None
                 and contact.hit.part == target.definition.gun.geometry):
@@ -1353,6 +1373,12 @@ class Arena:
         for state in vehicle.consumables:
             if state is not None:
                 state.set_cooldown_limit(now, limit)
+        if self.uprising is not None:
+            self.uprising.set_shot_upgrade_cooldown_limit(vehicle.entity_id, now, limit)
+            for compact_id, remaining, total in self.uprising.shot_upgrade_statuses(vehicle.entity_id, now):
+                if remaining:
+                    self.emit('uprising_shot_upgrade_cooldown', vehicle.entity_id, compact_id=compact_id,
+                              remaining=remaining, total=total)
         self._consumables(vehicle, now, refresh_cooldowns=True)
 
     def _configure_ammunition(self, vehicle):
@@ -1389,6 +1415,7 @@ class Arena:
         vehicle.burst_effect = 0
         vehicle.burst_remaining = 0
         vehicle.burst_switch_shell = 0
+        vehicle.duplet_pending = False
         vehicle.reload_kind = 'reload'
         vehicle.reload_total = self._reload_duration(vehicle, 'reload', weapon.reload if weapon else 6.)
         if vehicle.pump_times and weapon:
@@ -1411,6 +1438,7 @@ class Arena:
             vehicle.burst_effect = 0
             vehicle.burst_remaining = 0
             vehicle.burst_switch_shell = 0
+            vehicle.duplet_pending = False
             vehicle.reload_at = 0.
             vehicle.reload_kind = 'reload'
 
@@ -1489,7 +1517,7 @@ class Arena:
             self._publish_base_capture()
 
     def _combat_can_finish(self):
-        if self.endless or self.unlimited_lives:
+        if self.unlimited_lives or (self.endless and self.uprising is None):
             return False
         if self.room_settings is None:
             return True
@@ -1797,6 +1825,8 @@ class Arena:
                 for vehicle in self.vehicles.values():
                     mad_games.charge_shield(vehicle, now)
                 self._update_mad_games(now)
+            elif self.team_spotting and self.world is not None:
+                self._update_team_spotting(now)
             self._record_motion_frame(self.started)
             self.emit('period',period=3,seconds=0 if self.endless else self.battle_seconds,winner=0)
             if self.boss_role_picker:
@@ -2051,20 +2081,18 @@ class Arena:
             self._damage_health(self.vehicles[entity], damage, source.entity_id, at,
                                 shell_hit=False, kinetic=True)
 
-    def _activate_boss_role_ability(self, vehicle, state, now):
+    def _activate_boss_role_ability(self, vehicle, state, now, view=None):
         if self.world is None or now < state.ready_at:
             return False
         entity = vehicle.entity_id
         role, level = self.big_boss.roles[entity], self.big_boss.levels[entity]
         if role == big_boss.GRAVITON:
             # A miss at the sky cannot put a trap at arbitrary range.
-            origin, direction = self.shot_ray(vehicle)
-            end = tuple(a + b * self.shell_for(vehicle).max_distance
-                        for a, b in zip(origin, direction))
-            body, _, center = self.world.static_segment(origin, end)
-            if body is None or not state.activate(now):
+            ray = self._ability_ray(vehicle) if view is None else None
+            center = big_boss.graviton_center(self.world, vehicle.pose.position, ray,
+                                              self.shell_for(vehicle).max_distance, view)
+            if center is None or not state.activate(now):
                 return False
-            center = tuple(center)
             trap = big_boss.GravityTrap(self.big_boss.next_trap, entity, vehicle.team, center, level,
                                        now+big_boss.TRAP_DURATION)
             self.big_boss.next_trap += 1
@@ -2255,7 +2283,8 @@ class Arena:
         previous = self.vehicles[entity]
         descriptor, shells, specs, camouflage = replacement if replacement is not None else (
             previous.descriptor, previous.loadout_shells,
-            tuple(slot.spec if slot else None for slot in previous.consumables), previous.camouflage)
+            tuple(slot.spec if slot else None for slot in previous.consumables
+                  if slot is None or slot.spec is not uprising.RESPAWN_CLOAK), previous.camouflage)
         restored = Vehicle(entity, previous.account_id, previous.nickname, previous.team,
                            descriptor, pose, loadout_ammo=previous.loadout_ammo,
                            loadout_shells=shells, camouflage=camouflage,
@@ -2271,7 +2300,7 @@ class Arena:
             if replacement is None:
                 self.big_boss.assign_role(entity)
             previous_abilities = self._set_boss_role_ability(restored)
-        if self.unlimited_lives:
+        if replacement is not None or self.unlimited_lives or self.uprising is not None:
             for field in ('shots', 'hits', 'damage', 'blocked_damage', 'assisted_damage',
                           'kills', 'direct_hits', 'piercings', 'damage_received', 'hits_received',
                           'piercings_received', 'distance', 'capture_points', 'defense_points'):
@@ -2282,10 +2311,19 @@ class Arena:
             self._clear_mad_irradiator(restored)
             self._install_mad_games_ability(restored)
             mad_games.charge_shield(restored, self.simulation_time)
+        if self.uprising is not None:
+            self._install_uprising_ability(restored)
+        if self.team_spotting:
+            restored.mad_unspotted = True
         restored.movable_armor_state = self._movable_armor_snapshot_at(restored, self.simulation_time)
         self.world.relocate_training_body(entity, pose)
         self.world.set_turret(0., entity)
         self.vehicles[entity] = restored
+        if self.uprising is not None:
+            self._clear_uprising_mark(entity)
+            self._clear_uprising_curse(entity)
+            self.uprising.history.pop(entity, None)
+            self.uprising.protected_shots = {key for key in self.uprising.protected_shots if key[1] != entity}
         if previous_abilities is not None:
             self._emit_boss_role(entity, previous_abilities)
         self.motion_frame = None
@@ -2321,9 +2359,14 @@ class Arena:
         self._sandbox_inputs.pop(account_id, None)
 
     def training_tank_available(self, account_id):
+        vehicle = self.vehicle_for(account_id)
+        if (resurrection := getattr(self, 'uprising', None)) is not None:
+            return (resurrection.remaining(vehicle.entity_id) > 0
+                    and (vehicle.alive or account_id in self.hangar_players))
         boss = self.big_boss
-        return (boss is None or not boss.tickets
-                or boss.lives.get(self.players[account_id].vehicle_id, 1) > 0)
+        if boss is not None and boss.tickets and boss.lives.get(vehicle.entity_id, 1) <= 0:
+            return False
+        return self.unlimited_lives or vehicle.alive
 
     def cancel_time_stop(self, account_id):
         if (timeline := getattr(self, 'time_stop', None)) is not None and timeline.cancel(account_id):
@@ -2367,10 +2410,23 @@ class Arena:
         if pose is None:
             raise TrainingSpawnUnavailable('All team spawn points are occupied')
         self._lose_target(entity)
-        self._restore_vehicle(entity, pose,
-                              replacement=(scene.definition.descriptor, shells, consumables, camouflage))
-        if changed_geometry and self.time_stop is not None:
-            self.time_stop.refresh_geometry()
+        vehicle = self._restore_vehicle(entity, pose,
+                                        replacement=(scene.definition.descriptor, shells, consumables, camouflage))
+        if previous.alive and (not self.unlimited_lives or self.big_boss and self.big_boss.tickets):
+            fraction = previous.health / previous.max_health
+            vehicle.health = max(1, int(vehicle.max_health * fraction + .5))
+        if self.uprising is not None:
+            if not previous.alive:
+                self._add_uprising_respawn_cloak(vehicle, self.simulation_time)
+            self._consumables(vehicle, self.simulation_time)
+        if changed_geometry:
+            if self.drive_workers is not None:
+                # The old replicas contain the previous hull. The main
+                # simulation handles driving while replacements start up.
+                self.drive_workers.advance_close()
+                self._drive_workers_attempted = False
+            if self.time_stop is not None:
+                self.time_stop.refresh_geometry()
         self.hangar_players.remove(account_id)
         self.emit('training_reentry', entity)
 
@@ -2380,6 +2436,12 @@ class Arena:
         from .map_catalog import map_team_capacity
         for entity, due in tuple(self.respawn_at.items()):
             if now < due:
+                if self.uprising is not None and self.vehicles[entity].account_id is not None:
+                    remaining = due - now
+                    if math.ceil(remaining) < math.ceil(remaining + self.STEP):
+                        # The native timer listener may be created after the
+                        # death packet. Refresh the value on every second edge.
+                        self.emit('uprising_clock', entity, seconds=remaining)
                 continue
             previous = self.vehicles[entity]
             if not self._player_attached(previous):
@@ -2393,15 +2455,64 @@ class Arena:
                     critical, destroyed = self.module_state(previous)
                     vehicle = self._restore_vehicle(entity, pose)
                     self.respawn_at.pop(entity)
+                    if self.uprising is not None:
+                        limit = sandbox.FAST_RELOAD_SECONDS if vehicle.sandbox_fast_reload else None
+                        self.uprising.on_respawn(entity, bot=vehicle.account_id is None, now=now,
+                                                 cooldown_limit=limit)
+                        self._add_uprising_respawn_cloak(vehicle, now)
                     if self.boss_role_picker and vehicle.account_id is not None:
                         self.emit('boss_picker', entity, state=1)
                     self.emit('practice_spawn', entity, first=False, position=pose.position,
                               repaired=critical+destroyed)
+                    if self.uprising is not None:
+                        self._consumables(vehicle, now)
                     self.emit('ready', entity, yaw_rate=vehicle.gun.yaw_rate,
                               pitch_rate=vehicle.gun.pitch_rate, respawn=True)
                     break
             else:
                 self.respawn_at[entity] = now+.5
+
+    @staticmethod
+    def _add_uprising_respawn_cloak(vehicle, now):
+        cloak = ConsumableState(uprising.RESPAWN_CLOAK)
+        cloak.activate(now)
+        vehicle.consumables += (cloak,)
+
+    def _award_elixir(self, vehicle, amount):
+        state = self.uprising
+        entity = vehicle.entity_id
+        choosing = vehicle.account_id is not None and entity in self.respawn_at
+        previous = state.offers(entity) if choosing else ()
+        balance = state.earn(entity, amount)
+        if balance is not None and vehicle.account_id is not None:
+            self.emit('uprising_elixir', entity, balance=balance)
+            if choosing and (offers := state.offers(entity)) != previous:
+                self.emit('uprising_offers', entity, offers=offers)
+
+    def select_uprising_upgrade(self, account_id, compact_id, selected, now=None):
+        if self.uprising is None:
+            return False
+        self.step(time.monotonic() if now is None else now)
+        player = self.players[account_id]
+        entity = player.vehicle_id
+        if (self.finished_at or not player.attached or not player.loaded
+                or self.vehicles[entity].alive or entity not in self.respawn_at):
+            return False
+        balance = self.uprising.select(entity, compact_id, selected)
+        if balance is None:
+            return False
+        self.emit('uprising_elixir', entity, balance=balance)
+        self.emit('uprising_offers', entity, offers=self.uprising.offers(entity))
+        return True
+
+    def _advance_uprising_income(self, now):
+        if not self.started:
+            return
+        points = self.uprising.income_since_tick(now - self.started)
+        if points:
+            for vehicle in self.vehicles.values():
+                if self._player_attached(vehicle):
+                    self._award_elixir(vehicle, points)
 
     def _active_sandbox_control(self, vehicle, now):
         if not (vehicle.alive and vehicle.account_id is not None and self._player_attached(vehicle)):
@@ -2501,6 +2612,20 @@ class Arena:
                 return vehicle.gun.ray_rotation(p.position,rotation)
         return vehicle.gun.ray(p.position,p.yaw,p.pitch,p.roll)
 
+    def _ability_ray(self, vehicle):
+        pose = vehicle.pose
+        rotation = self.world._dynamic_rotation(vehicle.entity_id) if self.world is not None else None
+        if rotation is None:
+            rotation = matrix(pose.yaw, pose.pitch, pose.roll)
+        point = None
+        if target := self.vehicles.get(vehicle.autoaim_target):
+            if (target.alive and vehicle.autoaim_offset is not None
+                    and not mad_games.concealed(target, vehicle.team)):
+                p = target.pose
+                offset = matrix(p.yaw, p.pitch, p.roll) @ vehicle.autoaim_offset
+                point = tuple(a + b for a, b in zip(p.position, offset))
+        return vehicle.gun.target_ray(pose.position, rotation, point)
+
     def shell_for(self, vehicle):
         if vehicle.definition:
             return next(s for s in vehicle.definition.weapon.shells if s.compact_id==vehicle.shell_id)
@@ -2573,8 +2698,8 @@ class Arena:
         self.emit('reload',vehicle.entity_id,delay=vehicle.reload_total)
         return True
 
-    def aim_hit(self, vehicle):
-        origin,direction = self.shot_ray(vehicle)
+    def aim_hit(self, vehicle, *, ray=None):
+        origin,direction = self.shot_ray(vehicle) if ray is None else ray
         if self.world is not None:
             # The collision scene is shared immutable geometry; controller
             # rows belong to each arena Vehicle and are snapshotted here for
@@ -2582,8 +2707,8 @@ class Arena:
             armor_states = {entity: target.movable_armor_state
                             for entity,target in self.vehicles.items()
                             if target.movable_armor_state is not None}
-            concealed = {entity for entity, target in self.vehicles.items()
-                         if mad_games.concealed(target, vehicle.team)} if self.mad_games_mode else ()
+            concealed = ({entity for entity, target in self.vehicles.items()
+                          if mad_games.concealed(target, vehicle.team)} if self.team_spotting else ())
             options = {'ignore_entities': concealed} if concealed else {}
             body,point,_ = self.world.shot_path(origin,direction,self.shell_for(vehicle).max_distance,
                                                 ignore_entity=vehicle.entity_id,
@@ -2606,7 +2731,7 @@ class Arena:
         """Fire at the current simulation step for a player or opt-in bot."""
         if (not self.started or self.finished_at or not vehicle.alive or vehicle.reload_at or vehicle.ammo<=0
                 or vehicle.pump_times and vehicle.clip<=0
-                or vehicle.burst_gun and vehicle.burst_pending):
+                or vehicle.burst_pending):
             return
         if self.gun_destroyed(vehicle):
             # Native 0x182c050 refuses a destroyed gun; never trust the client.
@@ -2633,18 +2758,20 @@ class Arena:
             shell = dataclasses.replace(shell, damage=shell.damage * big_boss.SHELL_DAMAGE)
         origin,velocity,fired_shell = self._launch(vehicle,shell,now)
         weapon = vehicle.definition.weapon if vehicle.definition else None
-        if vehicle.pump_times:
-            self._fire_pump(vehicle,weapon,now,fired_shell,origin,velocity,shot_effect)
-            return
         following = (min(weapon.burst_count-1,vehicle.clip,vehicle.ammo)
                      if vehicle.burst_gun else 0)
-        if following:
+        duplet = self.uprising is not None and self.uprising.has(vehicle.entity_id, uprising.DUPLET)
+        unlimited = self.unlimited_ammo or self.practice and vehicle.account_id is not None
+        vehicle.duplet_pending = bool(duplet and (unlimited or vehicle.ammo > following))
+        if following or vehicle.duplet_pending:
             # One accepted Fire starts its whole XML group.  Only rounds which
             # really remain in the current clip and selected ammunition are
             # scheduled, so a short final loadout cannot create free shells.
-            delay = self._burst_duration(vehicle)
+            delay = self._burst_duration(vehicle) if following else uprising.DUPLET_DELAY
             vehicle.burst_shell,vehicle.burst_effect = shell,shot_effect
-            vehicle.burst_remaining = following
+            vehicle.burst_remaining = following + vehicle.duplet_pending
+            vehicle.pump_at = vehicle.pump_total = 0.
+            vehicle.pump_waiting = False
             vehicle.reload_kind = 'interval'
             vehicle.reload_at = now+delay
             vehicle.reload_total = delay
@@ -2653,6 +2780,9 @@ class Arena:
             self._emit_shot(vehicle,fired_shell,origin,velocity,now,shot_effect,following+1)
             self.emit('ammo',vehicle.entity_id)
             self.emit('reload',vehicle.entity_id,delay=delay)
+            return
+        if vehicle.pump_times:
+            self._fire_pump(vehicle,weapon,now,fired_shell,origin,velocity,shot_effect)
             return
         # Berserk's speed applies to both cycles; NewAutoloader only to the intershot.
         vehicle.reload_kind = 'interval' if vehicle.clip else 'reload'
@@ -2671,13 +2801,26 @@ class Arena:
                 or self.world is None or bot.reload_at or bot.ammo <= 0
                 or not controller.shot_check_due(now)):
             return
+        if bot.mad_cloaked and bot.flags & TrainingBot.REVERSE:
+            return
         visible,_ = self.aim_hit(bot)
         if (visible == target.entity_id if ai is None else
                 controller.sight_confirmed(target.entity_id, visible == target.entity_id, now)):
             if self.mad_games_mode:
-                if bot.mad_cloaked and bot.flags & TrainingBot.REVERSE:
-                    return
                 self._training_bot_mad_attack(bot, target, now)
+            elif self.uprising is not None:
+                ability = next((slot for slot in bot.consumables if slot and slot.spec in uprising.ACTIVE_ABILITIES), None)
+                if ability is not None and now >= ability.ready_at:
+                    if ability.spec in uprising.TARGETED_ABILITIES:
+                        self._activate_uprising_targeted(bot, ability, now, target.entity_id)
+                    elif ability.spec is uprising.BERSERK and bot.health > bot.max_health * .3:
+                        self._activate_consumable(bot, ability, now)
+                    elif ability.spec is uprising.PLAY_DEAD and bot.health < bot.max_health * .75:
+                        self._activate_uprising_play_dead(bot, ability, now)
+                    elif ability.spec is uprising.TIME_JUMP:
+                        frame = self.uprising.rewind_frame(bot.entity_id, now)
+                        if frame is not None and frame.health - bot.health >= bot.max_health * .15:
+                            self._activate_uprising_time_jump(bot, ability, now)
             self._fire_vehicle(bot,now)
 
     def _training_bot_mad_attack(self, bot, target, now):
@@ -2711,6 +2854,14 @@ class Arena:
             dz = target.pose.position[2] - bot.pose.position[2]
             if 12. <= math.hypot(dx, dz) <= 48. and abs(wrap(math.atan2(dx, dz) - bot.pose.yaw)) < .18:
                 self._activate_mad_dash(bot, state, now)
+
+    def _training_bot_uprising_mobility(self, bot, target, now):
+        if (target is None or bot.mad_cloaked or not bot.flags & TrainingBot.REVERSE
+                or bot.health > bot.max_health * .5 or bot.reload_at <= now + 1.):
+            return
+        shadow = next((slot for slot in bot.consumables if slot and slot.spec is uprising.MOONWALK), None)
+        if shadow is not None and now >= shadow.ready_at:
+            self._activate_consumable(bot, shadow, now)
 
     def _training_bot_closing_speed(self, bot, target):
         """Relative horizontal approach speed from real motion, in m/s."""
@@ -2749,7 +2900,7 @@ class Arena:
             return max(.5,braking*surface-abs(gravity*math.sin(pitch)*math.cos(pitch)))
         return braking*surface
 
-    def _launch(self, vehicle, shell, now):
+    def _launch(self, vehicle, shell, now, *, from_reserve=False):
         """Spend one round and spawn its projectile from the live pose."""
         if self._is_boss(vehicle):
             charge = next((s for s in vehicle.consumables if s and s.spec is big_boss.MEGASHOT), None)
@@ -2762,10 +2913,25 @@ class Arena:
                 s.uses and now < s.active_until for s in vehicle.consumables
                 if s and s.spec in big_boss.ROLE_ACTIVE[role])
             shell = big_boss.role_shell(shell, role, level, poisoned=poisoned)
+        if self.uprising is not None:
+            factor = self.uprising.shell_damage_factor(vehicle.entity_id, self.rng.random)
+            if uprising.active(vehicle, uprising.BERSERK, now):
+                factor *= uprising.BERSERK_OUTGOING
+            if factor != 1.:
+                shell = dataclasses.replace(shell, damage=shell.damage * factor)
         vehicle.shots += 1
-        spend_round(vehicle, self.unlimited_ammo or self.practice and vehicle.account_id is not None)
+        spend_round(vehicle, self.unlimited_ammo or self.practice and vehicle.account_id is not None,
+                    from_reserve=from_reserve)
         self.next_shot += 1
         origin,direction = self.shot_ray(vehicle)
+        aiming = getattr(vehicle.definition, 'aiming', None)
+        shot_age = None if vehicle.last_shot_at is None else now - vehicle.last_shot_at
+        gun_state = self.guns.get(vehicle.entity_id)
+        direction = disperse_shot(direction, aiming, self.dispersion_rng, shot_age=shot_age,
+                                  factor=vehicle.shot_dispersion_factor, aim_factor=vehicle.aiming_time_factor,
+                                  movement_factor=vehicle.gun.movement_dispersion,
+                                  gun_damaged=gun_state is not None and gun_state.damaged)
+        vehicle.last_shot_at = now
         velocity = tuple(v*shell.speed for v in direction)
         self.projectiles[self.next_shot] = Projectile(self.next_shot,vehicle.entity_id,
             shell,origin,velocity,now,recon_tracking=self.recon is not None)
@@ -2826,7 +2992,7 @@ class Arena:
         self.world.set_flight_velocity(entity, (vx+fz*drift, vy, vz-fx*drift), spin)
 
     def _emit_shot(self, vehicle, shell, origin, velocity, now, shot_effect, shooting_count=1):
-        self._end_mad_cloak(vehicle, now)
+        self._end_vehicle_cloak(vehicle, now)
         if getattr(shell, 'railgun', False):
             shot_effect = shell.effect_index
         self.projectiles[self.next_shot].trace_effect = shot_effect
@@ -2854,38 +3020,54 @@ class Arena:
     def _fire_burst_next(self, vehicle, now):
         shell,shot_effect = vehicle.burst_shell,vehicle.burst_effect
         vehicle.reload_at = 0.
-        weapon = vehicle.definition.weapon
+        weapon = vehicle.definition.weapon if vehicle.definition else None
         if self.gun_destroyed(vehicle):
             # Same refusal as Fire; all unfired group rounds are unloaded with
             # the rest of the clip, while their rack ammunition stays intact.
             self.emit('fire_rejected',vehicle.entity_id,reason='gun_destroyed',at=now)
-            vehicle.burst_shell,vehicle.burst_effect = None,0
-            vehicle.burst_remaining = 0
-            vehicle.burst_switch_shell = 0
+            self._cancel_burst(vehicle)
             vehicle.clip = 0
+            if vehicle.pump_times:
+                self._pump_segment(vehicle, now)
+                self.emit('ammo', vehicle.entity_id)
+                self._emit_pump_gate(vehicle, now)
+                self._emit_pump(vehicle, now)
+                return
             vehicle.reload_kind = 'reload'
-            vehicle.reload_total = self._reload_duration(vehicle, 'reload', weapon.reload)
+            vehicle.reload_total = self._magazine_duration(vehicle, 'reload')
             vehicle.reload_at = now+vehicle.reload_total
             self.emit('ammo',vehicle.entity_id)
             self.emit('reload',vehicle.entity_id,delay=vehicle.reload_total)
             return
-        origin,velocity,shell = self._launch(vehicle,shell,now)
+        extra = vehicle.duplet_pending and vehicle.burst_remaining == 1
+        origin,velocity,shell = self._launch(vehicle,shell,now,from_reserve=extra)
         vehicle.burst_remaining -= 1
         if vehicle.burst_remaining:
-            delay = self._burst_duration(vehicle)
+            delay = (uprising.DUPLET_DELAY if vehicle.duplet_pending and vehicle.burst_remaining == 1
+                     else self._burst_duration(vehicle))
             vehicle.reload_kind = 'interval'
             vehicle.reload_at = now+delay
             vehicle.reload_total = delay
         else:
             vehicle.burst_shell,vehicle.burst_effect = None,0
+            vehicle.duplet_pending = False
+            if vehicle.pump_times:
+                self._fire_pump(vehicle,weapon,now,shell,origin,velocity,shot_effect)
+                if pending := apply_burst_shell_switch(vehicle):
+                    self.emit('shell_selected',vehicle.entity_id,shell=pending)
+                    self.emit('ammo',vehicle.entity_id)
+                    if not vehicle.clip and not vehicle.pump_at:
+                        self._pump_segment(vehicle, now)
+                        self._emit_pump_gate(vehicle, now)
+                        self._emit_pump(vehicle, now)
+                return
             vehicle.reload_kind = 'interval' if vehicle.clip else 'reload'
-            nominal = weapon.interval if vehicle.clip else weapon.reload
-            delay = self._reload_duration(vehicle, vehicle.reload_kind, nominal)
+            delay = self._magazine_duration(vehicle, vehicle.reload_kind)
             vehicle.reload_at = now+delay
             vehicle.reload_total = delay
         # The initial event already started this group's muzzle/audio sequence.
         # Its remaining physical projectiles still each need their own tracer.
-        self._emit_shot(vehicle,shell,origin,velocity,now,shot_effect,0)
+        self._emit_shot(vehicle,shell,origin,velocity,now,shot_effect,int(extra))
         if not vehicle.burst_pending and (pending := apply_burst_shell_switch(vehicle)):
             self.emit('shell_selected',vehicle.entity_id,shell=pending)
         self.emit('ammo',vehicle.entity_id)
@@ -2945,11 +3127,14 @@ class Arena:
         if not self.started or self.finished_at or not player.attached or not player.loaded or not vehicle.alive:
             reason = 'Vehicle cannot use consumables now'
         elif (type(ident) is not int or state is None or extra and not (
-                role_input and ident in big_boss.GRAVITON_INPUT_IDS and len(extra) == 36
-                or state.spec is mad_games.IRRADIATOR and len(extra) == 4)):
+                role_input and ident in big_boss.GRAVITON_INPUT_IDS
+                or state.spec is mad_games.IRRADIATOR and len(extra) == 4
+                or state.spec in uprising.TARGETED_ABILITIES)):
             reason = 'Consumable is not installed or extra arguments are unsupported'
         elif state.spec is mad_games.URANIUM_SHIELD:
             reason = 'Uranium Shield activates automatically'
+        elif state.spec is uprising.RESPAWN_CLOAK:
+            reason = 'Respawn cloak activates automatically'
         elif state.spec is big_boss.MEGASHOT or state.spec in big_boss.SHIELD_SPECS:
             reason = 'This ability activates on firing'
         elif state.spec.action == 'extinguish' and not self._fire_active(vehicle):
@@ -2972,15 +3157,235 @@ class Arena:
         if state.spec is mad_games.IRRADIATOR:
             requested = int.from_bytes(extra, 'little') if extra else None
             return self._activate_mad_irradiator(vehicle, state, now, requested)
+        if state.spec is uprising.TIME_JUMP:
+            return self._activate_uprising_time_jump(vehicle, state, now)
+        if state.spec is uprising.PLAY_DEAD:
+            return self._activate_uprising_play_dead(vehicle, state, now)
+        if state.spec in uprising.TARGETED_ABILITIES:
+            try:
+                requested = decode_uprising_target(ident, extra)
+            except ValueError:
+                self.emit('consumable_rejected', vehicle.entity_id, ident=ident,
+                          reason='Invalid Uprising ability target', at=now)
+                return False
+            return self._activate_uprising_targeted(vehicle, state, now, requested)
         if state.spec is big_boss.BLAST_WAVE:
             return self._boss_blast(vehicle)
         if state.spec in big_boss.ACTIVE_SPECS:
-            return self._activate_boss_role_ability(vehicle, state, now)
+            view = None
+            if state.spec.ident in big_boss.GRAVITON_INPUT_IDS:
+                try:
+                    view = decode_graviton_aim(extra)
+                except ValueError as error:
+                    self.emit('consumable_rejected', vehicle.entity_id, ident=ident, reason=str(error), at=now)
+                    return False
+            return self._activate_boss_role_ability(vehicle, state, now, view)
         if not self._activate_consumable(vehicle, state, now):
             self.emit('consumable_rejected', vehicle.entity_id, ident=ident,
                       reason='Consumable is cooling down or has no live target', at=now)
             return False
         return True
+
+    def _activate_uprising_play_dead(self, vehicle, ability, now):
+        if not self._activate_consumable(vehicle, ability, now):
+            return False
+        self._stop_fire(vehicle, now, 'play_dead', fire_advanced=True)
+        self._clear_uprising_mark(vehicle.entity_id)
+        self._clear_uprising_curse(vehicle.entity_id)
+        return True
+
+    def _end_uprising_play_dead(self, vehicle, at):
+        for slot in vehicle.consumables:
+            if slot and slot.spec is uprising.PLAY_DEAD and slot.stop(at):
+                self._consumables(vehicle, max(self.simulation_time, vehicle.consumable_clock, at))
+                return True
+        return False
+
+    def _uprising_blocks_shell(self, target, shot, at):
+        key = (shot, target.entity_id)
+        if key in self.uprising.protected_shots:
+            return True
+        if self._end_uprising_play_dead(target, at):
+            self.uprising.protected_shots.add(key)
+            return True
+        return False
+
+    def _rewind_modules(self):
+        return ((_ENGINE_EXTRA, self.engines), (_AMMO_RACK_EXTRA, self.ammo_racks),
+                (_FUEL_EXTRA, self.fuels), (_GUN_EXTRA, self.guns))
+
+    def _record_uprising_rewinds(self, now):
+        if self.world is None:
+            return
+        for tank in self.vehicles.values():
+            if (not tank.alive or not self._player_attached(tank)
+                    or not any(slot and slot.spec is uprising.TIME_JUMP for slot in tank.consumables)):
+                continue
+            entity = tank.entity_id
+            self.uprising.record(entity, uprising.RewindFrame(
+                now, tank.pose, copy(self.world.motion[entity]), tank.speed, tank.health,
+                tuple((part, state.shifted(0.)) for part, state in tank.tracks.items()),
+                tuple((part, copy(states[entity])) for part, states in self._rewind_modules() if entity in states),
+                tuple((index, person.injured) for index, person in self.crews.get(entity, {}).items()),
+            ))
+
+    def _activate_uprising_time_jump(self, tank, ability, now):
+        entity = tank.entity_id
+        frame = self.uprising.rewind_frame(entity, now)
+        world = self.world
+        if (not tank.alive or frame is None or world is None or now < ability.ready_at
+                or not world.can_resume_pose(entity, frame.pose, grounded=frame.motion.grounded)):
+            return False
+        if not self._activate_consumable(tank, ability, now):
+            return False
+        world.relocate_training_body(entity, frame.pose, motion=copy(frame.motion))
+        tank.pose, tank.speed = frame.pose, frame.speed
+        self.motion_frame = None
+        for states in (self._sandbox_flights, self._landing_airborne_since, self._landing_skids,
+                       self._track_drive_motion, self._track_drive_yaw_rates, self._track_drive_track_rates,
+                       self.fall_hp_carry):
+            states.pop(entity, None)
+        for part in tank.tracks:
+            self.track_fall_peaks.pop((entity, part), None)
+        hp = min(frame.health, tank.max_health)
+        if hp > tank.health:
+            self._heal_health(tank, tank, hp - tank.health)
+        elif hp != tank.health:
+            tank.health = hp
+            self.emit('health', entity, entity, health=hp)
+        self._stop_fire(tank, now, 'time_jump', fire_advanced=True)
+        self._clear_uprising_mark(entity)
+        self._clear_uprising_curse(entity)
+        self._restore_uprising_rewind_modules(tank, frame, now)
+        self.emit('orientation_rebased', entity, position=tank.pose.position,
+                  yaw=tank.pose.yaw, pitch=tank.pose.pitch, roll=tank.pose.roll)
+        return True
+
+    def _restore_uprising_rewind_modules(self, tank, frame, now):
+        entity = tank.entity_id
+        previous_critical, previous_destroyed = map(set, self.module_state(tank))
+        shift = now - frame.at
+        tank.tracks = {part: state.shifted(shift) for part, state in frame.tracked}
+        tank.track_assist_sources.clear()
+        modules = dict(frame.modules)
+        for part, states in self._rewind_modules():
+            if part in modules:
+                states[entity] = copy(modules[part])
+        critical, destroyed = map(set, self.module_state(tank))
+        for part, extra in (*_TRACK_EXTRAS.items(), *((key, key) for key in modules)):
+            before = 1 if extra in previous_destroyed else 0 if extra in previous_critical else 19
+            after = 1 if extra in destroyed else 0 if extra in critical else 19
+            if before != after or extra in _TRACK_EXTRAS.values() and after == 1:
+                self._module_changed(tank, part, after, now)
+        for index, injured in frame.crew:
+            person = self.crews[entity][index]
+            if (person.injure() if injured else person.heal()):
+                self._crew_changed(tank, person, 0 if injured else 19, now)
+        self._consumables(tank, now)
+
+    def _activate_uprising_targeted(self, vehicle, state, now, requested):
+        ray = self._ability_ray(vehicle)
+        entity, point = self.aim_hit(vehicle, ray=ray)
+        target = self.vehicles.get(entity)
+        if (target is None or not target.alive or target.team == vehicle.team
+                or not self._player_attached(target) or mad_games.concealed(target, vehicle.team)
+                or requested not in (None, entity) or uprising.active(target, uprising.PLAY_DEAD, now)):
+            return False
+        if state.spec is uprising.TORNADO:
+            return self._activate_uprising_tornado(vehicle, state, target, now)
+        curse = state.spec is uprising.CURSE
+        effects = self.uprising.curses if curse else self.uprising.marks
+        if curse and math.dist(ray[0], point) > uprising.CURSE_RANGE:
+            return False
+        if (effect := effects.get(entity)) and now < effect.end:
+            return False
+        if not self._activate_consumable(vehicle, state, now):
+            return False
+        effects[entity] = uprising.TargetAbility(vehicle.entity_id, vehicle.team, now, state.active_until)
+        if curse:
+            self.emit('uprising_curse_fx', entity, active=True)
+        else:
+            self.emit('uprising_mark_fx', entity, effects=self.uprising.vehicle_effects(entity))
+            self._consumables(vehicle, now)
+        return True
+
+    def _activate_uprising_tornado(self, source, ability, target, now):
+        entity = target.entity_id
+        world = self.world
+        if world is None or entity in world.dynamic_bodies or now < ability.ready_at:
+            return False
+        motion = world.motion[entity]
+        current = target.pose
+        x, y, z = current.position
+        angle = math.radians(self.rng.uniform(120., 180.))
+        if self.rng.getrandbits(1):
+            angle = -angle
+        for turn in (angle, -angle):
+            yaw = wrap(current.yaw + turn)
+            if motion.grounded:
+                pose = world.training_placement(entity, x, z, yaw, stationary=True, reference=y)
+            else:
+                candidate = dataclasses.replace(current, yaw=yaw)
+                pose = candidate if world.can_resume_pose(entity, candidate, grounded=False) else None
+            if pose is not None:
+                break
+        else:
+            return False
+        if not self._activate_consumable(source, ability, now):
+            return False
+        world.relocate_training_body(entity, pose, motion=dataclasses.replace(motion))
+        target.pose = pose
+        self.motion_frame = None
+        self.emit('orientation_rebased', entity, position=pose.position,
+                  yaw=pose.yaw, pitch=pose.pitch, roll=pose.roll)
+        return True
+
+    def _clear_uprising_mark(self, entity):
+        if self.uprising.marks.pop(entity, None) is not None:
+            self.emit('uprising_mark_fx', entity, effects=())
+
+    def _clear_uprising_curse(self, entity):
+        if self.uprising.curses.pop(entity, None) is not None:
+            self.emit('uprising_curse_fx', entity, active=False)
+
+    def _advance_uprising_targeted(self, now, before):
+        state = self.uprising
+        for entity, compact_id in state.advance_shot_upgrades(now):
+            if (tank := self.vehicles.get(entity)) is not None and tank.alive and tank.account_id is not None:
+                self.emit('uprising_shot_upgrade_ready', entity, compact_id=compact_id)
+        if state.lightning_hits:
+            for at, source, entity, generation, damage, arc, origin_entity, origin in sorted(state.lightning_hits):
+                if at > now + 1e-9:
+                    break
+                target = self.vehicles.get(entity)
+                if (source in self.vehicles and target is not None and target.generation == generation
+                        and target.alive and not target.sandbox_god_mode and self._player_attached(target)):
+                    x, y, z = target.pose.position
+                    self.emit('uprising_lightning_fx', source, entity, arc=arc,
+                              start_entity=origin_entity, start=origin, end=(x, y + 1., z))
+                    self._damage_health(target, damage, source, now, shell_hit=False)
+            state.lightning_hits[:] = (hit for hit in state.lightning_hits if hit[0] > now + 1e-9)
+        for entity, mark in tuple(state.marks.items()):
+            target = self.vehicles[entity]
+            if (not target.alive or not self._player_attached(target)
+                    or mad_games.concealed(target, mark.team) or now >= mark.end):
+                self._clear_uprising_mark(entity)
+        for entity, curse in tuple(state.curses.items()):
+            target = self.vehicles[entity]
+            if not target.alive or not self._player_attached(target) or now >= curse.end:
+                self._clear_uprising_curse(entity)
+                continue
+            previous = before[entity].pose.position
+            position = target.pose.position
+            curse.distance += math.hypot(position[0] - previous[0], position[2] - previous[2])
+            pulses, curse.distance = divmod(curse.distance, uprising.CURSE_DISTANCE)
+            if pulses and not target.sandbox_god_mode:
+                damage = int(pulses * target.max_health * uprising.CURSE_DAMAGE + .5)
+                self._damage_health(target, damage, curse.source, now, shell_hit=False)
+
+    def _install_uprising_ability(self, vehicle):
+        limit = sandbox.FAST_RELOAD_SECONDS if vehicle.sandbox_fast_reload else None
+        uprising.install_ability(vehicle, self._uprising_game, cooldown_limit=limit)
 
     def _install_mad_games_ability(self, vehicle):
         game = self._mad_games_game
@@ -2989,7 +3394,7 @@ class Arena:
         vehicle.mad_unspotted = True
 
     def _activate_mad_irradiator(self, vehicle, state, now, requested):
-        entity, _ = self.aim_hit(vehicle)
+        entity, _ = self.aim_hit(vehicle, ray=self._ability_ray(vehicle))
         target = self.vehicles.get(entity)
         if (target is None or not target.alive or target.team == vehicle.team or mad_games.concealed(target, vehicle.team)
                 or not self._player_attached(target) or requested not in (None, entity)):
@@ -3053,6 +3458,9 @@ class Arena:
             if hidden:
                 self._lose_target(vehicle.entity_id, include_owner=False)
             self.emit('mad_cloak', vehicle.entity_id, enabled=hidden, pose=vehicle.pose)
+        ghost = self.uprising is not None and self.uprising.has(vehicle.entity_id, uprising.GHOST)
+        if not self.team_spotting:
+            return
         if hidden or not vehicle.alive:
             vehicle.mad_observation_due = None
             if vehicle.mad_observation_warning:
@@ -3060,49 +3468,100 @@ class Arena:
                 self.emit('mad_observation_warning', vehicle.entity_id, observed=False)
         elif not vehicle.mad_observation_warning:
             if vehicle.mad_observation_due is None:
-                delay = (mad_games.SABOTEUR_WARNING_DELAY if vehicle.mad_passive == mad_games.SABOTEUR
-                         else mad_games.OBSERVATION_WARNING_DELAY)
+                delay = mad_games.OBSERVATION_WARNING_DELAY
+                if ghost:
+                    delay = uprising.GHOST_WARNING_DELAY
+                elif vehicle.mad_passive == mad_games.SABOTEUR:
+                    delay = mad_games.SABOTEUR_WARNING_DELAY
                 vehicle.mad_observation_due = now + delay
             if now >= vehicle.mad_observation_due:
                 vehicle.mad_observation_due = None
                 vehicle.mad_observation_warning = True
                 self.emit('mad_observation_warning', vehicle.entity_id, observed=True)
 
-    def _update_mad_spotting(self, living, now, targets=None):
+    def _update_mad_spotting(self, living, now, targets=None, *, force=False):
         targets = living if targets is None else targets
-        spotted = set()
+        spotted = {}
         candidates, starts, ends = [], [], []
+        proximity = mad_games.PROXIMITY_RANGE
+        concealment = {target.entity_id: self._spotting_concealment(target, now) for target in targets}
+        short_retention = {t.entity_id for t in targets if t.mad_passive == mad_games.SABOTEUR
+                           or self.uprising is not None and self.uprising.has(t.entity_id, uprising.GHOST)}
+        previous_checks = self._spotting_checks
+        checks = {} if not force else previous_checks
         for observer in living:
             x, y, z = observer.pose.position
             sight = mad_games.view_range(observer)
+            optics = getattr(observer.definition, 'spotting', None)
+            if optics is not None and 114 in observer.definition.optional_devices:
+                sight *= 1. + optics.optics_bonus
             for target in targets:
                 if target.team == observer.team or target.mad_cloaked or target.entity_id in spotted:
                     continue
                 distance = math.dist(observer.pose.position, target.pose.position)
-                if distance <= mad_games.PROXIMITY_RANGE or self.world is None and distance <= sight:
-                    spotted.add(target.entity_id)
-                elif distance <= sight:
+                effective_sight = min(445., sight - (sight - proximity) * concealment[target.entity_id])
+                if distance <= proximity or self.world is None and distance <= effective_sight:
+                    spotted[target.entity_id] = observer
+                elif distance <= effective_sight:
+                    pair = (observer.entity_id, observer.generation, target.entity_id, target.generation)
+                    last, previous_shot = previous_checks.get(pair, (-math.inf, None))
+                    fired = target.last_shot_at is not None and target.last_shot_at != previous_shot
+                    stopped = (not target.spotting_moving and target.spotting_last_motion_at is not None
+                               and target.spotting_last_motion_at >= last)
+                    interval = (.1 if target.entity_id in short_retention else
+                                .5 if distance <= 150. else 1. if distance <= 270. else 2.)
+                    if not (force or fired or stopped or now + 1e-9 >= last + interval):
+                        checks[pair] = last, previous_shot
+                        continue
+                    checks[pair] = now, target.last_shot_at
                     tx, ty, tz = target.pose.position
-                    candidates.append(target.entity_id)
+                    candidates.append((target.entity_id, observer))
                     starts.append((x, y + 1.4, z))
                     ends.append((tx, ty + 1.1, tz))
+        self._spotting_checks = checks
         if candidates:
             hits = self.world._visibility_rays(starts, ends)
-            spotted.update(entity for entity, hit in zip(candidates, hits)
-                           if hit[0] < 0 or hit[2] >= .999)
+            for (entity, observer), hit in zip(candidates, hits):
+                if hit[0] < 0 or hit[2] >= .999:
+                    spotted.setdefault(entity, observer)
         for vehicle in targets:
             if vehicle.mad_cloaked:
                 vehicle.mad_spotted_until = 0.
                 self._set_mad_spotted(vehicle, False, now)
                 continue
-            if vehicle.entity_id in spotted:
+            if (observer := spotted.get(vehicle.entity_id)) is not None:
                 retention = mad_games.SPOT_RETENTION
-                if vehicle.mad_passive == mad_games.SABOTEUR:
-                    retention *= mad_games.SABOTEUR_RETENTION_FACTOR
+                if vehicle.entity_id in short_retention:
+                    retention *= (mad_games.SABOTEUR_RETENTION_FACTOR if vehicle.mad_passive == mad_games.SABOTEUR
+                                  else uprising.GHOST_RETENTION_FACTOR)
                 vehicle.mad_spotted_until = now + retention
+                if self.uprising is not None and self.uprising.first_spot(vehicle.entity_id):
+                    self._award_elixir(observer, uprising.ELIXIR_PER_SPOT)
             visible = (now < vehicle.mad_spotted_until
-                       or mad_games.active(vehicle, mad_games.IRRADIATOR, now))
+                       or mad_games.active(vehicle, mad_games.IRRADIATOR, now)
+                       or self.uprising is not None and self.uprising.exposes(vehicle.entity_id, now))
             self._set_mad_spotted(vehicle, visible, now)
+
+    def _spotting_concealment(self, vehicle, now):
+        profile = getattr(vehicle.definition, 'spotting', None)
+        if profile is None:
+            return 0.
+        concealment = profile.moving if vehicle.spotting_moving else profile.still
+        if 115 in vehicle.definition.optional_devices:
+            still_since = vehicle.spotting_last_motion_at
+            if still_since is None:
+                still_since = self.started if self.started is not None else now
+            stationary_net = (not vehicle.spotting_moving and
+                              now - still_since >= profile.net_still_time)
+            concealment += profile.net_bonus * (profile.net_still_factor if stationary_net else 1.)
+        if vehicle.last_shot_at is not None and 0. <= now - vehicle.last_shot_at < 5.:
+            concealment *= profile.at_shot
+        return max(0., min(1., concealment))
+
+    def _update_team_spotting(self, now):
+        targets = tuple(v for v in self.vehicles.values() if v.alive and self._player_attached(v))
+        observers = tuple(v for v in targets if v.account_id not in self.hangar_players)
+        self._update_mad_spotting(observers, now, targets)
 
     def _expire_mad_revenge(self, vehicle, now):
         before = len(vehicle.mad_revenge)
@@ -3181,11 +3640,14 @@ class Arena:
                   interval_factor=vehicle.interval_factor)
         return True
 
-    def _end_mad_cloak(self, vehicle, at):
-        if vehicle.mad_cloaked:
-            state = next(slot for slot in vehicle.consumables if slot and slot.spec is mad_games.CHAMELEON)
-            state.stop(max(at, vehicle.consumable_clock))
-            self._consumables(vehicle, max(at, vehicle.consumable_clock))
+    def _end_vehicle_cloak(self, vehicle, at):
+        if vehicle.mad_cloaked or self.uprising is not None and any(
+                uprising.active(vehicle, spec, at) for spec in uprising.CLOAKS):
+            at = max(at, vehicle.consumable_clock)
+            for state in vehicle.consumables:
+                if state and (state.spec in uprising.CLOAKS or state.spec is mad_games.CHAMELEON):
+                    state.stop(at)
+            self._consumables(vehicle, at)
 
     def _consumables(self, vehicle, now, *, sync_movable=True, refresh_cooldowns=False):
         # Fixed steps cross expiry by at most STEP. Split the rate change at
@@ -3202,9 +3664,17 @@ class Arena:
             role_rate = 1. / big_boss.CATALYST_RELOAD[self.big_boss.levels[vehicle.entity_id]]
         if vehicle.mad_coordinator_allies:
             role_rate *= 1. + vehicle.mad_coordinator_allies * mad_games.COORDINATOR_BONUS
+        engine_bonus, speed_bonus = 1., 0.
+        if self.uprising is not None:
+            role_rate /= self.uprising.upgrade(vehicle.entity_id, 'reload').reload
+            mobility = self.uprising.upgrade(vehicle.entity_id, 'engine')
+            engine_bonus = mobility.engine
+            speed_bonus = mobility.speed_kmh
         for at in (*expiries, now):
             self._advance_pump(vehicle, at, now)
-            views = [s.state_at(at) for s in vehicle.consumables if s]
+            manual_cloak = self.uprising is not None and uprising.active(vehicle, uprising.MOONWALK, at)
+            views = [s.state_at(at) for s in vehicle.consumables
+                     if s and not (manual_cloak and s.spec is uprising.RESPAWN_CLOAK)]
             rate = math.prod((v.reload_speed_factor for v in views),
                              start=role_rate)
             interval = math.prod(v.interval_factor for v in views)
@@ -3228,6 +3698,8 @@ class Arena:
                 pump_scale = 1.
                 if not vehicle.burst_pending:
                     scale = 1.
+            if vehicle.duplet_pending and vehicle.burst_remaining == 1:
+                scale = 1.
             if scale != 1:
                 vehicle.reload_total *= scale
                 if vehicle.reload_at > at:
@@ -3255,32 +3727,55 @@ class Arena:
             engine = self.engines.get(vehicle.entity_id)
             role_mobility = self.big_boss.mobility(vehicle.entity_id) if self.big_boss is not None else 1.
             vehicle.engine_factor = math.prod((v.engine_factor for v in views),
-                                             start=big_boss.ENGINE_POWER if boss else role_mobility) * (
+                                             start=big_boss.ENGINE_POWER if boss else role_mobility * engine_bonus) * (
                 engine.power_factor if engine is not None else 1.)
             vehicle.rotation_factor = math.prod(v.rotation_factor for v in views)
-            vehicle.forward_speed_bias = sum(v.forward_bias_kmh for v in views)/3.6
+            vehicle.forward_speed_bias = (speed_bonus + sum(v.forward_bias_kmh for v in views))/3.6
             vehicle.reverse_speed_bias = sum(v.reverse_bias_kmh for v in views)/3.6
         # Local Accelerated Aiming rule. _fixed_step runs this before _aim, so a
         # traverse change applies from the next slew; an expiry inside a step
         # is approximated at that step's end (at most one 60Hz step). The
         # owner's TargetingInfo is refreshed once per change with snapshots.
         views = [s.state_at(now) for s in vehicle.consumables if s]
-        # Official "aiming speed" is not evidence for gun elevation speed.
-        # Zero dispersion is intentional; only proven turret traverse changes.
-        # GunAim keeps its existing hull counter-rotation allowance unscaled.
-        if vehicle.gun.set_factors(math.prod(v.yaw_rate_factor for v in views)
-                                   * self._crew_role_factor(vehicle, 'gunner'),
-                                   math.prod(v.pitch_rate_factor for v in views)):
+        targeting_changed = vehicle.gun.set_factors(math.prod(v.yaw_rate_factor for v in views)
+                                                    * self._crew_role_factor(vehicle, 'gunner'),
+                                                    math.prod(v.pitch_rate_factor for v in views))
+        if self.uprising is not None:
+            duplet = self.uprising.has(vehicle.entity_id, uprising.DUPLET)
+            aim_factor = uprising.DUPLET_AIM_FACTOR if duplet else 1.
+            dispersion_factor = uprising.DUPLET_DISPERSION_FACTOR if duplet else 1.
+            if uprising.active(vehicle, uprising.BERSERK, now):
+                dispersion_factor *= uprising.BERSERK_DISPERSION_FACTOR
+            targeting_changed |= (aim_factor, dispersion_factor) != (vehicle.aiming_time_factor,
+                                                                    vehicle.shot_dispersion_factor)
+            vehicle.aiming_time_factor = aim_factor
+            vehicle.shot_dispersion_factor = dispersion_factor
+        if targeting_changed:
             self.emit('targeting',vehicle.entity_id,yaw_rate=vehicle.gun.yaw_rate,
                       pitch_rate=vehicle.gun.pitch_rate)
         if sync_movable:
             self._sync_movable_armor(vehicle, now)
         vehicle.consumable_clock = now
+        if self.uprising is not None:
+            was_hidden = vehicle.mad_cloaked or vehicle.mad_unspotted
+            exposed = self.uprising.exposes(vehicle.entity_id, now)
+            vehicle.mad_cloaked = not exposed and any(uprising.active(vehicle, spec, now) for spec in uprising.CLOAKS)
+            if exposed:
+                vehicle.mad_unspotted = False
+            self._publish_mad_visibility(vehicle, was_hidden, now)
         for state in vehicle.consumables:
             if state is None:
                 continue
             view = state.state_at(now)
             previous = vehicle.consumable_status.get(state.spec.ident)
+            if state.spec in uprising.CLOAKS and (previous == ACTIVE) != (view.state == ACTIVE):
+                self.emit('uprising_cloak_fx', vehicle.entity_id, compact_id=state.spec.compact_id,
+                          active=view.state == ACTIVE)
+            if state.spec is uprising.PLAY_DEAD and (previous == ACTIVE) != (view.state == ACTIVE):
+                self.emit('uprising_play_dead_fx', vehicle.entity_id, active=view.state == ACTIVE, health=vehicle.health)
+            if state.spec is uprising.RESPAWN_CLOAK:
+                vehicle.consumable_status[state.spec.ident] = view.state
+                continue
             if previous != view.state or (refresh_cooldowns and view.state == COOLDOWN):
                 vehicle.consumable_status[state.spec.ident] = view.state
                 if state.spec is mad_games.CHAMELEON and vehicle.mad_cloaked != (view.state == ACTIVE):
@@ -3295,7 +3790,7 @@ class Arena:
                     if not vehicle.mad_cloaked and vehicle.alive:
                         observers = tuple(v for v in self.vehicles.values()
                                           if v.alive and self._player_attached(v))
-                        self._update_mad_spotting(observers, now, targets=(vehicle,))
+                        self._update_mad_spotting(observers, now, targets=(vehicle,), force=True)
                         self.emit('mad_chameleon_fx', vehicle.entity_id, active=False,
                                   spotted=not vehicle.mad_unspotted)
                 if (ACTIVE in (previous, view.state)
@@ -3389,12 +3884,15 @@ class Arena:
     def equipment_state(self, vehicle, now=None):
         """Immutable start/stop snapshot, independent of network serialization."""
         now = self.simulation_time if now is None else now
-        return tuple((s.spec.ident, s.state_at(now).state, s.activated_at,
-                      s.active_until-s.activated_at) for s in vehicle.consumables
+        # With fast cooldowns a running boost may go straight to READY.
+        # The client's public indicator needs the item ID to remove its icon.
+        return tuple((s.spec.ident, view.state, s.activated_at, s.active_until-s.activated_at)
+                     for s in vehicle.consumables
                      if s and s.spec not in (GRAVITY_JUMP_SPEC, big_boss.BLAST_WAVE, big_boss.MEGASHOT)
                      and s.spec not in big_boss.ROLE_SPECS
+                     and s.spec is not uprising.RESPAWN_CLOAK and s.spec not in uprising.ACTIVE_ABILITIES
                      and s.spec.action == 'boost'
-                     and s.state_at(now).state in (2, 3))
+                     and ((view := s.state_at(now)).state in (ACTIVE, COOLDOWN) or s.uses))
 
     def _stop_consumables(self, vehicle):
         # A dead or finished vehicle has no future weapon state.  In
@@ -3404,6 +3902,7 @@ class Arena:
         vehicle.next_shell = 0
         vehicle.burst_shell,vehicle.burst_effect,vehicle.burst_remaining = None,0,0
         vehicle.burst_switch_shell = 0
+        vehicle.duplet_pending = False
         vehicle.reload_kind = 'reload'
         self._stop_pump(vehicle)
         for state in vehicle.consumables:
@@ -3437,6 +3936,13 @@ class Arena:
             self.emit('shot_end',projectile.shooter,shot=projectile.shot,point=projectile.position,
                       **({'guided':True} if projectile.shell.missile is not None else {}))
         self.projectiles.clear()
+        if self.uprising is not None:
+            self.uprising.protected_shots.clear()
+            self.uprising.history.clear()
+            for entity in tuple(self.uprising.marks):
+                self._clear_uprising_mark(entity)
+            for entity in tuple(self.uprising.curses):
+                self._clear_uprising_curse(entity)
         for entity in tuple(self.mad_irradiated):
             self._clear_mad_irradiator(self.vehicles[entity])
         if self.big_boss is not None:
@@ -3581,9 +4087,52 @@ class Arena:
                 for target,result in extra:
                     self._apply_impact(event,result,target,direct=False,shell=shell,fire_at=fire_at,
                                        hit_state=states.get(target) if states else None)
+                self._apply_uprising_inferno(shooter, event, fire_at)
                 return
         self._apply_impact(event,event.result,event.target,direct=True,shell=shell,
                            detonate_ammo_rack=detonate_ammo_rack,fire_at=fire_at)
+        self._apply_uprising_inferno(shooter, event, fire_at)
+
+    def _apply_uprising_inferno(self, shooter, event, fire_at):
+        if self.uprising is None or not shooter.alive or not (event.collision or event.result.hit):
+            return
+        limit = sandbox.FAST_RELOAD_SECONDS if shooter.sandbox_fast_reload else None
+        result = self.uprising.trigger_shot_upgrade(shooter.entity_id, 'inferno', event.at, limit)
+        if result is None:
+            return
+        upgrade, cooldown = result
+        damage = int(shooter.health * upgrade.damage_factors[0] + .5)
+        now = max(self.module_clock, event.at if fire_at is None else fire_at)
+        self.emit('uprising_shot_upgrade', shooter.entity_id, point=event.point,
+                  compact_id=upgrade.compact_id, cooldown=cooldown)
+        for target in self.vehicles.values():
+            if (target.alive and target.team != shooter.team and not target.sandbox_god_mode
+                    and math.dist(target.pose.position, event.point) <= upgrade.radius):
+                self._damage_health(target, damage, shooter.entity_id, now, shell_hit=False)
+
+    def _queue_uprising_lightning(self, shooter, primary, shell, upgrade, cooldown, event, now):
+        suspended = self._suspended_entities()
+        nearby = []
+        for target in self.vehicles.values():
+            if (target is primary or target.team != primary.team or not target.alive
+                    or target.sandbox_god_mode or target.entity_id in suspended):
+                continue
+            distance = math.dist(target.pose.position, primary.pose.position)
+            if distance <= upgrade.radius:
+                nearby.append((distance, target.entity_id, target.generation))
+        hops = sorted(nearby)[:len(upgrade.damage_factors) - 1]
+        self.emit('uprising_shot_upgrade', shooter.entity_id, primary.entity_id,
+                  compact_id=upgrade.compact_id, cooldown=cooldown,
+                  targets=tuple(entity for _, entity, _ in hops))
+        origin_entity, origin = primary.entity_id, event.point
+        for i, ((_, entity, generation), factor) in enumerate(zip(hops, upgrade.damage_factors[1:]), 1):
+            # A chain segment is a separate native tracer with no shell collision.
+            arc = 0x50000000 | ((event.shot & 0x03ffffff) << 2) | i
+            self.uprising.lightning_hits.append((now + i * uprising.CHAIN_HOP_SECONDS,
+                shooter.entity_id, entity, generation, int(shell.damage * factor + .5),
+                arc, origin_entity, origin))
+            x, y, z = self.vehicles[entity].pose.position
+            origin_entity, origin = entity, (x, y + 1., z)
 
     def _apply_impact(self, event, result, target_id, *, direct, shell=None,
                       detonate_ammo_rack=False, fire_at=None, hit_state=None):
@@ -3619,6 +4168,10 @@ class Arena:
         factor = self._armor_mover_factor(target,event.at) if enemy and shell is not None else 1.
         if enemy and shell is not None and self.big_boss is not None:
             factor *= self.big_boss.damage_factor(target.entity_id)
+        if enemy and shell is not None and self.uprising is not None:
+            factor *= self.uprising.mark_damage_factor(shooter, target, event.at)
+            if uprising.active(target, uprising.BERSERK, event.at):
+                factor *= uprising.BERSERK_INCOMING
         anti_he_factor = 1.
         if enemy and he:
             anti_he_factor = getattr(target.definition,'he_damage_factor',1.)
@@ -3642,9 +4195,23 @@ class Arena:
         mitigated = factor!=1 and raw>0 and target.alive
         if mitigated:
             result = dataclasses.replace(result,damage=int(factor*raw+.5))
+        if (enemy and self.uprising is not None and shell is not None and target.alive
+                and (raw > 0 or direct and result.hit is not None)
+                and self._uprising_blocks_shell(target, event.shot, event.at)):
+            result = dataclasses.replace(result, outcome='not_penetrated', damage=0)
+            detonate_ammo_rack = False
         if enemy and target.sandbox_god_mode:
             result = dataclasses.replace(result, outcome='not_penetrated', damage=0)
             detonate_ammo_rack = False
+        if (self.uprising is not None and direct and enemy and target.alive and shooter.alive
+                and shell is not None and result.outcome == 'penetrated' and result.damage > 0):
+            limit = sandbox.FAST_RELOAD_SECONDS if shooter.sandbox_fast_reload else None
+            triggered = self.uprising.trigger_shot_upgrade(shooter.entity_id, 'lightning', event.at, limit)
+            if triggered is not None:
+                upgrade, cooldown = triggered
+                self._queue_uprising_lightning(shooter, target, shell, upgrade, cooldown, event, fire_at)
+                bonus = int(shell.damage * upgrade.damage_factors[0] * factor + .5)
+                result = dataclasses.replace(result, damage=result.damage + bonus)
         damage = (target.health if detonate_ammo_rack and enemy and target.alive
                   else result.damage if enemy else 0)
         if self.mad_games_mode and enemy and target.alive and not detonate_ammo_rack:
@@ -3737,15 +4304,30 @@ class Arena:
         enemy = shooter is not None and shooter.team != target.team
         if self.mad_games_mode and enemy and not (shell_hit or kinetic or reflected):
             amount = int(amount * self._mad_outgoing_factor(shooter, target, at) + .5)
+        if self.uprising is not None and not shell_hit and amount > 0:
+            if self._end_uprising_play_dead(target, at) and enemy and not kinetic:
+                return 0
+        if self.uprising is not None and enemy and not shell_hit:
+            factor = self.uprising.mark_damage_factor(shooter, target, at)
+            if uprising.active(shooter, uprising.BERSERK, at):
+                factor *= uprising.BERSERK_OUTGOING
+            if uprising.active(target, uprising.BERSERK, at):
+                factor *= uprising.BERSERK_INCOMING
+            amount = int(amount * factor + .5)
         damage = min(target.health, amount)
         if damage <= 0:
             return 0
-        self._end_mad_cloak(target, at)
+        self._end_vehicle_cloak(target, at)
         if shell_hit and enemy:
             shooter.hits += 1
         if enemy:
             shooter.damage += damage
             self.emit('damage_statistics',shooter.entity_id,damage=shooter.damage)
+            if self.uprising is not None:
+                reward = uprising.damage_reward(shooter.damage, damage)
+                if damage == target.health:
+                    reward += uprising.ELIXIR_PER_KILL
+                self._award_elixir(shooter, reward)
             sources = [row for part,row in target.track_assist_sources.items()
                        if part in target.tracks and target.tracks[part].broken
                        and row[0] != source and row[0] in self.vehicles
@@ -3804,6 +4386,10 @@ class Arena:
                 shooter.kills += 1
             target.killer = source or 0
             target.death_at = at
+            if self.uprising is not None:
+                self._clear_uprising_mark(target.entity_id)
+                self._clear_uprising_curse(target.entity_id)
+                self.uprising.history.pop(target.entity_id, None)
             self._stop_fire(target, at, 'death')
             self._stop_consumables(target)
             if self.big_boss is not None:
@@ -3822,11 +4408,24 @@ class Arena:
                     self.emit('boss_lives', target.entity_id, lives=self.big_boss.lives[target.entity_id])
                 if self.big_boss.tickets:
                     self.emit('boss_score', tickets=tuple(self.big_boss.tickets))
+            if self.uprising is not None:
+                lives = self.uprising.destroyed(target.entity_id)
+                respawning = (lives > 0 and target.account_id not in self.hangar_players
+                              and self._player_attached(target))
             if respawning:
-                self.respawn_at[target.entity_id] = at + (8. if self.boss_role_picker
-                                                        and target.account_id is not None else 3.)
+                delay = 3.
+                if self.uprising is not None:
+                    self.uprising.prepare_offers(target.entity_id, getattr(target.definition, 'tier', 10))
+                    if target.account_id is not None:
+                        delay = uprising.CHOICE_SECONDS
+                elif self.boss_role_picker and target.account_id is not None:
+                    delay = 8.
+                self.respawn_at[target.entity_id] = at + delay
             self.emit('killed', source or 0, target.entity_id,
-                      keep_roster=self.unlimited_lives and respawning)
+                      keep_roster=respawning and (self.unlimited_lives or self.uprising is not None))
+            if respawning and self.uprising is not None:
+                self.emit('uprising_respawn', target.entity_id, source or 0, seconds=delay,
+                          offers=self.uprising.offers(target.entity_id))
             if self.boss_role_picker and target.account_id is not None:
                 self.emit('boss_picker', target.entity_id, state=2 if respawning else 0)
             if (self.supremacy is not None and not self.finished_at
@@ -3931,8 +4530,9 @@ class Arena:
         if details.get('ram'):
             a, b = self.vehicles[actor], self.vehicles[target]
             if a.alive and b.alive and (a.team != b.team or self.mad_games_mode):
-                self._end_mad_cloak(a, at)
-                self._end_mad_cloak(b, at)
+                if self.mad_games_mode:
+                    self._end_vehicle_cloak(a, at)
+                    self._end_vehicle_cloak(b, at)
                 for vehicle, other, energy in ((a, b, details['ram_energy_a']),
                                                (b, a, details['ram_energy_b'])):
                     protection = getattr(getattr(vehicle.definition,
@@ -3947,6 +4547,9 @@ class Arena:
                         nominal *= mad_games.RAM_OUTGOING
                     if vehicle.mad_passive == mad_games.RAMMER:
                         nominal *= mad_games.RAM_INCOMING
+                    if self.uprising is not None:
+                        nominal *= self.uprising.upgrade(other.entity_id, 'ram').ram_out
+                        nominal *= self.uprising.upgrade(vehicle.entity_id, 'ram').ram_in
                     if self.mad_games_mode:
                         # Driving can stop the dash at this tick's end when it
                         # hits a hull. The collision still happened during it.
@@ -4110,7 +4713,7 @@ class Arena:
             factor *= 1.35
         if self.mad_games_mode and mad_games.active(vehicle, mad_games.HIGH_OCTANE, self.simulation_time):
             factor *= mad_games.SPEED_FACTOR
-        if vehicle.mad_cloaked:
+        if self.mad_games_mode and vehicle.mad_cloaked:
             factor *= mad_games.CHAMELEON_SPEED_FACTOR
         if getattr(vehicle, 'sandbox_boost', False):
             factor *= sandbox.BOOST_SPEED
@@ -4556,7 +5159,8 @@ class Arena:
     def _ensure_drive_workers(self):
         if getattr(self.world, '_native_physics', None) is not None:
             return
-        if (self._drive_workers_attempted or not isinstance(self.world,CollisionWorld)
+        if (self.drive_workers is not None or self._drive_workers_attempted
+                or not isinstance(self.world,CollisionWorld)
                 or not self.world.build_ready
                 or sum(self._player_attached(v) for v in self.vehicles.values()) < 6):
             return
@@ -4775,7 +5379,10 @@ class Arena:
         if self.drive_workers is not None:
             # Startup can fail after loading completes but before any player
             # is ready. Reap incrementally even when no fixed step can run.
-            self.drive_workers.poll()
+            if self.drive_workers.closing:
+                self.drive_workers.advance_close()
+            else:
+                self.drive_workers.poll()
             if self.drive_workers.closed:
                 self.drive_workers = None
         if not self.started:
@@ -4818,7 +5425,7 @@ class Arena:
         timeline = getattr(self, 'time_stop', None)
         phased = timeline.entity if timeline is not None else None
         markers = None
-        if not self.mad_games_mode and os.environ.get('SOLBREAKER_MARKER_BATCH') == '1':
+        if os.environ.get('SOLBREAKER_MARKER_BATCH') == '1':
             ready = [v for v in self.vehicles.values() if v.alive and v.entity_id != phased
                      and (p := self.players.get(v.account_id)) is not None and p.attached]
             markers = _try_marker_batch(self, ready, _MARKER_BATCH_ARENA_METHODS)
@@ -4852,7 +5459,7 @@ class Arena:
                 # been resolved; segment-local snapshots below still select
                 # the exact configuration for each flight interval.
                 self._consumables(vehicle, now, sync_movable=False)
-            if vehicle.reload_at and now>=vehicle.reload_at and vehicle.pump_times:
+            if vehicle.reload_at and now>=vehicle.reload_at and vehicle.pump_times and not vehicle.burst_pending:
                 # Intershot end; _consumables already started the refill at it.
                 vehicle.reload_at = 0.
                 if vehicle.clip and vehicle.alive and not self.finished_at:
@@ -4873,6 +5480,8 @@ class Arena:
                       self.supremacy.timeout_winner() if self.supremacy is not None else 0)
             self.finish(winner, 'supremacy_timeout' if self.supremacy is not None else 'timeout', now)
         if not self.finished_at:
+            if self.uprising is not None:
+                self._advance_uprising_income(now)
             self._advance_respawns(now)
             self._refresh_boss_picker(now)
             if self.big_boss is not None:
@@ -5020,16 +5629,38 @@ class Arena:
                 # the same physical gun slew and published joint angles.
                 if bot.alive and (target is not None or self.training_bots[eid].travel_look_active):
                     self._aim(bot,dt,before[eid].pose.yaw)
+            if self.practice_gunners:
+                target = self.vehicle_for(next(iter(self.players)))
+                if target.alive and self._player_attached(target):
+                    for entity, gunner in self.practice_gunners.items():
+                        bot = self.vehicles[entity]
+                        if bot.alive:
+                            bot.gun.set_point(gunner.aim_point(target.entity_id, target.pose.position, now), False)
+                            self._aim(bot, dt, before[entity].pose.yaw)
             if self._recon_point_probe is not None:
                 self._recon_point_probe_update(now)
             if self._recon_client_aims:
                 self._recon_client_aim_update()
+            if self.uprising is not None:
+                self._advance_uprising_targeted(now, before)
             after = body_states(self.vehicles)
             if self.recon is not None:
                 for vehicle in self.vehicles.values():
                     self._update_recon_camouflage(vehicle, now)
             for entity,vehicle in self.vehicles.items():
-                vehicle.distance += math.dist(before[entity].pose.position,after[entity].pose.position)
+                previous, current = before[entity].pose, after[entity].pose
+                distance = math.dist(previous.position, current.position)
+                vehicle.distance += distance
+                if vehicle.alive and entity != phased:
+                    vehicle.gun.update_dispersion(getattr(vehicle.definition, 'aiming', None),
+                                                  previous, current, before[entity].turret, dt,
+                                                  vehicle.aiming_time_factor)
+                if self.team_spotting and vehicle.alive and entity != phased:
+                    vehicle.spotting_moving = (
+                        distance >= self.RECON_CAMOUFLAGE_STILL_SPEED * dt or
+                        abs(wrap(current.yaw - previous.yaw)) >= self.RECON_CAMOUFLAGE_STILL_YAW_RATE * dt)
+                    if vehicle.spotting_moving:
+                        vehicle.spotting_last_motion_at = now
             contacts = []
             frame_start = now-dt
             armor_segments = self._armor_state_segments(frame_start, now) if self.projectiles else ()
@@ -5103,6 +5734,9 @@ class Arena:
                              fire_at=max(self.module_clock, min(now, impact.at)))
                 if target is not None:
                     self._start_pending_fire(target)
+            if self.uprising is not None and self.uprising.protected_shots:
+                self.uprising.protected_shots = {
+                    key for key in self.uprising.protected_shots if key[0] in self.projectiles}
             if self.recon is not None:
                 # Contacts for a shell may span frames; retain only shots still
                 # in flight and discard expired markers on simulation time.
@@ -5119,7 +5753,16 @@ class Arena:
                     self._advance_tracks(vehicle,now)
                 self._sync_movable_armor(vehicle, now)
             self.module_clock = now
-            teams = {v.team for v in self.vehicles.values() if v.alive and
+            if self.uprising is not None and self.step_count % uprising.REWIND_SAMPLE_STEPS == 0:
+                self._record_uprising_rewinds(now)
+            if self.team_spotting and not self.mad_games_mode and self.world is not None:
+                spacing = uprising.SPOTTING_SAMPLE_STEPS if self.uprising is not None else 6
+                if self.step_count % spacing == 0:
+                    self._update_team_spotting(now)
+            teams = {v.team for v in self.vehicles.values()
+                     if (v.alive or self.uprising is not None and (
+                         v.entity_id in self.respawn_at or v.account_id in self.hangar_players
+                         and self.uprising.remaining(v.entity_id) > 0)) and
                      (v.account_id is None or self.players[v.account_id].attached)}
             # An accepted burst is one trigger, not independent future input.
             # Let its already committed partner leave the barrel before the
@@ -5128,7 +5771,7 @@ class Arena:
             pending_burst = any(v.entity_id != phased and v.alive and v.burst_pending and
                                 (v.account_id is None or self.players[v.account_id].attached)
                                 for v in self.vehicles.values())
-            if (not self.practice and self.solo and teams == {1} and self._combat_can_finish()
+            if (not self.practice and self.solo and self.uprising is None and teams == {1} and self._combat_can_finish()
                     and self.base_capture is None and self.supremacy is None):
                 self.solo_victory_team = 1
             if (not self.practice and not self.solo_victory_team and len(teams)<=1
@@ -5161,8 +5804,6 @@ class Arena:
                     for entity, gunner in self.practice_gunners.items():
                         bot = self.vehicles[entity]
                         if bot.alive:
-                            bot.gun.set_point(gunner.aim_point(target.entity_id, target.pose.position, now), False)
-                            self._aim(bot, dt, before[entity].pose.yaw)
                             self._training_bot_fire(bot, target, now, gunner)
         for vehicle in self.vehicles.values():
             if vehicle.entity_id == phased or not vehicle.burst_pending:

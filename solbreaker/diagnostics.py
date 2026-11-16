@@ -526,7 +526,8 @@ def install(path=None):
     original_rays = CollisionWorld._static_rays
     for owner, names in (
         (Arena, ('advance_build', '_fixed_step', '_drive_vehicles', '_impact', '_internal_contact', '_fall_impacts',
-                 '_track_fall_impacts', '_record_motion_frame', '_recon_point_probe_update')),
+                 '_track_fall_impacts', '_record_motion_frame', '_recon_point_probe_update',
+                 '_update_mad_spotting')),
         (ArenaRoute, ('request',)),
         (ArenaOwnerTransport, ('_deliver',)),
         (CollisionScene, ('__init__', 'prepare')),

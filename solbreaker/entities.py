@@ -51,6 +51,7 @@ class Vehicle:
     burst_effect: int = 0
     burst_remaining: int = 0
     burst_switch_shell: int = 0  # Apply a type change after the accepted group ends.
+    duplet_pending: bool = False  # Uprising adds one shot after the normal group.
     speed: float = 0.
     engine_mode: tuple[int, int] = (1, 0)
     flags: int = 0
@@ -95,6 +96,8 @@ class Vehicle:
     mad_spotted_until: float = 0.
     mad_observation_due: float | None = None
     mad_observation_warning: bool = False
+    spotting_moving: bool = False
+    spotting_last_motion_at: float | None = None
     mad_dash_direction: int = 0
     engine_factor: float = 1.0
     rotation_factor: float = 1.0  # timed hull turn multiplier; also bounds the aim hull omega
@@ -102,6 +105,8 @@ class Vehicle:
     reverse_speed_bias: float = 0.
     reload_speed_factor: float = 1.0
     aiming_time_factor: float = 1.0
+    shot_dispersion_factor: float = 1.
+    last_shot_at: float | None = None
     interval_factor: float = 1.0
     consumable_clock: float = 0.0
     tracks: dict[str, TrackState] = field(default_factory=dict)

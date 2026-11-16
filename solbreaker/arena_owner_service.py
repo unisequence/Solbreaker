@@ -26,7 +26,7 @@ _INPUT_OPS = {
     135: 'ready', 145: 'control', 149: 'aim', 16: 'aim_entity',
     17: 'aim_entity_local', 138: 'fire', 13: 'autoaim',
     18: 'autoaim_point', 148: 'aim_angles', 20: 'consumable',
-    147: 'select_shell',
+    21: 'uprising_select', 22: 'uprising_deselect', 147: 'select_shell',
 }
 
 
@@ -375,6 +375,8 @@ class ArenaOwnerService:
         job = self.jobs.get(arena.result_id) if arena is not None else None
         if job is None or job.transport is None or job.closing:
             raise OwnerError('arena owner is unavailable')
+        if kind in (21, 22) and len(body) != 8:
+            return None
         operation = _INPUT_OPS.get(kind)
         if operation is None or (getattr(client, 'training_reentry_at', 0.) and not client.battle_spawned):
             return None

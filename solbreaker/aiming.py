@@ -11,6 +11,30 @@ def wrap(angle):
     return (angle + math.pi) % math.tau - math.pi
 
 
+def disperse_shot(direction, config, rng, *, shot_age=None, factor=1., aim_factor=1.,
+                  movement_factor=1., gun_damaged=False):
+    """Sample the shot cone from the gun's dispersion radius at 100 m."""
+    dispersion = getattr(config, 'dispersion_radius', 0.)
+    if not dispersion:
+        return direction
+    if gun_damaged:
+        dispersion *= getattr(config, 'damaged_gun_dispersion', 1.)
+    if shot_age is not None:
+        settle = max(1. / 60., config.aiming_time * aim_factor)
+        dispersion *= 1. + (config.after_shot_dispersion - 1.) * math.exp(-max(0., shot_age) / settle)
+    radius = dispersion * factor * movement_factor / 100. * math.sqrt(rng.random())
+    angle = rng.uniform(0., math.tau)
+    dx, dy, dz = direction
+    length = math.hypot(dx, dz)
+    right = (dz / length, 0., -dx / length) if length else (1., 0., 0.)
+    rx, _, rz = right
+    up = (-rz * dy, rz * dx - rx * dz, rx * dy)
+    azimuth, elevation = radius * math.cos(angle), radius * math.sin(angle)
+    norm = math.hypot(1., radius)
+    return tuple((axis + azimuth * r + elevation * u) / norm
+                 for axis, r, u in zip(direction, right, up))
+
+
 class GunAim:
     # M2_lt.xml: hull turretPosition + stock turret gunPosition, in BW axes.
     TURRET = (.0043, 1.6865, -.0804)
@@ -37,8 +61,10 @@ class GunAim:
             self.LIMIT_BLEND = config.pitch_transition
             self.PACKED_MIN, self.PACKED_MAX = config.packed_pitch_limits
         self.yaw = self.pitch = 0.0
+        self.movement_dispersion = 1.
         self.desired_yaw = self.desired_pitch = 0.0
         self.point = None
+        self.angles_requested = False
         self.local = True
         # Diagnostic switch for the hull counter-rotation used while turning
         # a world-space aim point into turret-local yaw/pitch. By default the
@@ -82,8 +108,28 @@ class GunAim:
         if not all(math.isfinite(v) for v in (yaw, pitch)):
             return False
         self.point = None
+        self.angles_requested = True
         self.desired_yaw, self.desired_pitch = wrap(yaw), pitch
         return True
+
+    def update_dispersion(self, config, before, after, previous_turret, dt, aim_factor):
+        if not getattr(config, 'dispersion_radius', 0.):
+            return
+        x, _, z = before.position
+        dx, _, dz = after.position
+        speed = 3.6 * math.hypot(dx-x, dz-z) / dt
+        hull_rate = math.degrees(wrap(after.yaw - before.yaw)) / dt
+        turret_rate = math.degrees(wrap(self.yaw - previous_turret)) / dt
+        # Use horizontal vehicle speed (km/h) and local traverse (degrees/s).
+        steady = math.hypot(1., speed * getattr(config, 'movement_dispersion', 0.),
+                            hull_rate * getattr(config, 'hull_rotation_dispersion', 0.),
+                            turret_rate * getattr(config, 'turret_rotation_dispersion', 0.))
+        if steady >= self.movement_dispersion:
+            self.movement_dispersion = steady
+            return
+        settle = max(1. / 60., config.aiming_time * aim_factor)
+        remaining = 1. + (self.movement_dispersion - 1.) * math.exp(-dt / settle)
+        self.movement_dispersion = max(steady, remaining)
 
     def tick(self, dt, position, hull_yaw, hull_pitch=0., hull_roll=0., hull_omega=0.):
         """Slew one fixed simulation step at the current configured rates."""
@@ -153,11 +199,27 @@ class GunAim:
 
     def ray_rotation(self, position, rot):
         """Gun ray in an exact hull rotation, including a flipped rigid body."""
-        c, s = math.cos(self.yaw), math.sin(self.yaw)
+        return self._ray_for_angles(position, rot, self.yaw, self.pitch)
+
+    def target_ray(self, position, rot, point=None):
+        """Ray toward the requested aim, independent of physical gun traverse."""
+        if point is None and self.point is not None:
+            point = tuple(a + b for a, b in zip(position, self.point)) if self.local else self.point
+        if point is not None:
+            origin = tuple(map(float, np.asarray(position) + rot @ self.TURRET))
+            delta = tuple(b - a for a, b in zip(origin, point))
+            distance = math.hypot(*delta)
+            if distance > 1e-6:
+                return origin, tuple(v / distance for v in delta)
+        if self.angles_requested:
+            return self._ray_for_angles(position, rot, self.desired_yaw, self.desired_pitch)
+        return self.ray_rotation(position, rot)
+
+    def _ray_for_angles(self, position, rot, yaw, pitch):
+        c, s = math.cos(yaw), math.sin(yaw)
         gx, gy, gz = self.GUN
         tx, ty, tz = self.TURRET
         x, y, z = tx+c*gx+s*gz, ty+gy, tz-s*gx+c*gz
         origin = np.asarray(position)+rot @ (x,y,z)
-        direction = rot @ (math.sin(self.yaw)*math.cos(self.pitch), -math.sin(self.pitch),
-                           math.cos(self.yaw)*math.cos(self.pitch))
+        direction = rot @ (s * math.cos(pitch), -math.sin(pitch), c * math.cos(pitch))
         return tuple(map(float,origin)), tuple(map(float,direction))

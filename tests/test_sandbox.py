@@ -342,7 +342,7 @@ class SandboxTests(TestCase):
         vehicle = arena.vehicle_for(1)
         charge = next(slot for slot in vehicle.consumables if slot and slot.spec is big_boss.MEGASHOT)
         self.assertEqual(charge.ready_at, 31.)
-        equipment = ConsumableState(ConsumableSpec('boost', 99, 0x63fb, 3., 20.))
+        equipment = ConsumableState(ConsumableSpec('afterburning', 14, 0x0efb, 3., 20.))
         vehicle.consumables = (equipment, *vehicle.consumables[1:])
         self.assertTrue(equipment.activate(1.))
         token = sandbox.token(arena)
@@ -358,6 +358,13 @@ class SandboxTests(TestCase):
         arena.simulation_time = 1.75
         arena.sandbox_control(1, sandbox.Control(token, 2, 0, 0, 0., 0., 0.))
         self.assertEqual(charge.ready_at, 21.75)
+        arena.simulation_time = 1.8
+        arena.sandbox_control(1, sandbox.Control(token, 3, sandbox.FAST_RELOAD, 0, 0., 0., 0.))
+        arena._consumables(vehicle, 4.)
+        expiry = next(event for event in reversed(arena.events)
+                      if event.kind == 'consumable_state' and event.data['ident'] == 14)
+        self.assertEqual(expiry.data['state'], READY)
+        self.assertEqual(expiry.data['equipment'], ((14, READY, 1., 3.),))
 
     def test_unlimited_lives_keep_roster_active_and_send_kill_statistics(self):
         terrain = SimpleNamespace(height=lambda x, z: 0.)

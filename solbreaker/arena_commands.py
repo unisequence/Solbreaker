@@ -1,5 +1,6 @@
 """Decode and apply player inputs for both arena schedulers."""
 from dataclasses import dataclass
+import math
 import struct
 
 from .mercury import read_blob
@@ -13,10 +14,64 @@ class ArenaCommand:
     now: float | None = None
 
 
+# EquipmentParameters oneof in the pinned client. Each nested message has
+# one uint32 field, entity_id, encoded as an unsigned protobuf varint.
+_UPRISING_TARGET_FIELDS = {42: 1, 36: 2, 43: 4}
+
+
+def decode_uprising_target(ident, data):
+    if not data:
+        return None
+    tag = (_UPRISING_TARGET_FIELDS[ident] << 3) | 2
+    if (not 4 <= len(data) <= 8 or data[0] != tag
+            or data[1] != len(data) - 2 or data[2] != 8):
+        raise ValueError('Invalid Uprising ability target')
+    entity = 0
+    for index, byte in enumerate(data[3:]):
+        entity |= (byte & 0x7f) << (7 * index)
+        if byte < 0x80:
+            if index == len(data) - 4 and 0 < entity <= 0xffffffff:
+                return entity
+            break
+    raise ValueError('Invalid Uprising ability target')
+
+
+def decode_graviton_aim(data):
+    """EquipmentParameters.gravityShot, with two sparse Vector3 messages."""
+    if not data:
+        return None
+    invalid = 'Invalid Graviton aim'
+    if not 6 <= len(data) <= 36 or data[:2] != bytes((26, len(data) - 2)):
+        raise ValueError(invalid)
+    points = {}
+    offset = 2
+    while offset + 2 <= len(data):
+        field, size = data[offset:offset + 2]
+        offset += 2
+        end = offset + size
+        if field not in (10, 18) or field in points or size % 5 or end > len(data):
+            raise ValueError(invalid)
+        values = {}
+        while offset < end:
+            axis, value = struct.unpack_from('<Bf', data, offset)
+            if axis not in (13, 21, 29) or axis in values or not math.isfinite(value) or abs(value) >= 10000.:
+                raise ValueError(invalid)
+            values[axis] = value
+            offset += 5
+        points[field] = tuple(values.get(axis, 0.) for axis in (13, 21, 29))
+    if offset != len(data) or len(points) != 2 or points[10] == points[18]:
+        raise ValueError(invalid)
+    return points[10], points[18]
+
+
 def decode_input(account_id, kind, body, now=None):
     """Return a command for a supported RPC, or None for an ignored RPC."""
     if kind == 135 and not body:
         return ArenaCommand(account_id, 'ready', (), now)
+    # Native cell requests address the controlled vehicle.
+    if kind in (21, 22) and len(body) == 8:
+        entity, compact_id = struct.unpack('<II', body)
+        return ArenaCommand(account_id, 'uprising_upgrade', (entity, compact_id, kind == 21), now)
     if kind == 145 and len(body) == 2:
         return ArenaCommand(account_id, 'control', struct.unpack('<H', body), now)
     if kind == 13 and len(body) == 8:
@@ -78,6 +133,10 @@ def apply_input(arena, command):
         entity, ident, extra = args
         if entity == arena.players[account].vehicle_id:
             arena.use_consumable(account, ident, extra, now)
+    elif action == 'uprising_upgrade':
+        entity, compact_id, selected = args
+        if entity == arena.players[account].vehicle_id:
+            arena.select_uprising_upgrade(account, compact_id, selected, now=now)
     elif action == 'select_shell':
         arena.select_shell(account, *args, now=now)
     else:

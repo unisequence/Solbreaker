@@ -574,6 +574,7 @@ static void sandbox_notice(uint32_t delta, Sandbox *s, uint32_t index) {
         {"Local/SbFire0", 13, 15}, {"Local/SbFire1", 13, 15},
         {"Local/SbClean", 13, 15}, {"Local/SbFull", 12, 15},
         {"Local/SbHealed", 14, 15}, {"Local/SbGod0", 12, 15}, {"Local/SbGod1", 12, 15},
+        {"Local/SbTsGear", 14, 15},
     };
     void *controller = s->notice_controller;
     void *localization = (void *)FIELD(0x471eea0u + delta, 0);
@@ -584,8 +585,11 @@ static void sandbox_notice(uint32_t delta, Sandbox *s, uint32_t index) {
     typedef void (THISCALL *Destroy)(NativeString *);
     NativeString text;
     ((Localize)(0x9bd130u + delta))(localization, &text, &keys[index]);
-    if (text.size)
-        ((Show)(0x1de19b0u + delta))(controller, &text, 0x100 + index);
+    if (text.size) {
+        /* The adjacent 0x115 is the live +HP notice. */
+        uint32_t notice = index == 21 ? 0x116 : 0x100 + index;
+        ((Show)(0x1de19b0u + delta))(controller, &text, notice);
+    }
     ((Destroy)(0x69a720u + delta))(&text);
 }
 
@@ -988,6 +992,8 @@ int sandbox_message(uint32_t delta, const uint32_t *first, const uint32_t *end,
             } else if (status == 5) {
                 s->temporal_energy = first[3] >> 16;
                 s->temporal_hud = 0;
+            } else if (status == 7) {
+                sandbox_notice(delta, s, 21);
             }
             if (status >= 1 && status <= 4) {
                 Vector point;
@@ -1543,10 +1549,12 @@ void THISCALL sandbox_boss_menu_open(void *menu, uint32_t action) {
     void *logic = context ? ((Get)FIELD(FIELD(context, 0), 0xa0))(context) : 0;
     void *avatar = logic && FIELD(logic, 0) == 0x03801fc4u + delta
                    ? ((Get)FIELD(FIELD(logic, 0), 4))(logic) : 0;
-    /* Keep the native Exit to Hangar control in Big Boss. The button
-       retains its stock confirmation and sends the normal leave RPC. */
-    if (avatar && *(const uint8_t *)((uintptr_t)avatar + 0xd9) == 27)
-        ((ShowExit)(0x01df6db0u + delta))(menu);
+    /* These stock event modes hide Exit to Hangar during the battle. */
+    if (avatar) {
+        uint8_t mode = *(const uint8_t *)((uintptr_t)avatar + 0xd9);
+        if (mode == 8 || mode == 23 || mode == 27)
+            ((ShowExit)(0x01df6db0u + delta))(menu);
+    }
     boss_respawn_menu(menu, delta);
     ((Open)(0x0194c490u + delta))(menu, action);
 }
@@ -1606,6 +1614,7 @@ static const char *room_parse_options(const NativeString *value, RoomOptions *se
             if (room_prefix(text + 6, "gravity]")) mode = 3;
             if (room_prefix(text + 6, "big_boss]")) mode = 4;
             if (room_prefix(text + 6, "mad_games]")) mode = 5;
+            if (room_prefix(text + 6, "uprising]")) mode = 6;
         } else if (room_prefix(text, "[lives ")) {
             lives = room_prefix(text + 7, "unlimited]");
         } else if (room_prefix(text, "[ammo ")) {

@@ -49,13 +49,14 @@ UI_RESOURCES = (BASE_HEADER, BASE_LOBBY, BASE_LOBBY_ACTIONS, STATS_ITEM, INVENTO
                 client_battle_settings.BATTLE_MENU, *client_recon.MARKER_OPACITY)
 STRINGS_EN = "Strings/en.yaml.dvpl"
 STRINGS_RU = "Strings/ru.yaml.dvpl"
-SANDBOX_BINDINGS_VERSION = 14
+SANDBOX_BINDINGS_VERSION = 17
 SANDBOX_BINDING_STRINGS = {
     STRINGS_EN: {'Title': 'Solbreaker Sandbox',
                  'Boost': 'Toggle boost', 'Flight': 'Toggle flight',
                  'Missile': 'Toggle missile camera', 'Target': 'Place training target',
                  'Reload': 'Fast reload and cooldowns',
                  'God': 'Toggle God Mode', 'God0': 'God Mode off', 'God1': 'God Mode on',
+                 'TsGear': 'Time Stop is unavailable while a consumable is active.',
                  'Jump': 'Gravity Force thruster',
                  'Boost0': 'Boost off', 'Boost1': 'Boost on',
                  'Fly0': 'Flight off', 'Fly1': 'Flight on',
@@ -74,6 +75,7 @@ SANDBOX_BINDING_STRINGS = {
                  'Missile': 'Переключить камеру ПТУР', 'Target': 'Поставить мишень на Полигоне',
                  'Reload': 'Быстрая перезарядка и откат',
                  'God': 'Режим бога', 'God0': 'Режим бога выключен', 'God1': 'Режим бога включён',
+                 'TsGear': 'Остановка времени недоступна, пока действует снаряжение.',
                  'Jump': 'Прыгнуть в «Гравитации»',
                  'Boost0': 'Форсаж выключен', 'Boost1': 'Форсаж включён',
                  'Fly0': 'Полёт выключен', 'Fly1': 'Полёт включён',
@@ -142,6 +144,20 @@ LOCAL_PROVISION_STRINGS = {
     STRINGS_RU: {'#artefacts:desert_power/name': 'Пустынный комплект',
                  '#artefacts:desert_power/descr': 'Эффекты пока не реализованы.',
                  '#artefacts:safety_set/descr': 'Эффекты пока не реализованы.'},
+}
+UPRISING_PROVISION_STRINGS = {
+    STRINGS_EN: {
+        'provisions/fortuneMedium/Name': 'Fortune I',
+        'provisions/fortuneMedium/Description': '50% chance to deal 25% more damage with a shot.',
+        'provisions/fortuneStrong/Name': 'Fortune II',
+        'provisions/fortuneStrong/Description': '75% chance to deal 25% more damage with a shot.',
+    },
+    STRINGS_RU: {
+        'provisions/fortuneMedium/Name': 'Удача I',
+        'provisions/fortuneMedium/Description': 'Шанс 50% нанести на 25% больше урона выстрелом.',
+        'provisions/fortuneStrong/Name': 'Удача II',
+        'provisions/fortuneStrong/Description': 'Шанс 75% нанести на 25% больше урона выстрелом.',
+    },
 }
 LOCAL_MODE_STRINGS = {
     STRINGS_EN: {'Local PoC': 'Solbreaker',
@@ -249,6 +265,12 @@ def _fill_vehicle_names(document, relative):
             document[key] = name
 
 
+def _fill_uprising_provisions(document, relative):
+    for key, text in UPRISING_PROVISION_STRINGS[relative].items():
+        if document.get(key, '').strip() in ('', key):
+            document[key] = text
+
+
 def patched_strings(source, relative, *, navigation_enabled=True):
     document = yaml.load(dvpl.read(source), Loader=_StringsLoader)
     if not isinstance(document, dict):
@@ -262,6 +284,7 @@ def patched_strings(source, relative, *, navigation_enabled=True):
         document.setdefault(key, text)
     _fill_vehicle_names(document, relative)
     document.update(LOCAL_PROVISION_STRINGS.get(relative, {}))
+    _fill_uprising_provisions(document, relative)
     document.update(LOCAL_MODE_STRINGS.get(relative, {}))
     document.update(_sandbox_binding_strings(relative))
     _weather_map_strings(document, relative)
@@ -628,6 +651,7 @@ def install_sandbox_bindings(lab, manifest):
     for relative in SANDBOX_BINDING_STRINGS:
         strings = yaml.load(dvpl.read(data/relative), Loader=_StringsLoader)
         _fill_vehicle_names(strings, relative)
+        _fill_uprising_provisions(strings, relative)
         strings.update(_sandbox_binding_strings(relative))
         _weather_map_strings(strings, relative)
         patches[relative] = dvpl.encode(yaml.safe_dump(strings, sort_keys=False, allow_unicode=True,

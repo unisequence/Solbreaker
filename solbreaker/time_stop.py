@@ -12,8 +12,8 @@ import os
 import random
 import uuid
 
-from . import big_boss
-from .aiming import GunAim
+from . import big_boss, mad_games
+from .aiming import GunAim, disperse_shot
 from .ammunition import (advance_pump, apply_burst_shell_switch, apply_queued_shell,
                          finish_magazine_reload, magazine_reload_allowed, spend_round,
                          start_pump_refill, switch_shell)
@@ -25,6 +25,7 @@ from .entities import BattleEvent
 from .map_catalog import map_team_capacity
 from .mobility import (advance_speed, braking_acceleration, powered_acceleration,
                        rolling_acceleration, skid_velocity, slope_grip_acceleration, terrain_at)
+from .orientation import matrix
 from .roster import training_spawn, training_yaw
 from .sandbox import BOOST_POWER, BRANCH_SHOT_BASE
 from .vehicle_data import Shell
@@ -122,6 +123,7 @@ class FrozenTank:
     armor_mover_factor: float
     gun_chance: float
     regenerator_shield: big_boss.RegeneratorShield | None
+    visible: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -221,6 +223,11 @@ class GunSnapshot:
     pump_remaining: float
     pump_total: float
     pump_waiting: bool
+    aiming: object = None
+    aiming_time_factor: float = 1.
+    dispersion_factor: float = 1.
+    shot_age: float | None = None
+    gun_damaged: bool = False
 
     @classmethod
     def capture(cls, arena, vehicle, selected):
@@ -229,11 +236,15 @@ class GunSnapshot:
         stock[vehicle.shell_id] = vehicle.ammo
         refill_times = tuple(arena._reload_duration(vehicle, 'reload', nominal) for nominal in vehicle.pump_times)
         burst_count = vehicle.definition.weapon.burst_count if vehicle.burst_gun else 1
+        gun_state = arena.guns.get(vehicle.entity_id)
         return cls(shells, tuple(stock.items()), vehicle.next_shell, vehicle.reload_kind, vehicle.reload_total,
                    arena._magazine_duration(vehicle, 'reload'), arena._magazine_duration(vehicle, 'interval'),
                    burst_count, arena._burst_duration(vehicle) if burst_count > 1 else 0.,
                    BurstState.capture(vehicle), refill_times, _remaining(vehicle.pump_at, arena.simulation_time),
-                   vehicle.pump_total, vehicle.pump_waiting)
+                   vehicle.pump_total, vehicle.pump_waiting, getattr(vehicle.definition, 'aiming', None),
+                   vehicle.aiming_time_factor, vehicle.shot_dispersion_factor,
+                   None if vehicle.last_shot_at is None else arena.simulation_time - vehicle.last_shot_at,
+                   gun_state is not None and gun_state.damaged)
 
 
 def _remaining(deadline, now):
@@ -297,7 +308,8 @@ class Snapshot:
                                 arena._shield_factor(v, now), arena._armor_mover_factor(v, now),
                                 arena.guns[v.entity_id].spec.projectile_chance
                                 if v.entity_id in arena.guns else 0.,
-                                boss.active_shield(v.entity_id, now) if boss is not None else None)
+                                boss.active_shield(v.entity_id, now) if boss is not None else None,
+                                not mad_games.concealed(v, vehicle.team))
                       for v in arena.vehicles.values())
         projectiles = tuple(ProjectileTrace.capture(p) for p in arena.projectiles.values())
         shell = arena.shell_for(vehicle)
@@ -320,6 +332,7 @@ class Snapshot:
         target = arena.vehicles.get(vehicle.autoaim_target)
         aim_lock = (Entity.of(target), vehicle.autoaim_offset) if (
             target is not None and target.alive and arena._player_attached(target)
+            and not mad_games.concealed(target, vehicle.team)
             and vehicle.autoaim_offset is not None) else None
         return cls(uuid.uuid4().hex, arena.step_count, Entity.of(vehicle), wall_time,
                    tanks, projectiles, frozenset(arena.world.destroyed),
@@ -677,8 +690,11 @@ class TimelineSimulation:
         self.pump_waiting = loadout.pump_waiting
         self.gun_revision = 0
         self.rng = random.Random(snapshot.ident) if rng is None else rng
+        self.dispersion_rng = random.Random(snapshot.ident + ':dispersion')
+        self.last_shot_at = None if loadout.shot_age is None else -loadout.shot_age
         self.ledger = EffectLedger(snapshot.ident, snapshot.owner, level.energy)
         self.tanks = {tank.identity.ident: tank for tank in snapshot.tanks}
+        self.hidden_targets = frozenset(entity for entity, tank in self.tanks.items() if not tank.visible)
         self.shields = {entity: tank.regenerator_shield.ident for entity, tank in self.tanks.items()
                         if tank.regenerator_shield is not None}
         self.poisoned_targets = set(snapshot.poisoned_targets)
@@ -753,7 +769,7 @@ class TimelineSimulation:
             self.aim_lock, self.autoaim_lost = None, False
             return self.gun.set_angles(self.gun.yaw, self.gun.pitch)
         target = self.tanks.get(entity)
-        if (target is None or not target.alive or not target.attached
+        if (target is None or not target.alive or not target.attached or not target.visible
                 or target.team == self.tanks[self.entity].team):
             self.autoaim(0)
             self.autoaim_lost = True
@@ -789,6 +805,15 @@ class TimelineSimulation:
             return self.gun.ray_rotation(pose.position, rotation)
         return self.gun.ray(pose.position, pose.yaw, pose.pitch, pose.roll)
 
+    def _ability_ray(self):
+        pose = self.pose
+        rotation = self.world._dynamic_rotation(self.entity)
+        if rotation is None:
+            rotation = matrix(pose.yaw, pose.pitch, pose.roll)
+        if self.aim_lock is not None:
+            self._aim_at_lock()
+        return self.gun.target_ray(pose.position, rotation)
+
     @property
     def shell_id(self):
         return self.selected_shell
@@ -802,6 +827,7 @@ class TimelineSimulation:
         origin, direction = self._shot_ray()
         _, point, _ = self.world.shot_path(origin, direction, self.aim_range,
                                           ignore_entity=self.entity,
+                                          ignore_entities=self.hidden_targets,
                                           movable_armor_states=self.frozen_armor)
         return point, direction
 
@@ -900,11 +926,15 @@ class TimelineSimulation:
             return False
         if wall_time-self.snapshot.captured_at+1e-9 < self.time+self.STEP:
             return True
+        previous, previous_turret = self.pose, self.gun.yaw
         self._drive(flags)
         pose = self.pose
         if self.aim_lock is not None:
             self._aim_at_lock()
         self.gun.tick(self.STEP, pose.position, pose.yaw, pose.pitch, pose.roll)
+        loadout = self.snapshot.gun_loadout
+        self.gun.update_dispersion(loadout.aiming, previous, pose, previous_turret, self.STEP,
+                                   loadout.aiming_time_factor)
         self.world.set_turret(self.gun.yaw, self.entity, self.gun.pitch)
         self.steps += 1
         if self.world.destruction_events:
@@ -931,7 +961,7 @@ class TimelineSimulation:
             self._fire_burst_next()
         return True
 
-    def activate(self, action, ident):
+    def activate(self, action, ident, view=None):
         slot = self.consumables.get(ident)
         recipe = ABILITY_RECIPES.get(ident)
         if self.ended or slot is None or recipe is None:
@@ -942,10 +972,9 @@ class TimelineSimulation:
             return False
         origin = self.pose.position
         if kind == 'graviton':
-            start, direction = self._shot_ray()
-            end = tuple(a+b*self.aim_range for a, b in zip(start, direction))
-            body, _, center = self.world.static_segment(start, end)
-            if body is None:
+            ray = self._ability_ray() if view is None else None
+            center = big_boss.graviton_center(self.world, origin, ray, self.aim_range, view)
+            if center is None:
                 return False
         staged = copy(slot)
         if not staged.activate(self.time) or not self.ledger.charge(action, cost):
@@ -1135,6 +1164,12 @@ class TimelineSimulation:
 
     def _launch_round(self, action, shell, effect, shooting_count):
         origin, direction = self._shot_ray()
+        loadout = self.snapshot.gun_loadout
+        shot_age = None if self.last_shot_at is None else self.time - self.last_shot_at
+        direction = disperse_shot(direction, loadout.aiming, self.dispersion_rng, shot_age=shot_age,
+                                  factor=loadout.dispersion_factor, aim_factor=loadout.aiming_time_factor,
+                                  movement_factor=self.gun.movement_dispersion, gun_damaged=loadout.gun_damaged)
+        self.last_shot_at = self.time
         decorated = self._decorate_shell(shell)
         if decorated.effect_index != shell.effect_index:
             effect = decorated.effect_index
@@ -1398,6 +1433,7 @@ def merge_frame(arena, snapshot, frame, *, rules=Rules(), defer_hit=None):
     owner.flags = 0
     owner.gun.set_angles(*frame.aim)
     owner.gun.yaw, owner.gun.pitch = frame.aim
+    owner.gun.movement_dispersion = frame.movement_dispersion
     world.set_turret(owner.gun.yaw, entity, owner.gun.pitch)
     motion = return_motion if pose is frame.pose else None
     if pose is origin and not snapshot.drive.motion.grounded:
@@ -1410,6 +1446,7 @@ def merge_frame(arena, snapshot, frame, *, rules=Rules(), defer_hit=None):
     owner.selected_shell, owner.next_shell = frame.selected_shell, frame.next_shell
     owner.ammo, owner.clip = frame.ammo, frame.clip
     owner.shots += frame.shots_fired
+    owner.last_shot_at = None if frame.shot_age is None else arena.simulation_time - frame.shot_age
     owner.ammo_by_shell.update(frame.ammo_by_shell)
     owner.reload_at = arena.simulation_time + frame.reload_remaining if frame.reload_remaining else 0.
     owner.reload_kind, owner.reload_total = frame.reload_kind, frame.reload_total
@@ -1421,8 +1458,11 @@ def merge_frame(arena, snapshot, frame, *, rules=Rules(), defer_hit=None):
     for index, slot in enumerate(owner.consumables):
         staged = by_id.get(slot.spec.ident) if slot is not None else None
         if staged is not None and staged.spec == slot.spec:
-            owner.consumables = (*owner.consumables[:index], _shift_consumable(staged, now-frame.seconds),
-                                 *owner.consumables[index+1:])
+            restored = _shift_consumable(staged, now-frame.seconds)
+            # The worker's serialized spec compares equal but is a new object.
+            # Live ability dispatch selects the arena's installed spec by identity.
+            restored.spec = slot.spec
+            owner.consumables = (*owner.consumables[:index], restored, *owner.consumables[index+1:])
     if arena.big_boss is not None and frame.heal_wave is not None:
         _, due, count, role_level = frame.heal_wave
         if arena.big_boss.roles.get(owner.entity_id) == big_boss.REGENERATOR:

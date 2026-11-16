@@ -242,6 +242,28 @@ class BigBoss:
         return 1 if first > second else 2 if second > first else 0
 
 
+def graviton_center(world, vehicle_position, ray, distance, view=None):
+    if view is None:
+        start, direction = ray
+        end = tuple(a + b * distance for a, b in zip(start, direction))
+    else:
+        start, target = view
+        camera_offset = math.dist(start, vehicle_position)
+        if camera_offset > distance:
+            return None
+        offset = tuple(b - a for a, b in zip(start, target))
+        length = math.hypot(*offset)
+        if length <= 1e-6:
+            return None
+        # The client often sends a point exactly on the collision surface.
+        reach = min(length + .5, distance + camera_offset)
+        end = tuple(a + v * reach / length for a, v in zip(start, offset))
+    body, _, center = world.static_segment(start, end)
+    if body is not None and (view is None or math.dist(vehicle_position, center) <= distance + .5):
+        return tuple(center)
+    return None
+
+
 def gravity_pull(traps, team, position, mass):
     """Combine signed directions, then amplify overlapping allied fields."""
     dx = dz = strength = overlap = 0.

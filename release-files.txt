@@ -488,6 +488,7 @@ solbreaker/track_drive.py
 solbreaker/track_fall_damage.py
 solbreaker/training_config.py
 solbreaker/updates.py
+solbreaker/uprising.py
 solbreaker/vector_math.py
 solbreaker/vehicle_data.py
 solbreaker/vehicles.py
@@ -537,6 +538,7 @@ tests/test_training_reentry.py
 tests/test_training_room_bots.py
 tests/test_token_capacity.py
 tests/test_updates.py
+tests/test_uprising.py
 tests/test_windows_bundle.py
 tests/test_windows_python.py
 tools/audit_repository.py
