@@ -45,8 +45,8 @@ class TrainingReentryTests(TestCase):
         self.assertFalse(self.endpoint.choosing_training_tank(3))
         self.endpoint.rooms.leave.assert_not_called()
 
-    def test_request_is_scoped_to_training_with_respawns(self):
-        self.arena.unlimited_lives = False
+    def test_request_is_scoped_to_training_rooms(self):
+        self.arena.room_settings = None
         self.endpoint.training_hangar(1, self.client, self.arena)
         self.arena.reserve_training_seat.assert_not_called()
         self.assertEqual(self.client.phase, 'battle')
@@ -54,6 +54,14 @@ class TrainingReentryTests(TestCase):
         self.assertEqual(Control.decode(data).flags, CHANGE_TANK)
         with self.assertRaises(ValueError):
             Control.decode(INPUT.pack(1, 2, CHANGE_TANK, 0, 0., 0., 1.))
+
+    def test_single_life_rooms_with_drive_workers_can_reserve_a_seat(self):
+        self.arena.unlimited_lives = False
+        self.arena.drive_workers = object()
+        with patch('solbreaker.base.time.monotonic', return_value=10.):
+            self.endpoint.training_hangar(1, self.client, self.arena)
+        self.arena.reserve_training_seat.assert_called_once_with(3)
+        self.assertTrue(self.endpoint.choosing_training_tank(3))
 
     def test_owner_leave_clears_the_previous_battles_swap_advertisement(self):
         self.client.training_swap_refresh_at = 25.

@@ -1,9 +1,9 @@
-"""Normal recon configuration, shared by server startup and the local runner."""
+"""Experimental recon configuration shared by server startup and the local runner."""
 import os
 
 
 def requested_enabled(environ=None):
-    """Default on; the explicit normal flag takes precedence over the legacy flag.
+    """Default off; the explicit setting takes precedence over the legacy flag.
 
     Retaining the old switch lets isolated fixtures explicitly disable recon
     with SOLBREAKER_RECON_SERVER_TEST=0. Values other than 0/1 are never guessed.
@@ -11,7 +11,7 @@ def requested_enabled(environ=None):
     environ = os.environ if environ is None else environ
     name = ('SOLBREAKER_RECON_ENABLED' if 'SOLBREAKER_RECON_ENABLED' in environ
             else 'SOLBREAKER_RECON_SERVER_TEST')
-    value = environ.get(name, '1')
+    value = environ.get(name, '0')
     if value not in ('0', '1'):
         raise ValueError(name + ' must be 0 or 1')
     return value == '1'

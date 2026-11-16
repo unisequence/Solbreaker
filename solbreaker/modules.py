@@ -31,6 +31,7 @@ Fuel-tank health has the same explicit local critical boundary and no natural
 recovery or fire simulation. Zero HP is a destroyed internal state; Arena
 must keep its public damage marker orange rather than emit a red device.
 """
+from copy import copy
 from dataclasses import dataclass
 import math
 
@@ -178,6 +179,14 @@ class TrackState:
             self._broken = True
         self._last_damage_at = now
         return changed
+
+    def shifted(self, seconds):
+        snapshot = copy(self)
+        if snapshot._last_time is not None:
+            snapshot._last_time += seconds
+        if snapshot._last_damage_at is not None:
+            snapshot._last_damage_at += seconds
+        return snapshot
 
     def repair(self, now):
         now = self._time(now)

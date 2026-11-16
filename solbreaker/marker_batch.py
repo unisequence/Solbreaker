@@ -6,7 +6,7 @@ Full projectile/armor queries continue through their existing implementation.
 import ctypes as C
 import numpy as np
 
-from . import armor, armor_native as native
+from . import armor, armor_native as native, mad_games
 from .collision import CollisionWorld
 from .aiming import GunAim
 from .orientation import matrix
@@ -80,7 +80,7 @@ def try_markers(arena, vehicles, arena_methods):
             return None
         parts = tuple(model._parts_for_query(snapshots.get(entity)))
         radius2 = (model.radius+1e-5)**2
-        targets.append((entity, pose, model, parts, radius2))
+        targets.append((entity, pose, model, parts, radius2, arena.vehicles.get(entity)))
         if (type(model.radius) in (float, np.float64) and type(pose.position) is tuple
                 and all(type(value) is float for value in pose.position)):
             sphere_rows.append((*pose.position, radius2))
@@ -100,8 +100,9 @@ def try_markers(arena, vehicles, arena_methods):
             continue
         candidates = range(len(targets)) if coarse is None else np.flatnonzero(coarse[ray_index])
         for target_index in candidates:
-            entity, pose, model, parts, radius2 = targets[target_index]
-            if entity == vehicle.entity_id:
+            entity, pose, model, parts, radius2, target = targets[target_index]
+            if (entity == vehicle.entity_id or arena.team_spotting and target is not None
+                    and mad_games.concealed(target, vehicle.team)):
                 continue
             delta = tuple(c-o for c, o in zip(pose.position, origin))
             t = max(0., min(limit, sum(c*d for c, d in zip(delta, direction))/length2))

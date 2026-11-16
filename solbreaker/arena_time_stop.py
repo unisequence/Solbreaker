@@ -5,6 +5,7 @@ from itertools import count
 import time
 
 from . import big_boss
+from .arena_commands import decode_graviton_aim
 from .collision import Pose
 from .drive_replica import build_spec
 from .recon_wire import ReconSnapshot
@@ -232,8 +233,8 @@ class BattleTimeStop:
             self._queue_action('select_shell', args)
         elif command.action == 'consumable' and args[0] == self.entity:
             ident, extra = args[1:]
-            if not extra or ident in big_boss.GRAVITON_INPUT_IDS and len(extra) == 36:
-                self.request_ability(ident)
+            if not extra or ident in big_boss.GRAVITON_INPUT_IDS:
+                self.request_ability(ident, extra)
         return True
 
     def missile_control(self, control):
@@ -247,7 +248,7 @@ class BattleTimeStop:
             self.next_action += 1
             self.actions.append((self.next_action, name, args))
 
-    def request_ability(self, ident=None):
+    def request_ability(self, ident=None, extra=b''):
         if (self.snapshot is None or self.finishing or self.retiring
                 or any(name == 'ability' for _, name, _ in self.actions)):
             return
@@ -258,7 +259,14 @@ class BattleTimeStop:
         elif ident not in installed and ident in big_boss.ROLE_INPUT_IDS:
             ident = next((slot for slot in installed if slot in big_boss.ROLE_INPUT_IDS), None)
         if ident in installed:
-            self._queue_action('ability', (ident,))
+            if extra and ident in big_boss.GRAVITON_INPUT_IDS:
+                try:
+                    view = decode_graviton_aim(extra)
+                except ValueError:
+                    return
+                self._queue_action('ability', (ident, view))
+            else:
+                self._queue_action('ability', (ident,))
 
     def tick(self, now):
         while self.merge_hits and self.merge_hits[0][0] <= now + 1e-9:

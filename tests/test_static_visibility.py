@@ -1,13 +1,106 @@
 """Merged visibility meshes retain destructible lifetime and sampler overrides."""
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 import pybullet as bullet
 
-from solbreaker.collision import CollisionWorld
+from solbreaker.arena import Arena
+from solbreaker.collision import CollisionWorld, Pose
 from solbreaker.mesh_files import MeshFiles
 from solbreaker.static_visibility import VisibilityWorld
+from solbreaker.vehicle_data import SpottingProfile
+
+
+class TeamSpottingTests(unittest.TestCase):
+    def test_visibility_rays_follow_range_and_refresh_after_fire_or_stop(self):
+        arena = Arena([dict(id=1, nickname='A'), dict(id=2, nickname='B')],
+                      b'', SimpleNamespace(height=lambda x, z: 0.), solo=False, now=1.)
+        self.addCleanup(arena.close)
+        observer, enemy = (arena.vehicle_for(account) for account in (1, 2))
+        observer.definition = enemy.definition = SimpleNamespace(view_range=400.)
+        observer.pose = Pose((0., 0., 0.), 0.)
+        enemy.pose = Pose((0., 0., 320.), 0.)
+        rays = []
+
+        def trace(starts, ends):
+            rays.extend(zip(starts, ends))
+            return [(-1, -1, 1.)] * len(starts)
+
+        with patch.object(arena, 'world', SimpleNamespace(_visibility_rays=trace)):
+            for tick in range(20):
+                arena._update_team_spotting(1. + tick / 10.)
+            self.assertEqual(len(rays), 2)
+            arena._update_team_spotting(3.)
+            self.assertEqual(len(rays), 4)
+            enemy.last_shot_at = 3.
+            arena._update_team_spotting(3.1)
+            self.assertEqual(len(rays), 5)
+            enemy.spotting_last_motion_at = 3.2
+            arena._update_team_spotting(3.3)
+            self.assertEqual(len(rays), 6)
+            enemy.pose = Pose((0., 0., 50.), 0.)
+            arena._update_team_spotting(3.4)
+            self.assertEqual(len(rays), 6)
+
+    def test_vehicle_concealment_changes_spotting_range(self):
+        arena = Arena([dict(id=1, nickname='A'), dict(id=2, nickname='B')],
+                      b'', SimpleNamespace(height=lambda x, z: 0.), solo=False, now=1.)
+        self.addCleanup(arena.close)
+        observer, enemy = (arena.vehicle_for(account) for account in (1, 2))
+        observer.pose = Pose((0., 0., 0.), 0.)
+        enemy.pose = Pose((0., 0., 180.), 0.)
+        observer.definition = SimpleNamespace(view_range=250., optional_devices=(),
+                                              spotting=SpottingProfile(optics_bonus=.11))
+        enemy.definition = SimpleNamespace(view_range=250., optional_devices=(115,),
+                                           spotting=SpottingProfile(still=.30, moving=.15,
+                                                                   at_shot=.25, net_bonus=.05))
+        enemy.spotting_last_motion_at = 1.
+        arena._update_team_spotting(4.)
+        self.assertTrue(enemy.mad_unspotted)
+        observer.definition.optional_devices = (114,)
+        arena._update_team_spotting(5.)
+        self.assertFalse(enemy.mad_unspotted)
+        observer.definition.optional_devices = ()
+        arena._update_team_spotting(15.)
+        self.assertTrue(enemy.mad_unspotted)
+        enemy.spotting_moving = True
+        arena._update_team_spotting(16.)
+        self.assertFalse(enemy.mad_unspotted)
+        enemy.spotting_moving = False
+        enemy.spotting_last_motion_at = 16.
+        enemy.last_shot_at = 25.9
+        arena._update_team_spotting(26.)
+        self.assertAlmostEqual(enemy.mad_spotted_until, 36.)
+        arena._update_team_spotting(36.)
+        self.assertTrue(enemy.mad_unspotted)
+
+    def test_encounter_spotting_uses_proximity_cover_and_retention(self):
+        arena = Arena([dict(id=1, nickname='A'), dict(id=2, nickname='B')],
+                      b'', SimpleNamespace(height=lambda x, z: 0.), solo=False, now=1.)
+        self.addCleanup(arena.close)
+        observer, enemy = (arena.vehicle_for(account) for account in (1, 2))
+        observer.pose = Pose((0., 0., 0.), 0.)
+        enemy.pose = Pose((0., 0., 100.), 0.)
+        blocked = (42, -1, .5)
+        world = SimpleNamespace(_visibility_rays=lambda starts, ends: [blocked] * len(starts))
+        with patch.object(arena, 'world', world):
+            arena._update_team_spotting(1.)
+            self.assertTrue(enemy.mad_unspotted)
+            enemy.pose = Pose((0., 0., 50.), 0.)
+            arena._update_team_spotting(2.)
+            self.assertFalse(enemy.mad_unspotted)
+            enemy.pose = Pose((0., 0., 100.), 0.)
+            arena._update_team_spotting(4.9)
+            self.assertFalse(enemy.mad_observation_warning)
+            arena._update_team_spotting(5.)
+            self.assertTrue(enemy.mad_observation_warning)
+            arena._update_team_spotting(11.9)
+            self.assertFalse(enemy.mad_unspotted)
+            arena._update_team_spotting(12.)
+            self.assertTrue(enemy.mad_unspotted)
+            self.assertFalse(enemy.mad_observation_warning)
 
 
 class StaticVisibilityTests(unittest.TestCase):

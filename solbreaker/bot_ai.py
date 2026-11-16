@@ -1202,6 +1202,9 @@ class BotDirector:
             if getattr(a, 'mad_games_mode', False):
                 target = a.vehicles.get(ai.target_id) if ai.target_id in ai.visible else None
                 a._training_bot_mad_mobility(bot, target, now)
+            elif getattr(a, 'uprising', None) is not None:
+                target = a.vehicles.get(ai.target_id) if ai.target_id in ai.visible else None
+                a._training_bot_uprising_mobility(bot, target, now)
         self.stats['decisions']+=len(due)
         self.stats['max_decisions_per_step']=max(self.stats['max_decisions_per_step'],len(due))
         return {eid:a.vehicles.get(ai.target_id) if ai.target_id in ai.visible else None

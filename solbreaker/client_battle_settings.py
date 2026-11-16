@@ -181,7 +181,8 @@ def _row(name, caption, buttons, *, conditional=True):
     return row
 
 
-RULES_CAPTION = ('when localRules == 5 -> localize("Local/BattleSettings/MadGames"), '
+RULES_CAPTION = ('when localRules == 6 -> localize("Local/BattleSettings/Uprising"), '
+                 'localRules == 5 -> localize("Local/BattleSettings/MadGames"), '
                  'localRules == 4 -> localize("Local/BattleSettings/BigBoss"), '
                  'localRules == 3 -> localize("Local/BattleSettings/Gravity"), '
                  'localRules == 2 -> localize("Local/BattleSettings/Supremacy"), '
@@ -271,7 +272,7 @@ def _room_duration_settings(root):
         _button('Single', label('SingleLife'), 'LocalRoomSingleLife', 162),
         _button('Unlimited', label('Endless'), 'LocalRoomUnlimitedLives', 190)], conditional=False)
     mode_value = f'(when localBotSetup -> localRules, {ROOM_MODE_VALUE})'
-    lives['bindings'] = [['visible', f'{mode_value} != 4']]
+    lives['bindings'] = [['visible', f'{mode_value} != 4 and {mode_value} != 6']]
     for button, value in zip(lives['children'][1]['children'][0]['children'], (0, 1)):
         button['bindings'] = [['classes', f'when {ROOM_LIVES_VALUE} == {value} -> '
                                 '"button button-color-orange", "button button-color-gray"']]
@@ -303,7 +304,8 @@ def _room_duration_settings(root):
             button['components']['UILongTapComponent'] = {
                 'pressTimeout': .35, 'repeatDelay': .12, 'longTapEvent': event}
     # The native save callback reads this field separately from the notes.
-    mode_tag = ('(when localRoomRules == 5 -> "[mode mad_games] ", '
+    mode_tag = ('(when localRoomRules == 6 -> "[mode uprising] ", '
+                'localRoomRules == 5 -> "[mode mad_games] ", '
                 'localRoomRules == 4 -> "[mode big_boss] ", '
                 'localRoomRules == 3 -> "[mode gravity] ", '
                 'localRoomRules == 2 -> "[mode supremacy] ", '
@@ -399,8 +401,8 @@ def patch_form(document):
     _mode_picker(root)
 
 
-MODE_KEYS = ('Elimination', 'Encounter', 'Supremacy', 'Gravity', 'BigBoss', 'MadGames')
-MODE_ART = ('regular', 'regular', 'regular', 'moongame', 'bossmode', 'madgames')
+MODE_KEYS = ('Elimination', 'Encounter', 'Supremacy', 'Gravity', 'BigBoss', 'MadGames', 'Uprising')
+MODE_ART = ('regular', 'regular', 'regular', 'moongame', 'bossmode', 'madgames', 'hellgames')
 
 
 def _mode_picker(root):
@@ -484,6 +486,7 @@ def _mode_picker(root):
         tab_title = ('localize("Local/BattleSettings/ModeTabMadGames")'
                      if key == 'MadGames' else title['bindings'][0][1])
         tab = _button(f'ModeTab{index}', tab_title, f'LocalPreviewMode{index}', tab_width)
+        tab['children'][0]['components'] = {'UITextComponent': {'fitting': 'FITTING_REDUCE'}}
         tab['bindings'] = [['classes', f'when modePreview == {index} -> '
                             '"button button-color-orange", "button button-color-gray"']]
         tabs.append(place(tab, tabs_left + (tab_width + tab_gap) * index, 461))
@@ -616,6 +619,7 @@ STRINGS = {
            'Easy': 'Easy', 'Normal': 'Normal', 'Hard': 'Hard', 'Capture': 'Base capture',
            'Elimination': 'Elimination', 'Encounter': 'Encounter',
            'Supremacy': 'Supremacy', 'Gravity': 'Gravity Force', 'BigBoss': 'Big Boss', 'MadGames': 'Mad Games',
+           'Uprising': 'Uprising',
            'Save': 'Save', 'Saved': 'Settings saved', 'Create': 'Create',
            'Lives': 'Lives per tank', 'Duration': 'Battle duration', 'Minutes': 'min', 'ModeDefault': 'Mode default',
            'SingleLife': 'One life', 'Endless': 'Unlimited', 'NoTimer': 'No limit',
@@ -628,6 +632,7 @@ STRINGS = {
            'Easy': 'Лёгкая', 'Normal': 'Обычная', 'Hard': 'Сложная', 'Capture': 'Захват базы',
            'Elimination': 'Перестрелка', 'Encounter': 'Встречный бой',
            'Supremacy': 'Превосходство', 'Gravity': 'Гравитация', 'BigBoss': 'Большой босс', 'MadGames': 'Безумные игры',
+           'Uprising': 'Возрождение',
            'Save': 'Сохранить', 'Saved': 'Настройки сохранены', 'Create': 'Создать',
            'Lives': 'Жизни на танк', 'Duration': 'Время боя', 'Minutes': 'мин', 'ModeDefault': 'По режиму',
            'SingleLife': 'Одна жизнь', 'Endless': 'Без ограничений', 'NoTimer': 'Без лимита',
@@ -643,14 +648,16 @@ STRINGS['en'].update(ModeCancel='Cancel', ModeSelect='Select', ModeTabMadGames='
                      ModeDescriptionSupremacy='Capture control points to earn team points.',
                      ModeDescriptionGravity='Low gravity and a jump ability.',
                      ModeDescriptionBigBoss='Five roles with special abilities and respawns.',
-                     ModeDescriptionMadGames='Speed boosts, dashes and reinforced ramming.')
+                     ModeDescriptionMadGames='Speed boosts, dashes and reinforced ramming.',
+                     ModeDescriptionUprising='Three lives and abilities that grow stronger between respawns.')
 STRINGS['ru'].update(ModeCancel='Отмена', ModeSelect='Выбрать', ModeTabMadGames='Безумие',
                      ModeDescriptionElimination='Уничтожь команду противника.',
                      ModeDescriptionEncounter='Захвати базу или уничтожь противников.',
                      ModeDescriptionSupremacy='Захватывай точки и набирай очки команды.',
                      ModeDescriptionGravity='Низкая гравитация и прыжок танка.',
                      ModeDescriptionBigBoss='Пять ролей со способностями и возрождениями.',
-                     ModeDescriptionMadGames='Ускорение, рывки и усиленный таран.')
+                     ModeDescriptionMadGames='Ускорение, рывки и усиленный таран.',
+                     ModeDescriptionUprising='Три жизни и выбор усилений перед возрождением.')
 
 
 for locale, respawn, title in (('en', 'RESPAWN', 'Choose a role'), ('ru', 'РЕСПАВН', 'Выбери роль')):
@@ -889,7 +896,7 @@ def patch_room(document):
 
 def upgrade_form(lab, manifest):
     """Refresh the installed native battle settings form in an idle client."""
-    if manifest.get('battle_settings_ui_version') == 35:
+    if manifest.get('battle_settings_ui_version') == 37:
         return manifest
     from hashlib import sha256
     import json
@@ -944,7 +951,7 @@ def upgrade_form(lab, manifest):
             document = yaml.load(raw, Loader=_StringsLoader)
             locale = 'en' if relative == STRINGS_EN else 'ru'
             strings = {f'Local/BattleSettings/{key}': STRINGS[locale][key]
-                       for key in ('RoomBotsCaption', 'RoomBotsHint', 'Gravity', 'Encounter', 'BigBoss', 'MadGames',
+                       for key in ('RoomBotsCaption', 'RoomBotsHint', 'Gravity', 'Encounter', 'BigBoss', 'MadGames', 'Uprising',
                                    'Lives', 'Duration', 'Minutes', 'ModeDefault', 'SingleLife', 'Endless', 'NoTimer', 'RoomBots1', 'RoomBots2',
                                    'RoomHeaderBots', 'RoomHeaderTime', 'UnlimitedAmmo', 'AmmoOn', 'AmmoOff')}
             strings.update({f'Local/BattleSettings/{key}': value for key, value in STRINGS[locale].items()
@@ -1008,7 +1015,7 @@ def upgrade_form(lab, manifest):
     for target, content in staged.items():
         atomic_write(target, content, replace_symlink=target in (data/ROOM, data/BATTLE_MENU))
     updated = dict(manifest, ui_overrides=overrides, room_bot_hint_version=1,
-                   battle_settings_ui_version=35)
+                   battle_settings_ui_version=37)
     atomic_write(lab/'manifest.json', (json.dumps(updated, indent=2)+'\n').encode())
     return updated
 

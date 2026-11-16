@@ -3,8 +3,7 @@
 Only fields grounded in the XML are composed; every other selected item (and
 unread calibratedShells keys) is reported in ``Effects.unsupported`` instead of
 being guessed or silently dropped. Percent values become multipliers
-``1 + percent/100``. Dispersion devices are unsupported (sandbox has zero
-dispersion). Crew bonuses are additive levels, kept separate from role factors.
+``1 + percent/100``. Crew bonuses are additive levels, kept separate from role factors.
 Collecting a bonus here does not enable that item in authoritative battles.
 """
 from collections.abc import Mapping
@@ -18,6 +17,8 @@ from .loadouts import OPTIONAL_DEVICE, PROVISION, COMPATIBLE, load_catalog
 _STATIC = {
     'rammer': ('miscAttrs/gunReloadTimeFactor', 'reload_time_factor'),
     'enhancedAimDrives': ('miscAttrs/gunAimingTimeFactor', 'aiming_time_factor'),
+    'aimingStabilizer': ('miscAttrs/additiveShotDispersionFactor', 'movement_dispersion_factor'),
+    'barrelPrecisionChannel': ('miscAttrs/shotDispersionAngleFactor', 'dispersion_radius_factor'),
 }
 _PIERCING = {'ARMOR_PIERCING': 'ap_piercing_factor', 'ARMOR_PIERCING_CR': 'apcr_piercing_factor',
              'HOLLOW_CHARGE': 'heat_piercing_factor', 'HIGH_EXPLOSIVE': 'he_piercing_factor'}
@@ -28,6 +29,8 @@ _UNREAD_PIERCING = ('piercingFactors/ARMOR_PIERCING_HE',)
 class Effects:
     reload_time_factor: float = 1.0
     aiming_time_factor: float = 1.0
+    movement_dispersion_factor: float = 1.0
+    dispersion_radius_factor: float = 1.0
     ap_piercing_factor: float = 1.0
     apcr_piercing_factor: float = 1.0
     heat_piercing_factor: float = 1.0
@@ -509,7 +512,8 @@ BATTLE_DEVICES = frozenset(('rammer', 'calibratedShells', 'highQualityAssembly',
                             'improvedVentilation', 'toolbox', 'perfectEquipment',
                             'equipmentStorageSystem', 'improvedPitchLimitsSystem',
                             'recycledEngineSpeed', 'multiLayerArmor', 'reinforcedCaterpillars',
-                            'protectedModules', 'improvedBattleCompartment'))
+                            'protectedModules', 'improvedBattleCompartment',
+                            'aimingStabilizer', 'barrelPrecisionChannel'))
 
 
 def battle_effect_devices(devices):
@@ -786,4 +790,8 @@ def apply_definition(game, definition, loadout, *, crew_specs=None, crew_binding
                       reverse=definition.drive.reverse + e.reverse_speed_bias_kmh/3.6,
                       terrain_resistance=tuple(v/driver for v in definition.drive.terrain_resistance)),
         aiming=replace(aiming, yaw_rate=aiming.yaw_rate*gunner*e.turret_rotation_factor,
-                       aiming_time=aiming.aiming_time*e.aiming_time_factor/gunner))
+                       aiming_time=aiming.aiming_time*e.aiming_time_factor/gunner,
+                       dispersion_radius=aiming.dispersion_radius*e.dispersion_radius_factor,
+                       movement_dispersion=aiming.movement_dispersion*e.movement_dispersion_factor,
+                       hull_rotation_dispersion=aiming.hull_rotation_dispersion*e.movement_dispersion_factor,
+                       turret_rotation_dispersion=aiming.turret_rotation_dispersion*e.movement_dispersion_factor))

@@ -39,11 +39,12 @@ def apply_burst_shell_switch(vehicle):
     return 0
 
 
-def spend_round(vehicle, unlimited):
+def spend_round(vehicle, unlimited, *, from_reserve=False):
     if not unlimited:
         vehicle.ammo -= 1
     vehicle.ammo_by_shell[vehicle.shell_id] = vehicle.ammo
-    vehicle.clip -= 1
+    if not from_reserve or vehicle.clip > 0:
+        vehicle.clip -= 1
 
 
 def magazine_reload_allowed(vehicle):

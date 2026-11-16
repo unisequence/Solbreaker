@@ -24,7 +24,8 @@ from .terrain import MapTerrain
 from .vehicle_data import VehicleDefinition, load_vehicle
 
 _KINDS = {'ready': 135, 'control': 145, 'aim': 149, 'aim_entity': 16, 'aim_entity_local': 17, 'fire': 138,
-          'autoaim': 13, 'autoaim_point': 18, 'aim_angles': 148, 'consumable': 20, 'select_shell': 147}
+          'autoaim': 13, 'autoaim_point': 18, 'aim_angles': 148, 'consumable': 20, 'select_shell': 147,
+          'uprising_select': 21, 'uprising_deselect': 22}
 
 
 def snapshot(arena: Arena, events=(), *, account_id=None, training_error=None) -> bytes:

@@ -13,7 +13,7 @@ from collections import deque
 from functools import cached_property
 from pathlib import Path
 
-from . import big_boss, diagnostics, mad_games
+from . import big_boss, diagnostics, mad_games, uprising
 from .cipher import PacketCipher, encrypt_packet, decrypt_packet
 from .mercury import parse_packet, base_elements, encode_reply, encode_packet, RELIABLE, ReliableInbox
 from .account import create_account, show_gui, account_method, pickle_document, command_header, command_response, local_http_response, resource_response
@@ -1614,7 +1614,7 @@ class BaseEndpoint(asyncio.DatagramProtocol):
                        collision_scene=runtime['collision_scene'],
                        prebattle_seconds=big_boss.COUNTDOWN_SECONDS if room_mode == big_boss.MODE else 7.,
                        room_mode=room_mode, room_settings=room_settings,
-                       bot_game=self.game if room_mode in ('gravity', big_boss.MODE, mad_games.MODE) else None)
+                       bot_game=self.game if room_mode in ('gravity', big_boss.MODE, mad_games.MODE, uprising.MODE) else None)
         owners = getattr(self, 'arena_owners_enabled', False)
         definitions = ({account_id: self.definition for account_id in account_ids}
                        if owners and getattr(self, 'progression', None) is None else {})

@@ -94,19 +94,19 @@ def _role_abilities(game):
     return {role: tuple(data['default_abilities']) for role, data in yaml.safe_load(read(path)).items()}
 
 
-@lru_cache(maxsize=40)
-def _vehicle_roles(game, nation):
+@lru_cache(maxsize=80)
+def _vehicle_roles(game, nation, mode):
     path = game/'Data/XML/item_defs/vehicles'/nation/'list.xml.dvpl'
     return {item.tag: role.strip() for item in ET.fromstring(read(path))
-            if (role := item.findtext('combatRole/arcade'))}
+            if (role := item.findtext(f'combatRole/{mode}'))}
 
 
-def vehicle_abilities(game, definition):
+def vehicle_abilities(game, definition, *, mode='arcade'):
     if game is None or definition is None:
         return ()
     path = Path(game)
     try:
-        role = _vehicle_roles(path, definition.nation).get(definition.name)
+        role = _vehicle_roles(path, definition.nation, mode).get(definition.name)
         return _role_abilities(path).get(role, ())
     except (OSError, ET.ParseError, yaml.YAMLError, ValueError):
         return ()
