@@ -56,8 +56,8 @@ def verify_native_source(*, rebuilt_crates=(), rebuilt_contact=False):
         raise ValueError('Windows native sources differ from the accepted build. Refresh the reviewed Windows inputs.')
 
 
-def stage_windows(directory, native_archive, *, rebuilt_crates=(), windows_contact=None):
-    verify_native_source(rebuilt_crates=rebuilt_crates, rebuilt_contact=windows_contact is not None)
+def stage_windows(directory, native_archive, *, rebuilt_crates=(), rebuilt_contact=False):
+    verify_native_source(rebuilt_crates=rebuilt_crates, rebuilt_contact=rebuilt_contact)
     if native_archive is None:
         native_archive = directory/WINDOWS_INPUT_ZIP
         download(WINDOWS_INPUT_URL, native_archive, WINDOWS_INPUT_SHA256, updates.MAX_DOWNLOAD)
@@ -67,10 +67,8 @@ def stage_windows(directory, native_archive, *, rebuilt_crates=(), windows_conta
     native = directory/'native'
     native.mkdir()
     inputs = {native/name: f'solbreaker/native/{crate}/{name}' for crate, name in WINDOWS_LIBRARIES.items()}
-    if windows_contact is None:
+    if not rebuilt_contact:
         inputs[native/'_contact_queries.pyd'] = 'solbreaker/_contact_queries.pyd'
-    else:
-        shutil.copyfile(windows_contact, native/'_contact_queries.pyd')
     inputs[directory/WHEEL] = f'wheels/{WHEEL}'
     with ZipFile(native_archive) as archive:
         for destination, name in inputs.items():
@@ -113,13 +111,14 @@ def build(tag, output, native_archive, linux_native=None, windows_physics=None, 
         rebuilt_crates = {crate for crate, path in (('physics_core', windows_physics),
                                                     ('rapier_dynamic', windows_rapier)) if path is not None}
         native = stage_windows(work, native_archive, rebuilt_crates=rebuilt_crates,
-                               windows_contact=windows_contact)
+                               rebuilt_contact=windows_contact is not None)
         source = work/f'Solbreaker-{version}-source.zip'
         windows = work/f'Solbreaker-{version}-windows-x64.zip'
         server = work/f'Solbreaker-{version}-server-windows-x64.zip'
         package(source)
         windows_inputs = dict(windows_native=native, windows_wheel=work/WHEEL,
-                              windows_runtime=work, windows_physics=windows_physics, windows_rapier=windows_rapier)
+                              windows_runtime=work, windows_physics=windows_physics,
+                              windows_rapier=windows_rapier, windows_contact=windows_contact)
         package(windows, **windows_inputs)
         package(server, **windows_inputs, server_only=True)
         archives = [(source, 'source'), (windows, 'windows-x64'), (server, 'server-windows-x64')]
