@@ -20,7 +20,7 @@ def digest(data):
 
 class ClientRepairs(unittest.TestCase):
     def test_reticle_yaml_uses_no_aliases(self):
-        from solbreaker.client_reticle import _patch_aim, _patch_aim_style, _patch_readouts
+        from solbreaker.client_reticle import _patch_aim, _patch_aim_style, _patch_readouts, _show_spread
 
         reload_text = {'name': 'reloadTime', 'components': {
             'UIDynamicAtlasTextComponent': {'fontSize': 16.},
@@ -46,8 +46,11 @@ class ClientRepairs(unittest.TestCase):
             for state in ('loaded', 'loading', 'rangefinder', 'over')
         ]}
         _patch_readouts(colors)
-        self.assertEqual(reload_text['components']['UIDynamicAtlasTextComponent']['fontSize'], 22.)
+        self.assertEqual(reload_text['components']['UIDynamicAtlasTextComponent']['fontSize'], 21.)
         self.assertEqual(reload_group['size'], distance['size'])
+        backing = next(child for child in rotate['children'] if child.get('name') == 'solbreakerReadoutBar')
+        self.assertEqual(backing['components']['Anchor'], reload_group['components']['Anchor'])
+        self.assertLess(rotate['children'].index(backing), rotate['children'].index(reload_group))
         reload_left = reload_text['components']['Anchor']['leftAnchor']
         self.assertLess(reload_left, 0)
         self.assertGreater(distance['children'][1]['components']['Anchor']['leftAnchor'], 0)
@@ -57,6 +60,13 @@ class ClientRepairs(unittest.TestCase):
         style = {'StyleSheets': [aimed_style]}
         _patch_aim_style(style)
         self.assertEqual(aimed_style['properties']['atlasImage-frame'], 0)
+        native_spread = {'imagePath': '~res:/Gfx/Battle/HUD/aim/GunSpread.psd'}
+        spread = {'Prototypes': [{'components': {
+            'UIDynamicAtlasImageComponent': native_spread,
+            'UIOpacityComponent': {'opacity': 0.},
+        }}]}
+        _show_spread(spread)
+        self.assertEqual(spread['Prototypes'][0]['components'], {'UIDynamicAtlasImageComponent': native_spread})
         # The native package loader rejects aliases even though PyYAML accepts them.
         for document in (aim, colors, style):
             self.assertFalse(any(isinstance(event, yaml.AliasEvent)
