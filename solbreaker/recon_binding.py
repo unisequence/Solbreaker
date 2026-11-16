@@ -73,14 +73,15 @@ class ReconBindings:
             player = a.players.get(lease.account_id)
             v = a.vehicles.get(lease.observer_id)
             prebattle = not a.started and getattr(a, 'prebattle_seconds', 0.) > 0
+            mad = getattr(a, 'mad_games_mode', False)
             return (self._endpoint.clients.get(lease.addr) is c and
                     self._endpoint.arenas.get(c.arena_id) is a and
                     c.account_id == lease.account_id and c.arena_id == lease.battle_id.hex and
                     c.phase == 'battle' and c.account_created and c.battle_spawned and
                     not a.building and not a.closed and not a.retiring and not a.finished_at and
-                    a.recon is not None and player is lease.player and player.attached and
+                    (a.recon is not None or mad) and player is lease.player and player.attached and
                     (prebattle or a.started and player.loaded) and
-                    player.vehicle_id == lease.observer_id and v is not None and v.alive and
+                    player.vehicle_id == lease.observer_id and v is not None and (v.alive or mad) and
                     v.account_id == lease.account_id and v.team == player.team)
         except (AttributeError, KeyError, TypeError):
             return False
@@ -135,11 +136,14 @@ class ReconBindings:
         be established separately before any payload is sent to a client.
         Call from the owning server event loop, without yielding mid-snapshot.
         """
-        from .recon_snapshot import RosterVehicle, build_recon_snapshot
+        from .recon_snapshot import RosterVehicle, build_mad_games_snapshot, build_recon_snapshot
         from .recon_wire import encode
         bound = self.resolve(token)
         arena = bound.arena
         sequence = self.next_sequence(token)
+        if getattr(arena, 'mad_games_mode', False):
+            return encode(build_mad_games_snapshot(arena, bound.observer_id,
+                                                   battle_id=bound.battle_id, sequence=sequence))
         timeline = getattr(arena, 'time_stop', None)
         if timeline is not None:
             private = timeline.recon_snapshot(bound.observer_id, bound.battle_id, sequence)

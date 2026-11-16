@@ -19,7 +19,7 @@ def packed_recipe(config, catalog, *, include_rules=True):
 def decode(title, description, map_id, catalog):
     if title != TITLE:
         return None
-    base_fields = r'([0-6])/([1-7])/([0-2])/([0-4])'
+    base_fields = r'([0-6])/([1-7])/([0-2])/([0-5])'
     match = re.fullmatch(re.escape(PREFIX) + base_fields + r'/([01])/(-1|[0-9]{1,2})/([01])', description)
     legacy = re.fullmatch(re.escape(LEGACY_PREFIX) + base_fields, description)
     if match is None and legacy is None:

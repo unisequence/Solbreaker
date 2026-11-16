@@ -165,8 +165,7 @@ class ArenaOwnerService:
                 on_result=lambda command, result: self._on_result(job, command, result),
                 on_delivered=lambda command, result: self._on_delivered(job, command, result),
                 on_fault=lambda arena_id, error: self._on_fault(job, error),
-                simulation_debt=lambda: arena.accumulator,
-                motion_tick=lambda: arena.owner_motion_tick)
+                simulation_debt=lambda: arena.accumulator)
             arena.building = False
             for addr, client in job.selected:
                 client.queue_pending = False

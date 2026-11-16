@@ -83,7 +83,7 @@ async def _get(channel, process, timeout):
 
 
 async def apply(owner, command):
-    from solbreaker.arena_owner import Command, CommandRejected, OwnerError, Result, _TIMED, _freeze
+    from solbreaker.arena_owner import Command, CommandRejected, OwnerError, _TIMED, _check_reply, _freeze
     if owner._closed:
         raise OwnerError('owner is closed')
     if type(command) is not Command:
@@ -97,19 +97,15 @@ async def apply(owner, command):
     try:
         await _put(owner._in, raw, owner._timeout)
         reply = pickle.loads(await _get(owner._out, owner._process, owner._timeout))
-        if (isinstance(reply, tuple) and len(reply) == 3 and reply[0] == 'rejected'
-                and reply[1] == sequence and type(reply[2]) is str):
-            owner._seq = sequence
-            raise CommandRejected(reply[2], sequence)
-        if (not isinstance(reply, tuple) or len(reply) != 2 or reply[0] != 'result'
-                or type(reply[1]) is not Result or reply[1].sequence != sequence):
-            raise OwnerError(f'owner failed; command outcome unknown: {reply!r}')
+    except Exception as exc:
+        raise owner._channel_error(command.op, exc) from exc
+    try:
+        result = _check_reply(reply, sequence, command.op)
     except CommandRejected:
+        owner._seq = sequence
         raise
-    except BaseException as exc:
-        raise OwnerError('owner channel failed; command outcome unknown') from exc
     owner._seq = sequence
     if command.op in _TIMED:
         owner._last_at = command.at
-    return reply[1]
+    return result
 

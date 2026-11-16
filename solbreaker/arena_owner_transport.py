@@ -7,10 +7,10 @@ An unknown outcome or delivery error quarantines this arena; no replay occurs.
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 import inspect
 import logging
 import math
-import struct
 import time
 
 from . import diagnostics
@@ -30,7 +30,7 @@ class ArenaOwnerTransport:
     """Event-loop-confined bridge for a single registered arena route."""
 
     def __init__(self, endpoint, route: ArenaRoute, *, limit=64, on_result=None,
-                 on_delivered=None, on_fault=None, simulation_debt=None, motion_tick=None):
+                 on_delivered=None, on_fault=None, simulation_debt=None):
         if type(limit) is not int or not 1 <= limit <= 1024:
             raise ValueError('invalid transport queue limit')
         self.endpoint = endpoint
@@ -40,7 +40,6 @@ class ArenaOwnerTransport:
         self.on_delivered = on_delivered
         self.on_fault = on_fault
         self.simulation_debt = simulation_debt
-        self.motion_tick = motion_tick
         self._queue = asyncio.Queue(maxsize=limit)
         self._fault = None
         # Result is retained on settlement/delivery failure; it must never be
@@ -143,30 +142,21 @@ class ArenaOwnerTransport:
                 if self._entitled(address, client):
                     self.endpoint.send(address, client, body)
                     client.result_sent = True
-        if command.op == 'step':
-            recipients = {account: (address, client) for account, (address, client) in sessions.items()
-                if self._current(address, client) and
-                (self.motion_tick is None or self.motion_tick() != client.last_sync_tick)}
-            if recipients:
-                # One read of the immutable motion frame, rather than a
-                # process round trip for every connected observer.
-                payload = struct.pack(f'<{len(recipients)}I', *recipients)
-                current = await self.route.request(Command('motions', time.monotonic(), 0, payload))
-                motions = current.motions
-                if (current.arena_id != self.arena_id or type(motions) is not tuple
-                        or any(type(motion) is not MotionPayload for motion in motions)
-                        or tuple(motion.account_id for motion in motions) != tuple(recipients)
-                        or any((motion.tick is not None and type(motion.tick) is not int)
-                               or type(motion.body) is not bytes for motion in motions)
-                        or len({motion.tick for motion in motions}) > 1):
-                    raise OwnerError('invalid arena motion batch')
-                for motion in motions:
-                    address, client = recipients[motion.account_id]
-                    if not self._current(address, client):
-                        continue
-                    if motion.tick is not None and motion.tick != client.last_sync_tick:
-                        self.endpoint.send(address, client, tick_sync(motion.tick) + motion.body, reliable=False)
-                        client.last_sync_tick = motion.tick
+        if result.motions:
+            viewers = dict(command.motion_viewers)
+            motions = result.motions
+            if (type(motions) is not tuple
+                    or any(type(motion) is not MotionPayload or motion.account_id not in viewers
+                           or type(motion.tick) is not int or type(motion.body) is not bytes
+                           or viewers[motion.account_id] == motion.tick for motion in motions)
+                    or len({motion.account_id for motion in motions}) != len(motions)
+                    or len({motion.tick for motion in motions}) != 1):
+                raise OwnerError('invalid arena motion batch')
+            for motion in motions:
+                address, client = sessions[motion.account_id]
+                if self._current(address, client) and motion.tick != client.last_sync_tick:
+                    self.endpoint.send(address, client, tick_sync(motion.tick) + motion.body, reliable=False)
+                    client.last_sync_tick = motion.tick
         if self.on_delivered is not None:
             maybe = self.on_delivered(command, result)
             if inspect.isawaitable(maybe):
@@ -184,6 +174,11 @@ class ArenaOwnerTransport:
                     if not future.done():
                         future.set_exception(CommandRejected('session became stale before execution'))
                     continue
+                if command.op == 'step':
+                    viewers = tuple((account, client.last_sync_tick)
+                                    for account, (address, client) in sessions.items()
+                                    if self._current(address, client))
+                    command = replace(command, motion_viewers=viewers)
                 try:
                     result = await self.route.request(command)
                 except CommandRejected as exc:
@@ -208,8 +203,9 @@ class ArenaOwnerTransport:
                 outcome = type(exc).__name__
                 if not future.done():
                     future.set_exception(OwnerError('arena delivery failed; outcome may be unknown'))
-                self._begin_close(OwnerError(
-                    f'arena transport failed: {type(exc).__name__}: {str(exc)[:512]}'))
+                failure = OwnerError(f'arena transport failed: {type(exc).__name__}: {str(exc)[:512]}')
+                failure.__cause__ = exc
+                self._begin_close(failure)
                 return
             finally:
                 if recorder is not None:
@@ -237,7 +233,7 @@ class ArenaOwnerTransport:
                 await asyncio.sleep(max(0., next_at-clock()))
                 now = clock()
                 debt = self.simulation_debt() if self.simulation_debt is not None else 0.
-                budget = max(step_budget, 1.5*interval) if debt > 2*interval else step_budget
+                budget = max(step_budget, 1.5*interval) if debt > interval else step_budget
                 try:
                     # Only one timer request may be outstanding. Player input
                     # therefore waits behind at most one bounded step batch,

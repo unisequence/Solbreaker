@@ -12,7 +12,7 @@ from solbreaker.arena import Arena, GRAVITY_JUMP_SPEC
 from solbreaker.consumables import ACTIVE, COOLDOWN, READY, ConsumableSpec, ConsumableState
 from solbreaker.arena_owner import Command
 from solbreaker.arena_owner_game import GameArenaHandler
-from solbreaker.battle import (VOICE_ENEMY_KILLED, VOICE_TRACK_DESTROYED, arena_update,
+from solbreaker.battle import (VOICE_ENEMY_KILLED, VOICE_TRACK_DESTROYED, arena_update, avatar_method,
                                crew_voice_message, event_messages, health_changed, pb_blob, pb_int,
                                present_vehicles, reconnect_message_parts, team_kill_score,
                                vehicle_info, vehicle_property)
@@ -274,6 +274,35 @@ class SandboxTests(TestCase):
                     self.assertEqual((vehicle.clip, vehicle.ammo, vehicle.reload_at), (0, 1, 2.))
                     arena.sandbox_control(1, sandbox.Control(sandbox.token(arena), 2, 0, 0, 0., 0., 0.))
                     self.assertEqual(vehicle.reload_total, 6.)
+
+    def test_fast_autoreloader_keeps_the_first_refill_when_switching_rounds(self):
+        terrain = SimpleNamespace(height=lambda x, z: 0.)
+        arena = Arena([dict(id=1, nickname='One'), dict(id=2, nickname='Two')],
+                      b'', terrain, now=1., solo=False, sandbox_enabled=True)
+        self.addCleanup(arena.close)
+        arena.ready(1, 1.)
+        arena.ready(2, 1.)
+        vehicle = arena.vehicle_for(1)
+        vehicle.definition = SimpleNamespace(weapon=SimpleNamespace(
+            reload=15., interval=2., pump_reload_times=(4., 5., 6.)))
+        vehicle.ammo_by_shell[vehicle.shell_id] = vehicle.ammo = 8
+        other_shell = vehicle.shell_id+1
+        vehicle.ammo_by_shell[other_shell] = 6
+        vehicle.clip = 0
+        arena._pump_segment(vehicle, 1.)
+        control = sandbox.Control(sandbox.token(arena), 1, sandbox.FAST_RELOAD, 0, 0., 0., 0.)
+        arena.sandbox_control(1, control)
+        self.assertEqual(vehicle.pump_at, 1.5)
+        arena.drain_events()
+
+        self.assertTrue(arena.select_shell(1, 0, other_shell, now=1.25))
+        self.assertEqual((vehicle.shell_id, vehicle.clip, vehicle.pump_at), (other_shell, 0, 1.5))
+        body = event_messages(arena, arena.players[1], arena.drain_events())
+        self.assertIn(avatar_method(13, struct.pack('<IBf', vehicle.entity_id, 6, .25)), body)
+        arena.step(1.5)
+        self.assertEqual((vehicle.clip, vehicle.ammo, vehicle.pump_at), (1, 6, 2.))
+        self.assertTrue(any(event.kind == 'reload' and event.data['delay'] == 0.
+                            and event.data['total'] == .5 for event in arena.drain_events()))
 
     def test_god_mode_converts_shell_damage_to_non_penetration(self):
         from solbreaker.armor import ShotResult

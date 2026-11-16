@@ -27,6 +27,11 @@ class SlowHandler(EchoHandler):
         return super().apply(command)
 
 
+class FailingHandler(EchoHandler):
+    def apply(self, command):
+        raise NameError('failed while refilling the magazine')
+
+
 class NativeWindowsTests(unittest.TestCase):
     def test_rapier_selects_native_windows_dll(self):
         with patch('solbreaker.rapier_dynamic.sys.platform', 'win32'):
@@ -44,7 +49,16 @@ class NativeWindowsTests(unittest.TestCase):
     def test_startup_timeout_does_not_extend_command_timeout(self):
         async def run_owner():
             async with await AsyncArenaOwner.create(SlowHandler, timeout=0.15, startup_timeout=5) as owner:
-                with self.assertRaises(OwnerError):
+                with self.assertRaisesRegex(OwnerError, 'TimeoutError'):
+                    await owner.apply(Command('motion', 1., 1))
+
+        with patch.dict('os.environ', {'SOLBREAKER_OWNER_IPC': 'socket'}):
+            asyncio.run(run_owner())
+
+    def test_socket_transport_reports_the_workers_exception(self):
+        async def run_owner():
+            async with await AsyncArenaOwner.create(FailingHandler, timeout=5) as owner:
+                with self.assertRaisesRegex(OwnerError, 'motion: NameError: failed while refilling'):
                     await owner.apply(Command('motion', 1., 1))
 
         with patch.dict('os.environ', {'SOLBREAKER_OWNER_IPC': 'socket'}):

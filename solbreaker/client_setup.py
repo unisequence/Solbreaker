@@ -113,7 +113,7 @@ def prepare(game, destination, profile, *, windows=False, proton=None, steam=Non
                       f'export STEAM_COMPAT_CLIENT_INSTALL_PATH={shlex.quote(str(steam))}\n'
                       'export SteamAppId=444200 SteamGameId=444200\n'
                       'mkdir -p "$STEAM_COMPAT_DATA_PATH"\ncd client\n'
-                      f'exec {shlex.quote(str(proton))} run "$PWD/wotblitz.exe"\n')
+                      f'exec {shlex.quote(str(proton))} run "$PWD/wotblitz.exe" "$@"\n')
             (stage/'start-client.sh').write_text(script)
             (stage/'start-client.sh').chmod(0o755)
         manifest = json.loads(manifest_path.read_text())

@@ -331,6 +331,7 @@ class VehicleDefinition:
     # vehicles so callers cannot treat parsed XML alone as collision support.
     armor_states_controller: ArmorStatesController | None = None
     tier: int = 1  # Actual vehicle level from the national catalog, not component level.
+    view_range: float = 250.
 
     def __post_init__(self):
         if type(self.tier) is not int or not 1 <= self.tier <= 10:
@@ -969,7 +970,8 @@ def _load_vehicle(game: Path, nation, name, configuration, allow_movable=False):
         VehicleConfiguration(chassis.tag,turret.tag,gun.tag,engine.tag,fuel.tag,radio.tag,
                              next(iter(local_shots)).tag),
         track_spec=track_spec,gun_spec=gun_spec,armor_states_controller=controller,
-        tier=int(listing.findtext('level')))
+        tier=int(listing.findtext('level')),
+        view_range=float(turret.findtext('circularVisionRadius', '250')))
     for asset in (definition.collision_asset,definition.visual_asset):
         for suffix in ('.sc2.dvpl','.scg.dvpl'):
             if not Path(str(asset)+suffix).is_file():

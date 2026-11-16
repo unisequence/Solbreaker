@@ -126,6 +126,23 @@ class DesktopTests(unittest.TestCase):
                 self.assertEqual(saved.play_mode, mode)
                 self.assertEqual(saved.connection, str(remote))
 
+    def test_replay_actions_use_the_prepared_client_and_native_folder_opener(self):
+        from unittest.mock import patch
+
+        self.install_client_fixture()
+        replays = self.root/'client/documents/DAVAProject/replays'
+        replay = self.root/'Чужой бой.wotbreplay'
+        replay.touch()
+        self.window.refresh_status()
+        with (patch('solbreaker.desktop.QFileDialog.getOpenFileName', return_value=(str(replay), '')),
+              patch.object(self.window.manager, 'run') as run,
+              patch('solbreaker.desktop.QDesktopServices.openUrl', return_value=True) as open_url):
+            self.window.open_replay_button.click()
+            self.window.replay_folder_button.click()
+        run.assert_called_once_with('play', replay=str(replay))
+        self.assertTrue(replays.is_dir())
+        self.assertEqual(open_url.call_args.args[0].toLocalFile(), str(replays))
+
     def test_installed_client_opens_setup_at_the_missing_server_step(self):
         from unittest.mock import patch
         from solbreaker.desktop import SetupWizard

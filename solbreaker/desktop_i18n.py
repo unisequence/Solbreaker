@@ -15,6 +15,11 @@ ENGLISH = {
     'Освещение при следующем запуске игры. Доступно на Рудниках, на Протоке и на Виноградниках.':
         'Applies the next time the game starts. Available on Mines, Falls Creek and Vineyards.',
     'Игра': 'Game',
+    'Открыть реплей…': 'Open replay…',
+    'Папка реплеев': 'Replay folder',
+    'Реплеи Blitz (*.wotbreplay)': 'Blitz replays (*.wotbreplay)',
+    'Папка реплеев недоступна.': 'The replay folder is unavailable.',
+    'Выбери существующий файл .wotbreplay': 'Choose an existing .wotbreplay file',
     'Подготовить карты': 'Prepare maps',
     'Запустить свой сервер и подготовить карты заранее. Можно начать игру в любой момент.':
         'Start your local server and prepare maps ahead of time. You can play at any time.',

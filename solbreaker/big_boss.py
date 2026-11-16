@@ -112,6 +112,12 @@ class Poison(NamedTuple):
     started: float
 
 
+class RegeneratorShield(NamedTuple):
+    ident: int
+    started: float
+    expires: float
+
+
 class GravityTrap(NamedTuple):
     ident: int
     owner: int
@@ -143,6 +149,7 @@ class BigBoss:
         self.next_trap = 1
         self.heal_waves = {}
         self.shields = {}
+        self.next_shield = 1
         self.poison = {}
         for entity in sorted(vehicles):
             if entity not in self.bosses:
@@ -181,9 +188,17 @@ class BigBoss:
         cards = (((ROLE_PROVISION[role] + level) << 8) | 0xfd, ROLE_ACTIVE[role][level].compact_id)
         return (*cards, SHIELD_SPECS[level].compact_id) if role == REGENERATOR else cards
 
-    def take_shield(self, entity, now):
+    def grant_shield(self, entity, now, duration):
+        self.shields[entity] = RegeneratorShield(self.next_shield, now, now+duration)
+        self.next_shield += 1
+
+    def active_shield(self, entity, now):
         shield = self.shields.get(entity)
-        if shield is None or not shield[0] <= now < shield[1]:
+        return shield if shield is not None and shield.started <= now < shield.expires else None
+
+    def take_shield(self, entity, now, *, ident=None):
+        shield = self.active_shield(entity, now)
+        if shield is None or (ident is not None and shield.ident != ident):
             return False
         del self.shields[entity]
         return True
@@ -191,8 +206,8 @@ class BigBoss:
     def vehicle_effects(self, entity):
         effects = []
         if entity in self.shields:
-            start, expires = self.shields[entity]
-            effects.append((1, 1, start, expires))
+            shield = self.shields[entity]
+            effects.append((1, 1, shield.started, shield.expires))
         poisons = self.poison.get(entity)
         if poisons:
             start = min(poison.started for poison in poisons.values())

@@ -115,7 +115,7 @@ def required(value, label):
     return str(Path(value).expanduser().absolute())
 
 
-def command(action, settings, *, windows=None, interface=None):
+def command(action, settings, *, windows=None, interface=None, replay=None):
     """Build argv without a shell; both UIs use the exact same operations."""
     windows = sys.platform == 'win32' if windows is None else windows
     python = sys.executable
@@ -177,6 +177,8 @@ def command(action, settings, *, windows=None, interface=None):
         return args + (['--sandbox'] if settings.sandbox else [])
     if action == 'play':
         args = cli + ['launch-client', '--lab', client]
+        if replay is not None:
+            args += ['--replay', str(replay)]
         args.append('--auto-login' if settings.remember_login else '--no-auto-login')
         args += ['--lighting', settings.map_lighting]
         if server_url:
@@ -262,7 +264,7 @@ class Manager:
         self.client = None
         self.notice = 'Выбери действие'
         self._server_exit_reported = False
-        self._play_when_ready = False
+        self._pending_play = None
         self._map_preparation = None
         self._last_prepared_map = None
 
@@ -311,7 +313,7 @@ class Manager:
             return f'{ready} {status}'
         return status
 
-    def run(self, action, *, output=None, interface=None):
+    def run(self, action, *, output=None, interface=None, replay=None):
         if self.busy:
             raise ValueError('Дождись завершения текущей операции')
         job_settings = replace(self.settings, connection=output) if action == 'export' and output else self.settings
@@ -341,19 +343,19 @@ class Manager:
             local = self.settings.local_connection
             if local and self.server_status() in ('Сервер остановлен', 'Ошибка запуска сервера'):
                 self.run('server')
-                self._play_when_ready = True
+                self._pending_play = {'replay': replay}
                 return
             if local and self.server is not None and self.server.running and not self.server.started:
-                self._play_when_ready = True
+                self._pending_play = {'replay': replay}
                 self.notice = 'После запуска сервера откроется игра'
                 return
-            self._play_when_ready = False
+            self._pending_play = None
             private = lab/'private'
             from .platform_io import open_private_file
             descriptor = open_private_file(private, 'launcher-client.log', create=True, writable=True)
             os.lseek(descriptor, 0, os.SEEK_END)
             with os.fdopen(descriptor, 'a') as log:
-                self.client = subprocess.Popen(command(action, self.settings), cwd=PROJECT,
+                self.client = subprocess.Popen(command(action, self.settings, replay=replay), cwd=PROJECT,
                     env=dict(os.environ, PYTHONUTF8='1', PYTHONUNBUFFERED='1'), stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
                     creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0)
             self.notice = 'Клиент запускается. Журнал в private/launcher-client.log'
@@ -365,7 +367,7 @@ class Manager:
                        'prepare-client': 'Подготовка клиента', 'play': self.notice}.get(action, 'Операция выполняется')
 
     def stop_server(self):
-        self._play_when_ready = False
+        self._pending_play = None
         if self.server is not None:
             self.server.stop()
             self.notice = 'Сервер завершает работу'
@@ -409,14 +411,14 @@ class Manager:
             self.client = None
             if code != 0:
                 self.notice = 'Не удалось запустить клиент. См. private/launcher-client.log.'
-        if self._play_when_ready and self.server is not None:
+        if self._pending_play is not None and self.server is not None:
             if not self.server.running:
-                self._play_when_ready = False
+                self._pending_play = None
             elif self.server.started and not self.busy:
-                self._play_when_ready = False
                 try:
-                    self.run('play')
+                    self.run('play', **self._pending_play)
                 except (OSError, ValueError) as error:
+                    self._pending_play = None
                     self.notice = str(error)
         return lines
 

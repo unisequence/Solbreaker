@@ -1,11 +1,14 @@
 """Live BaseApp inputs share the arena timer's simulation budget."""
 from collections import Counter, deque
 from types import SimpleNamespace
-from unittest import TestCase
-from unittest.mock import Mock, patch
+from unittest import IsolatedAsyncioTestCase, TestCase
+from unittest.mock import AsyncMock, Mock, patch
 
 from solbreaker.arena_commands import ArenaCommand
+from solbreaker.arena_owner import AddressedPayload, Command, MotionPayload, Result
+from solbreaker.arena_owner_transport import ArenaOwnerTransport
 from solbreaker.base import BaseEndpoint, ChannelOverflow
+from solbreaker.motion import tick_sync
 
 
 class ArenaInputQueueTests(TestCase):
@@ -53,3 +56,29 @@ class ArenaInputQueueTests(TestCase):
         self.endpoint.clients[1] = SimpleNamespace(**vars(first))
         self.endpoint._apply_arena_inputs(self.arena, float('inf'))
         self.arena.fire.assert_called_once_with(2, 100.)
+
+
+class OwnerMotionDeliveryTests(IsolatedAsyncioTestCase):
+    async def test_step_delivers_events_before_motion_and_checks_session_after_reply(self):
+        clients = {i: SimpleNamespace(arena_id='arena', account_id=i, phase='battle',
+                    account_created=True, battle_spawned=True, last_sync_tick=7) for i in (1, 2)}
+        endpoint = SimpleNamespace(clients=clients, send=Mock())
+        owner, departed = clients.values()
+        route = SimpleNamespace(arena_id='arena', close=AsyncMock())
+
+        async def request(command):
+            self.assertEqual(command.op, 'step')
+            self.assertEqual(command.motion_viewers, ((1, 7), (2, 7)))
+            endpoint.clients[2] = SimpleNamespace(**vars(departed))
+            return Result(1, b'', (AddressedPayload(1, b'event'), AddressedPayload(2, b'stale event')),
+                          arena_id='arena', motions=(MotionPayload(1, 8, b'live'), MotionPayload(2, 8, b'stale')))
+
+        route.request = AsyncMock(side_effect=request)
+        transport = ArenaOwnerTransport(endpoint, route)
+        self.addAsyncCleanup(transport.close)
+        await transport.submit_nowait(Command('step', 10., 0))
+        route.request.assert_awaited_once()
+        self.assertEqual([(call.args[0], call.args[2], call.kwargs) for call in endpoint.send.call_args_list],
+                         [(1, b'event', {}), (1, tick_sync(8)+b'live', {'reliable': False})])
+        self.assertEqual(owner.last_sync_tick, 8)
+        self.assertEqual(departed.last_sync_tick, 7)

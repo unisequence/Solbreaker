@@ -27,6 +27,27 @@ class ManagementTests(unittest.TestCase):
         self.assertEqual(args[args.index('--connection')+1], str(Path(settings.connection).absolute()))
         self.assertNotIn('sh', args)
 
+    def test_replay_file_is_forwarded_after_the_local_server_starts(self):
+        with TemporaryDirectory() as temporary:
+            client = Path(temporary)/'client'
+            (client/'client').mkdir(parents=True)
+            (client/'manifest.json').touch()
+            (client/'client/wotblitz.exe').touch()
+            manager = Manager(Settings(client=str(client), play_mode='local'))
+            replay = str(Path(temporary)/'Пример & бой.wotbreplay')
+            server = Mock(running=True, started=False)
+            with (patch.object(manager, 'server_status', return_value='Сервер остановлен') as status,
+                  patch('solbreaker.management.Job', return_value=server),
+                  patch('solbreaker.management.subprocess.Popen') as play):
+                manager.run('play', replay=replay)
+                play.assert_not_called()
+                server.started = True
+                status.return_value = 'Сервер работает'
+                manager.drain()
+            argv = play.call_args.args[0]
+            self.assertEqual(argv[argv.index('--replay')+1], replay)
+            self.assertIsNone(manager._pending_play)
+
     def test_windows_server_uses_selected_state_and_owned_stdin(self):
         settings = Settings(state='/tmp/custom data')
         args = command('server', settings, windows=True)

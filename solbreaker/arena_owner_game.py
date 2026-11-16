@@ -7,13 +7,14 @@ import pickle
 import struct
 import time
 
+from . import mad_games
 from .arena import Arena, TrainingSpawnUnavailable
 from .training_config import RoomBattleSettings
 from .arena_commands import apply_at_tick, decode_input
 from .arena_owner import (AddressedPayload, Command, CommandRejected, HandlerOutput,
                           MotionPayload, SettlementData, SettlementRecord, SpawnData)
 from .battle import (event_messages, initial_messages, motion_messages, present_vehicles,
-                     spawn_batches, reconnect_batches)
+                     spawn_batches, reconnect_batches, world_motion_messages)
 from .collision import CollisionScene
 from .map_catalog import load_map_spec
 from .map_cache import MapCache
@@ -104,6 +105,25 @@ class GameArenaHandler:
                    and self.arena.started and not self.arena.finished_at)
         return snapshot(self.arena,events,account_id=command.account_id if compact else None)
 
+    def _motions(self, recipients, frame):
+        if not recipients:
+            return ()
+        if frame is None:
+            return tuple(MotionPayload(account, None, b'') for account in recipients)
+        arena = self.arena
+        timeline = getattr(arena, 'time_stop', None)
+        if getattr(arena, 'mad_games_mode', False):
+            by_team = {team: world_motion_messages(arena, frame, team=team)
+                       for team in {arena.players[account].team for account in recipients}}
+            return tuple(MotionPayload(account, frame.tick, motion_messages(
+                arena, arena.players[account], frame, world_messages=by_team[arena.players[account].team]))
+                for account in recipients)
+        world_messages = (world_motion_messages(arena, frame)
+                          if timeline is None or recipients != (timeline.account,) else None)
+        return tuple(MotionPayload(account, frame.tick,
+            motion_messages(arena, arena.players[account], frame, world_messages=world_messages))
+            for account in recipients)
+
     def preflight(self, command: Command) -> None:
         """Validate membership before any Arena mutation or event draining."""
         if self._closed:
@@ -131,13 +151,14 @@ class GameArenaHandler:
                 raise CommandRejected('Invalid training player state')
         if command.op.startswith('recon_'):
             player = self.arena.players[command.account_id]
-            if self.arena.recon is None:
+            mad_snapshot = command.op == 'recon_snapshot' and self.arena.mad_games_mode
+            if self.arena.recon is None and not mad_snapshot:
                 raise CommandRejected('recon unavailable')
             prebattle = not self.arena.started and self.arena.prebattle_seconds > 0
             if (command.op != 'recon_clear'
                     and not (player.attached and (prebattle or player.loaded and self.arena.started)
                              and not self.arena.finished_at
-                             and self.arena.vehicle_for(command.account_id).alive)):
+                             and (mad_snapshot or self.arena.vehicle_for(command.account_id).alive))):
                 raise CommandRejected('recon player not ready')
 
     def apply(self, command: Command) -> HandlerOutput:
@@ -147,10 +168,7 @@ class GameArenaHandler:
         if command.op == 'motions':
             recipients = struct.unpack(f'<{len(command.payload)//4}I', command.payload)
             frame = self.arena.motion_frame if self.arena.started else None
-            motions = tuple(MotionPayload(account, frame.tick if frame is not None else None,
-                motion_messages(self.arena, self.arena.players[account], frame) if frame is not None else b'')
-                for account in recipients)
-            return HandlerOutput(self.arena.result_id, b'', (), motions=motions)
+            return HandlerOutput(self.arena.result_id, b'', (), motions=self._motions(recipients, frame))
         active = sorted(self._joined - self.arena.hangar_players)
         if command.op in ('spawn', 'reconnect'):
             player = self.arena.players[command.account_id]
@@ -193,18 +211,23 @@ class GameArenaHandler:
             return HandlerOutput(self.arena.result_id, self._observation(command), ())
         if command.op == 'recon_snapshot':
             import uuid
-            from .recon_snapshot import RosterVehicle, build_recon_snapshot
+            from .recon_snapshot import RosterVehicle, build_mad_games_snapshot, build_recon_snapshot
             from .recon_wire import encode
             sequence = struct.unpack('<I', command.payload)[0]
             player = self.arena.players[command.account_id]
             timeline = getattr(self.arena, 'time_stop', None)
             battle_id = uuid.UUID(self.arena.result_id)
+            if self.arena.mad_games_mode:
+                payload = encode(build_mad_games_snapshot(
+                    self.arena, player.vehicle_id, battle_id=battle_id, sequence=sequence))
+                return HandlerOutput(self.arena.result_id, snapshot(self.arena), (), recon=payload)
             if timeline is not None:
                 private = timeline.recon_snapshot(player.vehicle_id, battle_id, sequence)
                 if private is not None:
                     return HandlerOutput(self.arena.result_id, snapshot(self.arena), (), recon=encode(private))
             roster = tuple(RosterVehicle(vehicle.entity_id, vehicle.team, vehicle.alive)
-                           for _, vehicle in present_vehicles(self.arena, player))
+                           for _, vehicle in present_vehicles(self.arena, player)
+                           if not mad_games.concealed(vehicle, player.team))
             payload = encode(build_recon_snapshot(
                 self.arena.recon, roster, player.vehicle_id,
                 battle_id=battle_id, sequence=sequence,
@@ -263,8 +286,13 @@ class GameArenaHandler:
             settlement = SettlementData(self.arena.result_id, results, tuple(records))
         else:
             settlement = None
+        motions = ()
+        if command.motion_viewers and self.arena.started and (frame := self.arena.motion_frame) is not None:
+            recipients = tuple(account for account, last_tick in command.motion_viewers
+                               if last_tick != frame.tick and account in self._joined)
+            motions = self._motions(recipients, frame)
         return HandlerOutput(self.arena.result_id, self._observation(command,events),
-                             tuple(outgoing), settlement=settlement)
+                             tuple(outgoing), settlement=settlement, motions=motions)
 
     def _swap_training_tank(self, command):
         tank = pickle.loads(command.payload)

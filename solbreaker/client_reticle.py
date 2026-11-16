@@ -12,36 +12,24 @@ from .connection import atomic_write
 _ROOT = 'UI/Screens/Battle/Aims'
 _HUD_OPTIONS = 'UI/Screens/Common/Settings/HUDOptionsPage.yaml.dvpl'
 _AIMS = ('AimDefault', 'Aim1', 'Aim2')
-_VERSION = 5
+_VERSION = 19
 _INK = [.94, .97, .98, 1.]
 _READY = [.62, 1., .72, 1.]
 _EDGE = [.025, .035, .045, .94]
+_RELOADING = [1., .78, .43, 1.]
+# The native aim atlas resolves this stock resource slot in both camera modes.
+# The prepared copy supplies Solbreaker's own artwork in the slot.
+_SPRITE_ROOT = 'Gfx/Battle/HUD/aim'
+_SPRITE = 'aim_camera-marker_snipe'
+_SPRITE_PATH = f'~res:/{_SPRITE_ROOT}/{_SPRITE}.psd'
+_READOUT_WIDTH = 58
+_READOUT_HEIGHT = 26
+_READOUT_X = 53
+_READOUT_Y = 0
 
 
 def _control(parent, name):
     return next(child for child in parent['children'] if child.get('name') == name)
-
-
-def _rectangle(name, x, y, width, height, color, *, classes=None):
-    control = {'class': 'UIControl', 'name': name, 'input': False,
-               'position': [x, y], 'size': [width, height],
-               'components': {'Background': {'drawType': 'DRAW_FILL', 'color': list(color)}}}
-    if classes:
-        control['classes'] = classes
-    return control
-
-
-def _crosshair():
-    strokes = ((0, 11, 9, 3), (11, 0, 3, 9), (16, 11, 9, 3),
-               (11, 16, 3, 9), (11, 11, 3, 3))
-    outlines = [_rectangle(f'Outline{i}', x-1, y-1, w+2, h+2, _EDGE)
-                for i, (x, y, w, h) in enumerate(strokes)]
-    lines = [_rectangle(f'Stroke{i}', x, y, w, h, _INK, classes='solbreaker-sight-line')
-             for i, (x, y, w, h) in enumerate(strokes)]
-    return {'class': 'UIControl', 'name': 'SolbreakerCrosshair', 'input': False,
-            'visible': False, 'size': [25, 25],
-            'components': {'Anchor': {'hCenterAnchorEnabled': True, 'vCenterAnchorEnabled': True}},
-            'children': outlines + lines}
 
 
 def _patch_aim(document):
@@ -53,44 +41,72 @@ def _patch_aim(document):
     for child in zoom.get('children', ()):
         if child.get('name') == 'Decoration':
             child['components']['UIOpacityComponent'] = {'opacity': 0.}
-    sight['children'].append(_crosshair())
+    reload_group = _control(rotate, 'reloadAndFuelContainer')
+    reload_container = _control(reload_group, 'reloadTimeContainer')
+    distance = _control(rotate, 'distanceContainer')
+    width = 2 * _READOUT_X + _READOUT_WIDTH
+    for control in (reload_group, reload_container, distance):
+        control['size'] = [width, _READOUT_HEIGHT]
+        control['components'].pop('LinearLayout', None)
+    for control in (reload_group, distance):
+        control['components']['Anchor'] = {'hCenterAnchorEnabled': True,
+                                           'vCenterAnchorEnabled': True, 'vCenterAnchor': _READOUT_Y}
+    for container in (reload_container, distance):
+        _control(container, 'atgm-bg')['components']['UIOpacityComponent'] = {'opacity': 0.}
+    reload_left = -_READOUT_X - _READOUT_WIDTH // 2
+    distance_left = _READOUT_X - _READOUT_WIDTH // 2
+    for container, name, width, align, left in (
+            (reload_container, 'reloadTime', _READOUT_WIDTH, 'HCENTER', reload_left),
+            (distance, 'distance', 37, 'RIGHT', distance_left),
+            (distance, 'm', 17, 'LEFT', distance_left + 39)):
+        readout = _control(container, name)['components']
+        readout['UIDynamicAtlasTextComponent'].update(align=[align, 'VCENTER'])
+        if name != 'm':
+            readout['UIDynamicAtlasTextComponent']['fontSize'] = 22.
+        readout['Anchor'] = {'leftAnchorEnabled': True, 'leftAnchor': left,
+                             'vCenterAnchorEnabled': True}
+        readout['SizePolicy'] = {'horizontalPolicy': 'FixedSize', 'horizontalValue': width,
+                                 'verticalPolicy': 'FixedSize', 'verticalValue': _READOUT_HEIGHT}
+    fuel = _control(reload_group, 'fuelIcon')
+    fuel['components']['Anchor'] = {'leftAnchorEnabled': True, 'leftAnchor': -_READOUT_X - 7,
+                                   'topAnchorEnabled': True, 'topAnchor': _READOUT_HEIGHT + 3}
+    drum = _control(sight, 'DrumReload')['components']['Anchor']
+    drum.update(hCenterAnchor=-_READOUT_X, vCenterAnchor=_READOUT_Y + 36)
 
 
-def _patch_aim_style(document, *, custom=False):
-    rules = document['StyleSheets']
-    for rule in rules:
+def _patch_aim_style(document):
+    for rule in document['StyleSheets']:
         selectors = rule['selectors']
         properties = rule['properties']
         if 'atlasImage-imagePath' in properties and all(
-                selector.startswith('.sight.shell.') for selector in selectors):
-            # Hide the stock shell reticle, including its old ring and ears.
-            properties.pop('atlasImage-imagePath')
-            properties['atlasImage-color'] = [1., 1., 1., 0.]
-        if all('.shell' in selector and selector.endswith('Container') for selector in selectors):
-            reload = selectors[0].endswith('#reloadAndFuelContainer')
-            properties['anchor-hCenterAnchor'] = -56 if reload else (65 if custom else 44)
-            properties['anchor-vCenterAnchor'] = 9 if custom and not reload else 16
-    rules.extend([
-        {'selectors': ['.sight.shell * #SolbreakerCrosshair'], 'properties': {'visible': True}},
-        {'selectors': ['.sight.shell.aimed * .solbreaker-sight-line'],
-         'properties': {'bg-color': _READY}},
-    ])
+                selector.startswith(('.sight.shell.', '.sight.atgm', '.sight.default-aim.atgm'))
+                for selector in selectors):
+            properties['atlasImage-imagePath'] = _SPRITE_PATH
+            properties['atlasImage-color'] = [1., 1., 1., 1.]
+        if 'atlasImage-frame' in properties and all(
+                selector.startswith('.sight.shell.aimed ') for selector in selectors):
+            properties['atlasImage-frame'] = 0
+        if all(selector.endswith(('#reloadAndFuelContainer', '#distanceContainer'))
+               for selector in selectors):
+            properties['anchor-hCenterAnchor'] = 0
+            properties['anchor-vCenterAnchor'] = _READOUT_Y
 
 
 def _patch_readouts(document):
+    colors = {
+        '.cont.loading ?': _RELOADING,
+        '.cont.loaded ?': _READY,
+        '.cont.over ?': [.74, .81, .83, 1.],
+    }
     for rule in document['StyleSheets']:
         selector, = rule['selectors']
         properties = rule['properties']
-        if selector == '.cont.loading ?':
-            properties['atlasText-color'] = [1., .76, .38, 1.]
-        else:
-            properties['atlasText-color'] = [1., 1., 1., .74 if selector == '.cont.over ?' else 1.]
+        properties['atlasText-color'] = list(colors.get(selector, _INK))
         properties['atlasText-shadowColor'] = list(_EDGE)
         properties['atlasText-shadowOffset'] = [1, 1]
-    document['StyleSheets'].append({
-        'selectors': ['.cont.loaded #reloadTime'],
-        'properties': {'atlasText-color': [1., 1., 1., 0.], 'atlasText-shadowColor': [0., 0., 0., 0.]},
-    })
+        if selector.endswith(' ?'):
+            names = ('distance', 'm') if selector == '.cont.rangefinder ?' else ('reloadTime',)
+            rule['selectors'] = [selector[:-1] + '#' + name for name in names]
 
 
 def _hide_spread(document):
@@ -115,7 +131,7 @@ def install(lab, manifest):
     transforms = {
         **{f'{_ROOT}/{name}.yaml.dvpl': _patch_aim for name in _AIMS},
         f'{_ROOT}/AimDefault.style.yaml.dvpl': _patch_aim_style,
-        f'{_ROOT}/Aim.style.yaml.dvpl': lambda document: _patch_aim_style(document, custom=True),
+        f'{_ROOT}/Aim.style.yaml.dvpl': _patch_aim_style,
         f'{_ROOT}/AimCont.style.yaml.dvpl': _patch_readouts,
         f'{_ROOT}/AimSpread.yaml.dvpl': _hide_spread,
         _HUD_OPTIONS: _hide_style_picker,
@@ -126,6 +142,14 @@ def install(lab, manifest):
         document = yaml.safe_load(dvpl.read(source/'Data'/relative))
         transform(document)
         content = dvpl.encode(yaml.safe_dump(document, sort_keys=False, allow_unicode=True).encode())
+        resources[data/relative] = content
+        overrides[relative] = sha256(content).hexdigest()
+
+    asset_directory = Path(__file__).with_name('assets')
+    for suffix in ('', '@2x'):
+        relative = f'{_SPRITE_ROOT}/{_SPRITE}{suffix}.packed.webp.dvpl'
+        artwork = asset_directory/f'solbreaker-reticle{suffix}.packed.webp'
+        content = dvpl.encode(artwork.read_bytes())
         resources[data/relative] = content
         overrides[relative] = sha256(content).hexdigest()
 

@@ -20,19 +20,45 @@ def digest(data):
 
 class ClientRepairs(unittest.TestCase):
     def test_reticle_yaml_uses_no_aliases(self):
-        import yaml
-        from solbreaker.client_reticle import _patch_aim, _patch_readouts
+        from solbreaker.client_reticle import _patch_aim, _patch_aim_style, _patch_readouts
 
-        rotate = {'name': 'rotateControl', 'children': [{'name': 'sightCursorZoom'}]}
-        aim = {'Prototypes': [{'children': [{'name': 'UISightCursor', 'children': [rotate]}]}]}
+        reload_text = {'name': 'reloadTime', 'components': {
+            'UIDynamicAtlasTextComponent': {'fontSize': 16.},
+            'SizePolicy': {'horizontalValue': 40., 'verticalValue': 20.},
+        }}
+
+        def readout(name):
+            return {'name': name, 'components': {'UIDynamicAtlasTextComponent': {}}}
+
+        reload_container = {'name': 'reloadTimeContainer', 'size': [40., 20.],
+                            'components': {}, 'children': [readout('atgm-bg'), reload_text]}
+        reload_group = {'name': 'reloadAndFuelContainer', 'size': [40., 20.],
+                        'components': {}, 'children': [reload_container, readout('fuelIcon')]}
+        distance = {'name': 'distanceContainer', 'components': {},
+                    'children': [readout('atgm-bg'), readout('distance'), readout('m')]}
+        rotate = {'name': 'rotateControl',
+                  'children': [{'name': 'sightCursorZoom'}, reload_group, distance]}
+        drum = {'name': 'DrumReload', 'components': {'Anchor': {}}}
+        aim = {'Prototypes': [{'children': [{'name': 'UISightCursor', 'children': [rotate, drum]}]}]}
         _patch_aim(aim)
         colors = {'StyleSheets': [
             {'selectors': [f'.cont.{state} ?'], 'properties': {}}
             for state in ('loaded', 'loading', 'rangefinder', 'over')
         ]}
         _patch_readouts(colors)
+        self.assertEqual(reload_text['components']['UIDynamicAtlasTextComponent']['fontSize'], 22.)
+        self.assertEqual(reload_group['size'], distance['size'])
+        reload_left = reload_text['components']['Anchor']['leftAnchor']
+        self.assertLess(reload_left, 0)
+        self.assertGreater(distance['children'][1]['components']['Anchor']['leftAnchor'], 0)
+        self.assertTrue(all(row['properties']['atlasText-color'][3] > 0 for row in colors['StyleSheets']))
+        aimed_style = {'selectors': ['.sight.shell.aimed .arcade-sight'],
+                       'properties': {'atlasImage-frame': 1}}
+        style = {'StyleSheets': [aimed_style]}
+        _patch_aim_style(style)
+        self.assertEqual(aimed_style['properties']['atlasImage-frame'], 0)
         # The native package loader rejects aliases even though PyYAML accepts them.
-        for document in (aim, colors):
+        for document in (aim, colors, style):
             self.assertFalse(any(isinstance(event, yaml.AliasEvent)
                                  for event in yaml.parse(yaml.safe_dump(document))))
 

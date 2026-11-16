@@ -1,4 +1,5 @@
 """Native ground physics owner, with setup and result marshalling."""
+from contextlib import contextmanager
 import ctypes as C
 import json
 import math
@@ -149,6 +150,7 @@ class NativePhysics:
         self.steps = 0
         self._sensors = (SensorState*len(world.poses))()
         self._sensor_states = {}
+        self._sensor_batch = None
         try:
             self.sync(world)
         except BaseException:
@@ -167,9 +169,10 @@ class NativePhysics:
                 raise RuntimeError('Native physics world is closed')
             size = self.library.solbreaker_physics_query(self.handle,
                 json.dumps(request, allow_nan=False).encode(), self._output, len(self._output))
-            if size < 0:
+            if not 0 <= size <= len(self._output):
                 raise RuntimeError(f'Native physics query failed ({size}): {self.error()}')
-            return json.loads(self._output.raw[:size])
+            # ctypes.raw copies the entire 4 MiB buffer even for a small reply.
+            return json.loads(C.string_at(self._output, size))
 
     def replace_vehicle(self, world, entity, pose):
         self.query(operation='replace_vehicle', vehicle=vehicle_fixture(world, entity, pose))
@@ -182,14 +185,15 @@ class NativePhysics:
                 if status:
                     raise RuntimeError(f'Native sensor update failed ({status}): {self.error()}')
 
-    def sync(self, world):
+    def sync(self, world, entities=None):
         with self._lock:
             if not self.handle:
                 raise RuntimeError('Native physics world is closed')
             if len(world.poses) != len(self._sensors):
                 raise RuntimeError('Native physics roster changed')
             changes = {}
-            for entity, pose in world.poses.items():
+            for entity in world.poses if entities is None else entities:
+                pose = world.poses[entity]
                 turret = world.gun_angles[entity][0]
                 value = pose, turret
                 if self._sensor_states.get(entity) == value:
@@ -204,9 +208,26 @@ class NativePhysics:
                 raise RuntimeError(f'Native physics sync failed ({status}): {self.error()}')
             self._sensor_states.update(changes)
 
+    @contextmanager
+    def sensor_batch(self, world):
+        """Track per-vehicle updates during the arena's sequential drive pass."""
+        self.sync(world)
+        dirty = set()
+        self._sensor_batch = dirty
+        try:
+            yield dirty
+        finally:
+            self._sensor_batch = None
+
     def move(self, world, entity, distance, yaw_delta, dt, state, displacement):
         from .collision import Pose
-        self.sync(world)
+        dirty = self._sensor_batch
+        if dirty is None:
+            self.sync(world)
+        else:
+            dirty.add(entity)
+            self.sync(world, sorted(dirty))
+            dirty.clear()
         command = StepInput()
         current, road = world.poses[entity], world._road_poses[entity]
         STEP_PACKER.pack_into(command, 0, 2, entity,
