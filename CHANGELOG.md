@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.0-alpha.12
+## 0.1.0-alpha.13
 
 - Choose Mad Games from the battle-rules menu for a solo battle with bots or
   a training room. Tanks at tiers V–X use the ability pairs from the pinned

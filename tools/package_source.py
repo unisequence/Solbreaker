@@ -130,12 +130,13 @@ def validate_contents(payloads):
 
 
 def package(output, *, windows_native=None, windows_wheel=None, windows_runtime=None,
-            linux_native=None, server_only=False, windows_physics=None, windows_rapier=None):
+            linux_native=None, server_only=False, windows_physics=None, windows_rapier=None,
+            windows_contact=None):
     if bool(windows_native) != bool(windows_wheel):
         raise ValueError('Provide both the Windows DLL directory and the Python 3.12 Bullet wheel')
     if windows_runtime and not windows_native:
         raise ValueError('Portable runtime requires the accepted Windows native inputs')
-    if (windows_physics or windows_rapier) and not windows_native:
+    if (windows_physics or windows_rapier or windows_contact) and not windows_native:
         raise ValueError('Rebuilt Windows libraries require the remaining pinned Windows inputs')
     if linux_native and (windows_native or not server_only):
         raise ValueError('Linux libraries are only supported in a dedicated Linux package')
@@ -163,7 +164,7 @@ def package(output, *, windows_native=None, windows_wheel=None, windows_runtime=
                     Path(windows_native)/filename for crate, filename in WINDOWS_LIBRARIES.items()}
         # Older accepted native sets retain the Python contact-query fallback.
         contact = Path(windows_native)/'_contact_queries.pyd'
-        if contact.exists():
+        if windows_contact is None and contact.exists():
             binaries['solbreaker/_contact_queries.pyd'] = contact
         wheel = Path(windows_wheel)
         if wheel.name != WHEEL:
@@ -179,10 +180,12 @@ def package(output, *, windows_native=None, windows_wheel=None, windows_runtime=
             if hashlib.sha256(content).hexdigest() != expected[path.name]:
                 raise ValueError('Native package input differs from accepted SHA-256: '+path.name)
             payloads[name] = content
-        for crate, path in (('physics_core', windows_physics), ('rapier_dynamic', windows_rapier)):
+        rebuilt = {f'solbreaker/native/{crate}/{WINDOWS_LIBRARIES[crate]}': path
+                   for crate, path in (('physics_core', windows_physics), ('rapier_dynamic', windows_rapier))}
+        rebuilt['solbreaker/_contact_queries.pyd'] = windows_contact
+        for name, path in rebuilt.items():
             if path is None:
                 continue
-            name = f'solbreaker/native/{crate}/{WINDOWS_LIBRARIES[crate]}'
             content = read_input(Path(path))
             offset = int.from_bytes(content[60:64], 'little')
             if content[:2] != b'MZ' or content[offset:offset+6] != b'PE\0\0\x64\x86':

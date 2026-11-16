@@ -1,5 +1,6 @@
 """Source packages retain launch permissions and exclude local runtime data."""
 from pathlib import Path
+import gzip
 import hashlib
 import json
 import stat
@@ -69,7 +70,6 @@ class PackagingTests(unittest.TestCase):
             self.assertFalse((root/'result.zip').exists())
 
     def test_known_game_content_is_rejected_even_under_reviewed_name(self):
-        import gzip
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
             self.source_fixture(root)
@@ -115,6 +115,40 @@ class PackagingTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, 'accepted SHA-256'):
                     package(root/'result.zip', windows_native=binaries, windows_wheel=wheel)
             self.assertFalse((root/'result.zip').exists())
+
+    def test_windows_package_accepts_rebuilt_contact_module(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.source_fixture(root)
+            catalog = root/GAME_CATALOG
+            catalog.parent.mkdir(parents=True, exist_ok=True)
+            catalog.write_bytes(gzip.compress(b'[]'))
+            binaries = root/'binaries'
+            binaries.mkdir()
+            for filename in WINDOWS_LIBRARIES.values():
+                (binaries/filename).write_bytes(b'synthetic library')
+            wheel = binaries/WHEEL
+            wheel.write_bytes(b'synthetic wheel')
+            pinned = binaries/'_contact_queries.pyd'
+            pinned.write_bytes(b'accepted contact module')
+            expected = {path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+                        for path in binaries.iterdir()}
+            (root/'requirements/native-artifacts.json').write_text(json.dumps(dict(sha256=expected)))
+            self.write_file_list(root)
+            pinned.write_bytes(b'modified pinned module')
+            rebuilt = root/pinned.name
+            rebuilt.write_bytes(b'broken PE')
+            output = root/'result.zip'
+            with patch('tools.package_source.ROOT', root):
+                with self.assertRaisesRegex(ValueError, 'accepted SHA-256: _contact_queries.pyd'):
+                    package(output, windows_native=binaries, windows_wheel=wheel)
+                with self.assertRaisesRegex(ValueError, 'x86-64 Windows library'):
+                    package(output, windows_native=binaries, windows_wheel=wheel, windows_contact=rebuilt)
+                pe = b'MZ' + bytes(58) + (64).to_bytes(4, 'little') + b'PE\0\0\x64\x86' + b'rebuilt'
+                rebuilt.write_bytes(pe)
+                package(output, windows_native=binaries, windows_wheel=wheel, windows_contact=rebuilt)
+            with zipfile.ZipFile(output) as archive:
+                self.assertEqual(archive.read('Solbreaker/solbreaker/_contact_queries.pyd'), pe)
 
     def test_windows_package_requires_pinned_ground_controller(self):
         with TemporaryDirectory() as temporary:
