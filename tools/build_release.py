@@ -22,6 +22,20 @@ WINDOWS_INPUT_COMMIT = 'f4298e538a0af6b567f984f20f37a0a7c5c7fe91'
 WINDOWS_INPUT_SHA256 = 'e0ecca50d20919de18b26b7d62f76e17a44ecf95879bbdcdb70f6cc92f3a809d'
 WINDOWS_INPUT_ZIP = f'Solbreaker-{WINDOWS_INPUT_TAG[1:]}-windows-x64.zip'
 WINDOWS_INPUT_URL = f'https://github.com/{updates.REPOSITORY}/releases/download/{WINDOWS_INPUT_TAG}/{WINDOWS_INPUT_ZIP}'
+DEPOT_TAG = 'DepotDownloader_3.4.0'
+DEPOT_URL = f'https://github.com/SteamRE/DepotDownloader/releases/download/{DEPOT_TAG}'
+DEPOT_ARCHIVES = {
+    'linux-x64': 'a999dec66b4850fc961bd50366696d23c2d0fad7b18790e6a5647b2f19097a53',
+    'windows-x64': '41c9e9f0df54b3ad02e67a11726756e5c73283bd7c2e1b04acfa5ae4c2ed3767',
+}
+DEPOT_SOURCE = 'https://codeload.github.com/SteamRE/DepotDownloader/tar.gz/c553ef4d60c00a4f5fd16c9fe017f569001589ff'
+# Identical notice files in the upstream bundles' .NET 9.0.0 and 9.0.4 runtimes.
+DOTNET_SOURCE = 'https://raw.githubusercontent.com/dotnet/runtime/v9.0.0'
+DEPOT_NOTICES = {
+    'DepotDownloader-source.tar.gz': (DEPOT_SOURCE, '169c45f707f9d14c5c080483244ae8841afe79a8bd3bc113dfe63933a1300247'),
+    'DOTNET-LICENSE.txt': (f'{DOTNET_SOURCE}/LICENSE.TXT', 'cfc21f5e8bd655ae997eec916138b707b1d290b83272c02a95c9f821b8c87310'),
+    'DOTNET-THIRD-PARTY-NOTICES.txt': (f'{DOTNET_SOURCE}/THIRD-PARTY-NOTICES.TXT', 'fa3e9d0a2c52476f04fe798d7dc4f6e7edb7b68a3d2f4d5f59a39bce957eedc8'),
+}
 
 
 def sha256(path):
@@ -42,6 +56,25 @@ def download(url, path, expected, limit):
                 output.write(chunk)
     if digest.hexdigest() != expected:
         raise ValueError(f'Download differs from pinned SHA-256: {path.name}')
+
+
+def stage_depot(directory):
+    notices = {}
+    for name, (url, expected) in DEPOT_NOTICES.items():
+        path = directory/name
+        download(url, path, expected, 2 << 20)
+        notices[name] = path.read_bytes()
+    bundles = {}
+    for platform, expected in DEPOT_ARCHIVES.items():
+        filename = f'DepotDownloader-{platform}.zip'
+        path = directory/filename
+        download(f'{DEPOT_URL}/{filename}', path, expected, 64 << 20)
+        binary = 'DepotDownloader.exe' if platform == 'windows-x64' else 'DepotDownloader'
+        with ZipFile(path) as archive:
+            if sorted(archive.namelist()) != sorted((binary, 'LICENSE')):
+                raise ValueError(f'Unexpected files in {filename}')
+            bundles[platform] = {**notices, binary: archive.read(binary), 'LICENSE': archive.read('LICENSE')}
+    return bundles
 
 
 def verify_native_source(*, rebuilt_crates=(), rebuilt_contact=False):
@@ -112,14 +145,15 @@ def build(tag, output, native_archive, linux_native=None, windows_physics=None, 
                                                     ('rapier_dynamic', windows_rapier)) if path is not None}
         native = stage_windows(work, native_archive, rebuilt_crates=rebuilt_crates,
                                rebuilt_contact=windows_contact is not None)
+        depot = stage_depot(work)
         source = work/f'Solbreaker-{version}-source.zip'
         windows = work/f'Solbreaker-{version}-windows-x64.zip'
         server = work/f'Solbreaker-{version}-server-windows-x64.zip'
-        package(source)
+        package(source, depot_bundle=depot['linux-x64'])
         windows_inputs = dict(windows_native=native, windows_wheel=work/WHEEL,
                               windows_runtime=work, windows_physics=windows_physics,
                               windows_rapier=windows_rapier, windows_contact=windows_contact)
-        package(windows, **windows_inputs)
+        package(windows, **windows_inputs, depot_bundle=depot['windows-x64'])
         package(server, **windows_inputs, server_only=True)
         archives = [(source, 'source'), (windows, 'windows-x64'), (server, 'server-windows-x64')]
         if linux_native:

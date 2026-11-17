@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.0-alpha.16
+
+- The launcher shows the update download percentage, bytes transferred and
+  speed. It displays extraction and verification as a separate stage.
+- Download the pinned Blitz build from the setup wizard with the bundled
+  DepotDownloader 3.4.0. Sign in with a Steam mobile QR code, follow the
+  download percentage and verify the files by SHA-256 when it finishes.
+  The Steam console is still available in the wizard.
+- Linux updates rebuild server libraries only when their build inputs change.
+
 ## 0.1.0-alpha.15
 
 - Choose and apply camouflage on regular tanks in the garage.

@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 import sys
 
-from PySide6.QtCore import QRectF, QSize, Qt, QTimer, QUrl
+from PySide6.QtCore import QRectF, QSize, Qt, QTimer, QUrl, Signal, Slot
 from PySide6.QtGui import QColor, QDesktopServices, QFont, QIcon, QPainter, QPainterPath, QPixmap
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFormLayout,
     QFrame, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit,
@@ -248,7 +248,7 @@ class SetupWizard(QDialog):
         first = self.add_page()
         first.addWidget(label(tr('Откуда взять файлы игры?'), 'heading'))
         first.addWidget(label(tr('Укажи установленную копию совместимой сборки. Лаунчер создаст отдельный клиент Solbreaker.'), 'muted'))
-        first.addWidget(button(tr('Скачать совместимую сборку через Steam'), self.download_depot))
+        first.addWidget(button(tr('Скачать совместимую сборку'), self.download_depot))
         form = QFormLayout()
         client = document(Path(settings.client).expanduser()/'manifest.json') if reuse_client else {}
         self.path_field(form, 'game', tr('Папка игры'), client.get('game') or settings.game)
@@ -604,12 +604,16 @@ class SetupWizard(QDialog):
 
 
 class Window(QMainWindow):
+    update_progress = Signal(str, object, object, object)
+
     def __init__(self, config):
         super().__init__()
         self.config = Path(config)
         self.manager = Manager(Settings.load(config))
         self.update_kind = updates.package_kind(PROJECT)
         self.update_task = None
+        self.update_detail = ''
+        self.update_progress.connect(self.show_update_progress, Qt.QueuedConnection)
         self.update_result = os.environ.pop('SOLBREAKER_UPDATE_RESULT', '')
         QApplication.instance().setStyleSheet(theme_style(self.manager.settings.gui_theme))
         self.build_ui()
@@ -670,7 +674,8 @@ class Window(QMainWindow):
             installed_version = label(f'Solbreaker {__version__}', 'muted')
             installed_version.setAlignment(Qt.AlignCenter)
             navigation.addWidget(installed_version)
-            navigation.addWidget(button(tr('Обновить'), self.start_update))
+            self.update_button = button(tr('Обновить'), self.start_update)
+            navigation.addWidget(self.update_button)
         sidebar.setFixedWidth(max(200, sidebar.minimumSizeHint().width()))
         horizontal.addWidget(sidebar)
         body = QWidget()
@@ -1169,17 +1174,46 @@ class Window(QMainWindow):
                                                     'Не удалось проверить состояние сервера')):
             self.error(tr('Закрой игру и останови локальный сервер перед обновлением.'))
             return
-        self.centralWidget().setEnabled(False)
-        self.manager.notice = 'Проверяем и скачиваем обновление…'
+        self.stack.setEnabled(False)
+        self.update_button.setEnabled(False)
+        self.theme_picker.setEnabled(False)
+        self.language_picker.setEnabled(False)
         executor = ThreadPoolExecutor(max_workers=1)
-        self.update_task = executor.submit(updates.prepare, PROJECT, __version__, self.update_kind)
+        self.update_task = executor.submit(updates.prepare, PROJECT, __version__, self.update_kind,
+                                            progress=self.report_update_progress)
         executor.shutdown(wait=False)
+        self.show_update_progress('Ищем обновление…', None, None, None)
         self.poll()
+
+    def report_update_progress(self, message, completed=None, total=None, speed=None):
+        self.update_progress.emit(message, completed, total, speed)
+
+    @Slot(str, object, object, object)
+    def show_update_progress(self, message, completed, total, speed):
+        if self.update_task is None:
+            return
+        self.update_detail = tr(message)
+        self.progress.setAccessibleName(tr(message))
+        self.progress.setRange(0, 1000 if total else 0)
+        if total:
+            percent = completed * 100 // total
+            self.progress.setValue(completed * 1000 // total)
+            self.update_detail = self.update_detail.removesuffix('…') + tr(' — {percent}% · {done:.1f} / {total:.1f} МиБ').format(
+                percent=percent, done=completed/(1 << 20), total=total/(1 << 20))
+            if speed is not None:
+                self.update_detail += tr(' · {speed:.1f} МиБ/с').format(speed=speed/(1 << 20))
+        self.notice.setText(self.update_detail)
+        self.notice.show()
 
     def finish_update(self):
         task = self.update_task
         self.update_task = None
-        self.centralWidget().setEnabled(True)
+        self.update_detail = ''
+        self.progress.setRange(0, 0)
+        self.stack.setEnabled(True)
+        self.update_button.setEnabled(True)
+        self.theme_picker.setEnabled(True)
+        self.language_picker.setEnabled(True)
         try:
             release = task.result()
         except Exception as error:
@@ -1205,8 +1239,8 @@ class Window(QMainWindow):
                                    else 'Установка обновления не удалась. См. runtime/launcher-update.log.')
             self.update_result = ''
         self.progress.setVisible(self.manager.busy or starting or self.update_task is not None)
-        self.notice.setText(tr(self.manager.notice))
-        self.notice.setVisible(self.manager.notice not in ('Выбери действие', 'Готово'))
+        self.notice.setText(self.update_detail or tr(self.manager.notice))
+        self.notice.setVisible(bool(self.update_detail) or self.manager.notice not in ('Выбери действие', 'Готово'))
 
     def refresh_status(self):
         local = self.own.isChecked()
@@ -1238,7 +1272,7 @@ class Window(QMainWindow):
         self.play_button.setText(tr(action))
         self.launch_help.setText(tr(help_text))
         wizard_open = self.wizard is not None and self.wizard.isVisible()
-        self.language_picker.setEnabled(not self.manager.busy and not wizard_open)
+        self.language_picker.setEnabled(not self.manager.busy and not wizard_open and self.update_task is None)
         self.play_button.setEnabled(not self.manager.busy)
         self.open_replay_button.setVisible(states[1])
         self.open_replay_button.setEnabled(not self.manager.busy)

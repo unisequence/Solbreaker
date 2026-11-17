@@ -326,7 +326,7 @@ class DesktopTests(unittest.TestCase):
         dialog = DepotDialog(wizard)
         self.assertEqual(dialog.check.text(), 'Verify files')
         dialog.update_progress(500, 123)
-        self.assertEqual(dialog.status.text(), 'Verifying file SHA-256 hashes — 123 MiB read')
+        self.assertEqual(dialog.status.text(), 'Verifying SHA-256 — 50% · 123 MiB read')
         for container in (self.window, wizard, dialog):
             texts = [widget.text() for widget in container.findChildren(QLabel)]
             texts += [widget.text() for widget in container.findChildren(QPushButton)]

@@ -38,6 +38,22 @@ Full preserved texts are under `licenses/python/`. The inventory also records th
 
 Qt for Python publishes additional third-party notices and distribution guidance. Those upstream documents describe the terms applicable to the bundled GUI libraries. [Qt for Python licenses](https://doc.qt.io/qtforpython-6/licenses.html), [Qt licensing](https://doc.qt.io/qt-6/licensing.html).
 
+## DepotDownloader
+
+The Linux and Windows launcher packages ship the unmodified DepotDownloader
+3.4.0 executable from SteamRE. Solbreaker runs it as a separate process. The
+bundle retains the GPL-2.0 license, the matching source archive, and the .NET
+license and third-party notices under `tools/depotdownloader/`.
+[Upstream release and source](https://github.com/SteamRE/DepotDownloader/releases/tag/DepotDownloader_3.4.0).
+
+The tagged project file records the matching dependencies, including
+[SteamKit2 3.2.0](https://github.com/SteamRE/SteamKit/tree/3.2.0),
+[protobuf-net 3.2.52](https://github.com/protobuf-net/protobuf-net/tree/3.2.52),
+and [QRCoder 1.6.0](https://github.com/codebude/QRCoder/tree/v1.6.0).
+The executables embed [.NET 9.0.0 on Linux](https://github.com/dotnet/runtime/tree/v9.0.0)
+and [.NET 9.0.4 on Windows](https://github.com/dotnet/runtime/tree/v9.0.4).
+The license and notices are identical in both runtime versions.
+
 ## World of Tanks Blitz and Steam
 
 World of Tanks Blitz, its client, game data and trademarks belong to their respective rightsholders. Wargaming identifies the World of Tanks Blitz and Blitz marks in its EULA. Solbreaker uses the pinned Steam build `11.21.0.1235_7376187`, app 444200, depot 444202, supplied separately by the user. The launcher can invoke Steam's depot download workflow for the user's authenticated Steam account.

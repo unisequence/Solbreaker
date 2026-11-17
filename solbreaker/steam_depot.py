@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import stat
 import sys
 
 from .build_info import STEAM_APP, STEAM_DEPOT, STEAM_MANIFEST
@@ -12,6 +13,24 @@ from .resource_source import inspect_game
 
 DOWNLOAD_COMMAND = f'download_depot {STEAM_APP} {STEAM_DEPOT} {STEAM_MANIFEST}'
 CATALOG = Path(__file__).with_name('assets')/'build-11.21.0.1235_7376187-files.json.gz'
+
+
+def bundled_downloader(root=Path(__file__).resolve().parents[1]):
+    if sys.platform not in ('linux', 'win32'):
+        return None
+    name = 'DepotDownloader.exe' if sys.platform == 'win32' else 'DepotDownloader'
+    path = root/'tools/depotdownloader'/name
+    if path.is_symlink() or not path.is_file():
+        return None
+    if sys.platform == 'linux' and not os.access(path, os.X_OK):
+        # The alpha.15 updater only restores executable bits on shell scripts.
+        try:
+            path.chmod(path.stat().st_mode | stat.S_IXUSR)
+        except OSError:
+            return None
+        if not os.access(path, os.X_OK):
+            return None
+    return str(path)
 
 
 def steam_roots(hint=''):
