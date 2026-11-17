@@ -113,7 +113,7 @@ class GameArenaHandler:
             return tuple(MotionPayload(account, None, b'') for account in recipients)
         arena = self.arena
         timeline = getattr(arena, 'time_stop', None)
-        if getattr(arena, 'mad_games_mode', False):
+        if arena.team_spotting:
             by_team = {team: world_motion_messages(arena, frame, team=team)
                        for team in {arena.players[account].team for account in recipients}}
             return tuple(MotionPayload(account, frame.tick, motion_messages(
@@ -152,14 +152,14 @@ class GameArenaHandler:
                 raise CommandRejected('Invalid training player state')
         if command.op.startswith('recon_'):
             player = self.arena.players[command.account_id]
-            mad_snapshot = command.op == 'recon_snapshot' and self.arena.mad_games_mode
-            if self.arena.recon is None and not mad_snapshot:
+            team_snapshot = command.op == 'recon_snapshot' and self.arena.team_spotting
+            if self.arena.recon is None and not team_snapshot:
                 raise CommandRejected('recon unavailable')
             prebattle = not self.arena.started and self.arena.prebattle_seconds > 0
             if (command.op != 'recon_clear'
                     and not (player.attached and (prebattle or player.loaded and self.arena.started)
                              and not self.arena.finished_at
-                             and (mad_snapshot or self.arena.vehicle_for(command.account_id).alive))):
+                             and (team_snapshot or self.arena.vehicle_for(command.account_id).alive))):
                 raise CommandRejected('recon player not ready')
 
     def apply(self, command: Command) -> HandlerOutput:
@@ -212,20 +212,20 @@ class GameArenaHandler:
             return HandlerOutput(self.arena.result_id, self._observation(command), ())
         if command.op == 'recon_snapshot':
             import uuid
-            from .recon_snapshot import RosterVehicle, build_mad_games_snapshot, build_recon_snapshot
+            from .recon_snapshot import RosterVehicle, build_recon_snapshot, build_team_spotting_snapshot
             from .recon_wire import encode
             sequence = struct.unpack('<I', command.payload)[0]
             player = self.arena.players[command.account_id]
             timeline = getattr(self.arena, 'time_stop', None)
             battle_id = uuid.UUID(self.arena.result_id)
-            if self.arena.mad_games_mode:
-                payload = encode(build_mad_games_snapshot(
-                    self.arena, player.vehicle_id, battle_id=battle_id, sequence=sequence))
-                return HandlerOutput(self.arena.result_id, snapshot(self.arena), (), recon=payload)
             if timeline is not None:
                 private = timeline.recon_snapshot(player.vehicle_id, battle_id, sequence)
                 if private is not None:
                     return HandlerOutput(self.arena.result_id, snapshot(self.arena), (), recon=encode(private))
+            if self.arena.team_spotting:
+                payload = encode(build_team_spotting_snapshot(
+                    self.arena, player.vehicle_id, battle_id=battle_id, sequence=sequence))
+                return HandlerOutput(self.arena.result_id, snapshot(self.arena), (), recon=payload)
             roster = tuple(RosterVehicle(vehicle.entity_id, vehicle.team, vehicle.alive)
                            for _, vehicle in present_vehicles(self.arena, player)
                            if not mad_games.concealed(vehicle, player.team))

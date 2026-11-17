@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.1.0-alpha.15
+
+- Choose and apply camouflage on regular tanks in the garage.
+- The solid dispersion ring follows the server's aim and smooths changes
+  between updates. As the gun settles, shells land closer to the aim point
+  more often. Reticle Calibration reduces aim time.
+- A track-only hit now shows the shell's blocked damage to the player who
+  took the hit. Vehicle HP stays the same.
+- The client preserves custom controls when the server disconnects. The
+  launcher remembers LAN servers by identity and can find them at a new
+  address. The server accepts connections while loading map metadata.
+- Preserve team spotting in Time Stop and use the same dispersion model
+  for shots fired on the private timeline.
+
 ## 0.1.0-alpha.14
 
 - Play Uprising in solo bot battles and training rooms. Tanks get three

@@ -94,12 +94,24 @@ class TimeStopTests(TestCase):
         self.owner.definition = SimpleNamespace(weapon=Weapon(12, 2, 1., 5., (self.shell,)),
                                                 aiming=aiming)
         self.arena._configure_ammunition(self.owner)
-        _, live_direction = self.arena.shot_ray(self.owner)
+        live_origin, live_direction = self.arena.shot_ray(self.owner)
+        self.arena.motion_frame = None
+        self.arena._record_motion_frame(self.arena.simulation_time)
+        live_marker = self.arena.motion_frame.samples[self.owner.entity_id].marker
+        live_packet = motion_messages(self.arena, self.arena.players[1], self.arena.motion_frame)
+        self.owner.gun.aim_progress = 1.
         with (patch.object(self.arena.dispersion_rng, 'random', return_value=1.),
               patch.object(self.arena.dispersion_rng, 'uniform', return_value=0.)):
-            _, velocity, _ = self.arena._launch(self.owner, self.shell, self.arena.simulation_time)
+            origin, velocity, _ = self.arena._launch(self.owner, self.shell, self.arena.simulation_time)
         live_ratio = math.tan(math.acos(sum(a*b/self.shell.speed for a, b in zip(live_direction, velocity))))
+        self.assertEqual(self.owner.gun.aim_progress, 0.)
         self.assertAlmostEqual(live_ratio, .004)
+        live_velocity = tuple(axis * self.shell.speed for axis in live_direction)
+        self.assertEqual(live_marker[:2], (origin, live_velocity))
+        self.assertEqual(origin, live_origin)
+        self.assertEqual(live_packet[-28:], struct.pack('<7f', *origin, *live_velocity, live_marker[2]))
+        self.assertAlmostEqual(live_marker[2], live_ratio)
+        self.assertAlmostEqual(struct.unpack('<f', live_packet[-4:])[0], live_ratio)
         start = Pose((0., 0., 0.), 0.)
         end = Pose((0., 0., 5.), math.radians(20.))
         self.owner.gun.yaw = math.radians(30.)
@@ -114,13 +126,21 @@ class TimeStopTests(TestCase):
         branch = self.fork()
         self.assertEqual(branch.snapshot.gun_loadout.shot_age, 0.)
         self.assertAlmostEqual(branch.gun.movement_dispersion, settled)
-        _, branch_direction = branch._shot_ray()
+        self.assertEqual(branch.gun.aim_progress, self.owner.gun.aim_progress)
+        self.assertEqual(_frame(branch).aim_progress, branch.gun.aim_progress)
+        branch_origin, branch_direction = branch._shot_ray()
+        branch_marker = branch.aim_marker()
         with (patch.object(branch.dispersion_rng, 'random', return_value=1.),
               patch.object(branch.dispersion_rng, 'uniform', return_value=0.)):
             self.assertTrue(branch.fire(1))
+        self.assertEqual(branch.gun.aim_progress, 0.)
         velocity = branch.projectiles[1].velocity
+        branch_velocity = tuple(axis * self.shell.speed for axis in branch_direction)
+        self.assertEqual(branch_marker[:2], (branch_origin, branch_velocity))
+        self.assertEqual(branch_origin, branch.projectiles[1].position)
         ratio = math.tan(math.acos(sum(a*b/self.shell.speed for a, b in zip(branch_direction, velocity))))
         self.assertAlmostEqual(ratio, .016 * 2. * settled)
+        self.assertAlmostEqual(branch_marker[2], ratio)
         self.assertAlmostEqual(_frame(branch).movement_dispersion, settled)
 
     def test_frozen_motion_and_autoaim_preserve_team_spotting(self):

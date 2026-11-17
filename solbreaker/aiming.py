@@ -7,22 +7,41 @@ import numpy as np
 from .orientation import matrix
 
 
+# Starting bias before the gun has settled. 1.0 samples uniformly by area.
+SHOT_DISPERSION_CENTER_BIAS = 1.50
+UNSETTLED_CENTER_CHANCE = .5 ** (2. / SHOT_DISPERSION_CENTER_BIAS)
+SETTLED_CENTER_CHANCE = .90  # Probability inside half of the dispersion radius.
+FULL_SETTLE_TIME_CONSTANTS = 3.  # About 95% of exponential bloom has decayed.
+
+
 def wrap(angle):
     return (angle + math.pi) % math.tau - math.pi
 
 
-def disperse_shot(direction, config, rng, *, shot_age=None, factor=1., aim_factor=1.,
-                  movement_factor=1., gun_damaged=False):
-    """Sample the shot cone from the gun's dispersion radius at 100 m."""
+def settling_time(config, aim_factor):
+    return max(1. / 60., config.aiming_time * aim_factor)
+
+
+def dispersion_tangent(config, *, shot_age=None, factor=1., aim_factor=1.,
+                       movement_factor=1., gun_damaged=False):
+    """Return the cone radius per metre used by ballistics and the gun marker."""
     dispersion = getattr(config, 'dispersion_radius', 0.)
     if not dispersion:
-        return direction
+        return 0.
     if gun_damaged:
         dispersion *= getattr(config, 'damaged_gun_dispersion', 1.)
     if shot_age is not None:
-        settle = max(1. / 60., config.aiming_time * aim_factor)
+        settle = settling_time(config, aim_factor)
         dispersion *= 1. + (config.after_shot_dispersion - 1.) * math.exp(-max(0., shot_age) / settle)
-    radius = dispersion * factor * movement_factor / 100. * math.sqrt(rng.random())
+    return dispersion * factor * movement_factor / 100.
+
+
+def disperse_shot(direction, tangent, rng, aim_progress=0.):
+    if not tangent:
+        return direction
+    center_chance = UNSETTLED_CENTER_CHANCE + (SETTLED_CENTER_CHANCE - UNSETTLED_CENTER_CHANCE) * aim_progress
+    # For U**exponent, P(radius <= half) = .5**(1/exponent).
+    radius = tangent * rng.random() ** (-1. / math.log2(center_chance))
     angle = rng.uniform(0., math.tau)
     dx, dy, dz = direction
     length = math.hypot(dx, dz)
@@ -62,6 +81,7 @@ class GunAim:
             self.PACKED_MIN, self.PACKED_MAX = config.packed_pitch_limits
         self.yaw = self.pitch = 0.0
         self.movement_dispersion = 1.
+        self.aim_progress = 0.
         self.desired_yaw = self.desired_pitch = 0.0
         self.point = None
         self.angles_requested = False
@@ -112,7 +132,7 @@ class GunAim:
         self.desired_yaw, self.desired_pitch = wrap(yaw), pitch
         return True
 
-    def update_dispersion(self, config, before, after, previous_turret, dt, aim_factor):
+    def update_dispersion(self, config, before, after, previous_turret, dt, aim_factor, *, previous_pitch=None):
         if not getattr(config, 'dispersion_radius', 0.):
             return
         x, _, z = before.position
@@ -120,6 +140,16 @@ class GunAim:
         speed = 3.6 * math.hypot(dx-x, dz-z) / dt
         hull_rate = math.degrees(wrap(after.yaw - before.yaw)) / dt
         turret_rate = math.degrees(wrap(self.yaw - previous_turret)) / dt
+        # Ignore tiny suspension and turret corrections while the gun settles.
+        pitch_delta = 0. if previous_pitch is None else self.pitch - previous_pitch
+        tilt = max(abs(pitch_delta), abs(wrap(after.pitch - before.pitch)),
+                   abs(wrap(after.roll - before.roll)))
+        if (speed > .3 or abs(after.position[1] - before.position[1]) > .10 * dt
+                or max(abs(hull_rate), abs(turret_rate), math.degrees(tilt) / dt) > 1.):
+            self.aim_progress = 0.
+        else:
+            duration = FULL_SETTLE_TIME_CONSTANTS * settling_time(config, aim_factor)
+            self.aim_progress = min(1., self.aim_progress + dt / duration)
         # Use horizontal vehicle speed (km/h) and local traverse (degrees/s).
         steady = math.hypot(1., speed * getattr(config, 'movement_dispersion', 0.),
                             hull_rate * getattr(config, 'hull_rotation_dispersion', 0.),
@@ -127,7 +157,7 @@ class GunAim:
         if steady >= self.movement_dispersion:
             self.movement_dispersion = steady
             return
-        settle = max(1. / 60., config.aiming_time * aim_factor)
+        settle = settling_time(config, aim_factor)
         remaining = 1. + (self.movement_dispersion - 1.) * math.exp(-dt / settle)
         self.movement_dispersion = max(steady, remaining)
 

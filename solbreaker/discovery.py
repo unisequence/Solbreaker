@@ -204,3 +204,26 @@ def interface_scope(interface, name):
     if any(interface.network.subnet_of(network) for network in PRIVATE):
         return str(interface.network)
     return None
+
+
+def local_interfaces():
+    try:
+        from PySide6.QtNetwork import QNetworkInterface
+    except ImportError:
+        return []
+    interfaces = {}
+    for adapter in QNetworkInterface.allInterfaces():
+        flags = adapter.flags()
+        active = QNetworkInterface.IsUp | QNetworkInterface.IsRunning
+        if flags & active != active or flags & QNetworkInterface.IsLoopBack:
+            continue
+        name = adapter.humanReadableName() or adapter.name()
+        for address in adapter.addressEntries():
+            ip = address.ip().toString()
+            prefix = address.prefixLength()
+            if discoverable_ip(ip) and 0 <= prefix <= 32:
+                interface = ipaddress.IPv4Interface(f'{ip}/{prefix}')
+                scope = interface_scope(interface, f'{name} {adapter.name()}')
+                if scope:
+                    interfaces[ip] = (name, interface, scope)
+    return list(interfaces.values())

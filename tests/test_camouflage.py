@@ -1,12 +1,15 @@
 """Paint follows the owned tank through persistent and native battle state."""
 import json
 from pathlib import Path
+import struct
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
+from solbreaker.account import command_response
 from solbreaker.arena import Arena
+from solbreaker.base import BaseEndpoint
 from solbreaker.battle import pb_int, spawn_message_parts
 from solbreaker.garage import GarageStore
 from solbreaker.profile import account_snapshot
@@ -14,6 +17,32 @@ from solbreaker.storage import AccountStore
 
 
 class CamouflageTests(unittest.TestCase):
+    def test_native_request_equips_removes_and_rejects_incompatible_paint(self):
+        paint = (60 << 8) | 0xf8
+        endpoint = BaseEndpoint.__new__(BaseEndpoint)
+        endpoint.server = SimpleNamespace(manifest={'game': '/game'}, event=Mock())
+        endpoint.progression = Mock()
+        endpoint.progression.prepare.return_value = {'vehicles': [{'id': 306, 'type_cd': 0x4f21}]}
+        endpoint.progression_catalog = {'rev': 13}
+        endpoint.require_vehicle_available = Mock()
+        endpoint.progression_update = Mock(return_value=b'update')
+        client = SimpleNamespace(phase='account', account_created=True, arena_id=None, account_id=2)
+
+        def request(value):
+            body = struct.pack('<HHqiii', 239, 112, 13, 306, 1, value)
+            return endpoint.vehicle_camouflage(client, 141, body, 239)
+
+        with patch('solbreaker.camouflage.compatible_paints', return_value={'inferno': paint}):
+            self.assertEqual(request(paint), b'update' + command_response(239, 0))
+            endpoint.progression.garage.set_camouflage.assert_called_once_with(2, 306, paint)
+            endpoint.progression.garage.set_camouflage.reset_mock()
+            self.assertEqual(request(0), b'update' + command_response(239, 0))
+            endpoint.progression.garage.set_camouflage.assert_called_once_with(2, 306, 0)
+            endpoint.progression.garage.set_camouflage.reset_mock()
+            self.assertEqual(request(0xffff), command_response(
+                239, -1, message='This paint is incompatible with the vehicle'))
+            endpoint.progression.garage.set_camouflage.assert_not_called()
+
     def test_paint_survives_reopen_and_can_be_cleared(self):
         paint = (60 << 8) | 0xf8
         with TemporaryDirectory() as directory:

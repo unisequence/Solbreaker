@@ -12,7 +12,7 @@ from .connection import atomic_write
 _ROOT = 'UI/Screens/Battle/Aims'
 _HUD_OPTIONS = 'UI/Screens/Common/Settings/HUDOptionsPage.yaml.dvpl'
 _AIMS = ('AimDefault', 'Aim1', 'Aim2')
-_VERSION = 20
+_VERSION = 21
 _INK = [.94, .97, .98, 1.]
 _READY = [.62, 1., .72, 1.]
 _EDGE = [.025, .035, .045, .94]
@@ -128,8 +128,7 @@ def _patch_readouts(document):
 
 
 def _show_spread(document):
-    # Restore the native marker, including in clients migrated from the HUD
-    # version that hid it. The engine positions the dots as dispersion changes.
+    # Keep the native controls visible for the continuous ring.
     document['Prototypes'][0]['components'].pop('UIOpacityComponent', None)
 
 
@@ -166,12 +165,13 @@ def install(lab, manifest):
         overrides[relative] = sha256(content).hexdigest()
 
     asset_directory = Path(__file__).with_name('assets')
-    for suffix in ('', '@2x'):
-        relative = f'{_SPRITE_ROOT}/{_SPRITE}{suffix}.packed.webp.dvpl'
-        artwork = asset_directory/f'solbreaker-reticle{suffix}.packed.webp'
-        content = dvpl.encode(artwork.read_bytes())
-        resources[data/relative] = content
-        overrides[relative] = sha256(content).hexdigest()
+    for slot, asset in ((_SPRITE, 'solbreaker-reticle'), ('GunSpread', 'solbreaker-spread')):
+        for suffix in ('', '@2x'):
+            relative = f'{_SPRITE_ROOT}/{slot}{suffix}.packed.webp.dvpl'
+            artwork = asset_directory/f'{asset}{suffix}.packed.webp'
+            content = dvpl.encode(artwork.read_bytes())
+            resources[data/relative] = content
+            overrides[relative] = sha256(content).hexdigest()
 
     for parent in {target.parent.relative_to(data) for target in resources}:
         directory = data

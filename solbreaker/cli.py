@@ -64,6 +64,7 @@ def main(argv=None):
     launch_origin = launch.add_mutually_exclusive_group()
     launch_origin.add_argument('--connection', type=Path)
     launch_origin.add_argument('--url')
+    launch.add_argument('--refresh-lan', action='store_true', help=argparse.SUPPRESS)
     launch.add_argument('--auto-login', action=argparse.BooleanOptionalAction, default=None)
     launch.add_argument('--replay', type=Path, help='Open a .wotbreplay file')
     from .client_atmosphere import PRESETS
@@ -102,7 +103,7 @@ def main(argv=None):
             from .management_tasks import launch_client
             result = launch_client(args.lab, auto_login=args.auto_login,
                                    profile=args.connection, url=args.url, lighting=args.lighting,
-                                   replay=args.replay)
+                                   replay=args.replay, refresh_lan=args.refresh_lan)
             if result not in (0, 1):
                 parser.exit(1, f'Client exited with code {result}\n')
             return

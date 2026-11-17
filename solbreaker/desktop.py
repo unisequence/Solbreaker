@@ -1,16 +1,14 @@
 """Guided game setup and desktop management for Solbreaker."""
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, replace
-import ipaddress
 import json
 import os
 import re
 from pathlib import Path
 import sys
 
-from PySide6.QtCore import QRectF, Qt, QTimer, QUrl
+from PySide6.QtCore import QRectF, QSize, Qt, QTimer, QUrl
 from PySide6.QtGui import QColor, QDesktopServices, QFont, QIcon, QPainter, QPainterPath, QPixmap
-from PySide6.QtNetwork import QNetworkInterface
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFormLayout,
     QFrame, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit,
     QProgressBar, QPushButton, QRadioButton, QScrollArea, QSpinBox, QStackedWidget,
@@ -146,22 +144,7 @@ def document(path):
 
 
 def discovery_interfaces():
-    interfaces = {}
-    for adapter in QNetworkInterface.allInterfaces():
-        flags = adapter.flags()
-        active = QNetworkInterface.IsUp | QNetworkInterface.IsRunning
-        if flags & active != active or flags & QNetworkInterface.IsLoopBack:
-            continue
-        name = adapter.humanReadableName() or adapter.name()
-        for address in adapter.addressEntries():
-            ip = address.ip().toString()
-            prefix = address.prefixLength()
-            if discovery.discoverable_ip(ip) and 0 <= prefix <= 32:
-                interface = ipaddress.IPv4Interface(f'{ip}/{prefix}')
-                scope = discovery.interface_scope(interface, f'{name} {adapter.name()}')
-                if scope:
-                    interfaces[str(interface.ip)] = (name, interface, scope)
-    return list(interfaces.values())
+    return discovery.local_interfaces()
 
 
 def prepared_client(settings):
@@ -204,14 +187,26 @@ class LauncherBanner(QFrame):
     def __init__(self):
         super().__init__()
         self.cover = QPixmap(str(ASSETS/'launcher-cover.png'))
-        self.setFixedHeight(190)
+        self.setMaximumHeight(190)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 20, 24, 20)
+        layout.setContentsMargins(24, 8, 24, 10)
         layout.addStretch()
         self.setAccessibleName('Solbreaker — ' + COMPATIBILITY)
-        version = label(COMPATIBILITY)
-        version.setStyleSheet('color: #ddd6e8; background: transparent;')
-        layout.addWidget(version)
+        self.version = label(COMPATIBILITY)
+        self.version.setStyleSheet('color: #ddd6e8; background: transparent;')
+        layout.addWidget(self.version)
+
+    def sizeHint(self):
+        return QSize(super().sizeHint().width(), 190)
+
+    def minimumSizeHint(self):
+        size = super().minimumSizeHint()
+        size.setHeight(max(size.height(), 76))
+        return size
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.version.setVisible(event.size().height() >= 92)
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -434,7 +429,7 @@ class SetupWizard(QDialog):
         from .connection import atomic_write
 
         directory = self.window.config.resolve().parent/'discovered-servers'
-        path = directory/f'{server.server_id}-{server.address}-{server.port}.json'
+        path = directory/f'{server.server_id}.json'
         try:
             directory.mkdir(parents=True, exist_ok=True)
             atomic_write(path, server.profile)
@@ -783,8 +778,8 @@ class Window(QMainWindow):
         page = QWidget()
         column = QVBoxLayout(page)
         column.setContentsMargins(0, 0, 0, 0)
-        column.setSpacing(12)
-        column.addWidget(LauncherBanner())
+        column.setSpacing(8)
+        column.addWidget(LauncherBanner(), 1)
         self.own = QRadioButton(tr('На своём компьютере'))
         self.remote = QRadioButton(tr('На другом сервере'))
         self.own.setChecked(self.manager.settings.local_connection)

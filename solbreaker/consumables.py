@@ -62,15 +62,10 @@ _SHIELD_PARAMETERS = ('cooldown', 'duration', 'shieldCoef')
 _ARMOR_MOVERS = {'armorMover': ('ArmorMover', 73)}
 _ARMOR_MOVER_PARAMETERS = ('activateStates', 'bonusValues/damageReductionPercent', 'cooldown',
                            'deactivateStates', 'duration')
-# Accelerated Aiming: pinned id28 FireControlSystem (Reticle Calibration),
-# repurposed by a local sandbox rule. While ACTIVE, turret yaw traverse and gun
-# vertical traverse are multiplied by AIMING_RATE_FACTOR. Its accuracy leaves
-# are verified exactly but intentionally never applied: aiming time,
-# dispersion, reload, camera and hull turn stay unchanged.
+# Pinned id28 FireControlSystem reduces aim time and dispersion while active.
 _AIMING_BOOSTS = {'fireControlSystem': ('FireControlSystem', 28)}
 _AIMING_PARAMETERS = {'aimingTimeFactor': 0.7, 'cooldown': 55.0, 'duration': 20.0,
                       'shotDispersionAngleFactor': 0.7}
-AIMING_RATE_FACTOR = 1.30
 
 
 def _damage_factors(value):
@@ -111,9 +106,8 @@ class ConsumableSpec:
     damage_taken_factor: float = 1.0
     # While ACTIVE: multiplier on enemy HP damage from every shell, including HE splash.
     all_shell_damage_factor: float = 1.0
-    # While ACTIVE: turret yaw and gun pitch traverse rate multipliers.
-    yaw_rate_factor: float = 1.0
-    pitch_rate_factor: float = 1.0
+    aiming_time_factor: float = 1.0
+    dispersion_factor: float = 1.0
     # ArmorMover's verified controller IDs. They remain explicit so Arena can
     # publish the same complete property16 snapshot it uses for collision.
     armor_activate_state: int | None = None
@@ -138,8 +132,8 @@ class ConsumableSpec:
         if not (_real(self.damage_taken_factor) and 0 < self.damage_taken_factor <= 1
                 and _real(self.all_shell_damage_factor) and 0 < self.all_shell_damage_factor <= 1):
             raise ValueError(f'Consumable {self.tag}: invalid damage taken factor')
-        if not all(_real(f) and f > 0 for f in (self.yaw_rate_factor, self.pitch_rate_factor)):
-            raise ValueError(f'Consumable {self.tag}: invalid aiming rate factors')
+        if not all(_real(f) and f > 0 for f in (self.aiming_time_factor, self.dispersion_factor)):
+            raise ValueError(f'Consumable {self.tag}: invalid aiming factors')
         states = self.armor_activate_state,self.armor_deactivate_state
         if (states[0] is None) != (states[1] is None):
             raise ValueError(f'Consumable {self.tag}: incomplete armor state pair')
@@ -151,8 +145,8 @@ class ConsumableSpec:
                                                      or self.reload_speed_factor != 1 or self.interval_factor != 1
                                                      or self.damage_factors is not None or self.shot_effect is not None
                                                      or self.damage_taken_factor != 1 or self.all_shell_damage_factor != 1
-                                                     or self.yaw_rate_factor != 1
-                                                     or self.pitch_rate_factor != 1):
+                                                     or self.aiming_time_factor != 1
+                                                     or self.dispersion_factor != 1):
             # Instant use: the HUD goes straight to COOLDOWN, never ACTIVE.
             raise ValueError(f'Consumable {self.tag}: instant action has no timed effect')
         if self.action == EXTINGUISH and not self.automatic:
@@ -176,8 +170,8 @@ class ConsumableView:
     reverse_bias_kmh: float = 0.0
     damage_taken_factor: float = 1.0  # ACTIVE only; the victim's own shield.
     all_shell_damage_factor: float = 1.0  # ACTIVE only; ArmorMover's all-shell reduction.
-    yaw_rate_factor: float = 1.0  # ACTIVE only; turret and gun traverse.
-    pitch_rate_factor: float = 1.0
+    aiming_time_factor: float = 1.0
+    dispersion_factor: float = 1.0
 
 
 def _number(params, path, tag):
@@ -237,13 +231,13 @@ def resolve_consumable(game, tag) -> ConsumableSpec:
             raise ValueError(f'Consumable {tag}: unexpected id {item.ident}')
         if tuple(sorted(key for key, _ in params)) != tuple(sorted(_AIMING_PARAMETERS)):
             raise ValueError(f'Consumable {tag}: unsupported variant')
-        # Every pinned leaf must match, the ignored accuracy factors included.
         for key, expected in _AIMING_PARAMETERS.items():
             if _number(params, key, tag) != expected:
                 raise ValueError(f'Consumable {tag}: unsupported variant ({key})')
         return ConsumableSpec(tag, item.ident, (item.ident << 8) | 0xfb, _AIMING_PARAMETERS['duration'],
-                              _AIMING_PARAMETERS['cooldown'], yaw_rate_factor=AIMING_RATE_FACTOR,
-                              pitch_rate_factor=AIMING_RATE_FACTOR)
+                              _AIMING_PARAMETERS['cooldown'],
+                              aiming_time_factor=_AIMING_PARAMETERS['aimingTimeFactor'],
+                              dispersion_factor=_AIMING_PARAMETERS['shotDispersionAngleFactor'])
     if tag in _SHIELDS:
         if item.ident != _SHIELDS[tag][1]:
             raise ValueError(f'Consumable {tag}: unexpected id {item.ident}')
@@ -404,7 +398,7 @@ class ConsumableState:
                                   spec.engine_factor, spec.reload_speed_factor, spec.interval_factor,
                                   spec.damage_factors, spec.shot_effect, spec.rotation_factor,
                                   spec.forward_bias_kmh, spec.reverse_bias_kmh, spec.damage_taken_factor,
-                                  spec.all_shell_damage_factor, spec.yaw_rate_factor, spec.pitch_rate_factor)
+                                  spec.all_shell_damage_factor, spec.aiming_time_factor, spec.dispersion_factor)
         if (self.uses or self.initial_cooldown) and now < self.ready_at:
             total = math.ceil(self._cooldown_duration() / cooldown_multiplier)
             return ConsumableView(COOLDOWN, min(total, math.ceil(self.ready_at - now)), total, 1.0, 1.0)

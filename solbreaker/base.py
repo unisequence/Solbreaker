@@ -395,18 +395,6 @@ class BaseEndpoint(asyncio.DatagramProtocol):
             raise ValueError('Default map is not available to the training picker')
         self.map_specs = {self.map_spec.map_id: self.map_spec}
         self.map_spec_errors = {}
-        if self.arena_owners_enabled:
-            # Parent mirrors need small immutable descriptors. Parse them before
-            # accepting clients so a cold map cannot pause another arena's IPC.
-            started = time.monotonic()
-            for map_id in self.map_catalog:
-                try:
-                    self.resolve_map_spec(map_id)
-                except (OSError, ValueError) as exc:
-                    self.map_spec_errors[map_id] = (type(exc), exc.args)
-            server.event('map_metadata_ready', maps=len(self.map_specs),
-                         unavailable=len(self.map_spec_errors),
-                         duration_ms=(time.monotonic()-started)*1000)
         self.terrain = MapTerrain(game, self.map_spec)
         from .collision import CollisionScene
         selection = server.manifest.get('training_vehicle','usa/M2_lt').split('/')
@@ -517,9 +505,32 @@ class BaseEndpoint(asyncio.DatagramProtocol):
                                  for arena in self.arenas.arenas.values()),
                 event=self.server.event)
             self.map_prewarm.start()
+        if self.arena_owners_enabled:
+            self.map_metadata_task = asyncio.create_task(self._preload_map_metadata())
+
+    async def _preload_map_metadata(self):
+        started = time.monotonic()
+        for map_id, key in self.map_catalog.items():
+            if map_id in self.map_specs:
+                continue
+            try:
+                spec = self.dev_map_specs.get(map_id) or await asyncio.to_thread(load_map_spec, self.game, key)
+            except (OSError, ValueError) as exc:
+                if map_id not in self.map_specs:
+                    self.map_spec_errors[map_id] = (type(exc), exc.args)
+            else:
+                self.map_specs.setdefault(map_id, spec)
+                if (prewarm := getattr(self, 'map_prewarm', None)) is not None:
+                    prewarm.jobs[map_id].spec = spec
+        self.server.event('map_metadata_ready', maps=len(self.map_specs),
+                          unavailable=len(self.map_spec_errors),
+                          duration_ms=(time.monotonic()-started)*1000)
 
     def connection_lost(self, exc):
         self.matchmaking_enabled = False
+        metadata = getattr(self, 'map_metadata_task', None)
+        if metadata is not None:
+            metadata.cancel()
         for client in self.clients.values():
             if client.queue_handle is not None:
                 client.queue_handle.cancel()
@@ -1845,6 +1856,36 @@ class BaseEndpoint(asyncio.DatagramProtocol):
             self.server.event('vehicle_loadout_rejected', account_id=client.account_id, reason=str(exc))
             return command_response(request_id, -1, message=str(exc))
 
+    def vehicle_camouflage(self, client, kind, body, request_id):
+        """Native cmd112 changes an unlocked paint in the hangar."""
+        try:
+            if client.phase != 'account' or not client.account_created or client.arena_id:
+                raise ValueError('Wait for your hangar before changing camouflage')
+            if kind != 141 or len(body) != 24:
+                raise ValueError('Unsupported camouflage request')
+            revision, inventory_id, slot, compact_id = struct.unpack_from('<q3i', body, 4)
+            if revision != self.progression_catalog['rev']:
+                raise ValueError('Camouflage catalog has changed')
+            if slot not in (0, 1, 2):
+                raise ValueError('Unsupported camouflage slot')
+            self.require_vehicle_available(client.account_id, inventory_id)
+            state = self.progression.prepare(client.account_id)
+            vehicle = next((v for v in state['vehicles'] if v['id'] == inventory_id), None)
+            if vehicle is None:
+                raise ValueError('Vehicle is not in your garage')
+            from .camouflage import compatible_paints
+            paints = compatible_paints(Path(self.server.manifest['game']), vehicle['type_cd'])
+            if compact_id and compact_id not in paints.values():
+                raise ValueError('This paint is incompatible with the vehicle')
+            # Solbreaker stores one paint for all map seasons per vehicle.
+            self.progression.garage.set_camouflage(client.account_id, inventory_id, compact_id)
+            self.server.event('vehicle_camouflage_changed', account_id=client.account_id,
+                              inventory_id=inventory_id, camouflage=compact_id)
+            return self.progression_update(client) + command_response(request_id, 0)
+        except (KeyError, ValueError) as exc:
+            self.server.event('vehicle_camouflage_rejected', account_id=client.account_id, reason=str(exc))
+            return command_response(request_id, -1, message=str(exc))
+
     def vehicle_purchase(self, client, kind, body, request_id):
         """Observed stock BuyVehicle: shop revision, type CD, flags 0x11, empty tag."""
         try:
@@ -2385,10 +2426,16 @@ class BaseEndpoint(asyncio.DatagramProtocol):
                             # observers, including saved hangar selection.
                             # prevRev=0 still means delta in client 11.21.
                             full_sync = client.account_revision is None and not client.training_hangar_sync
-                            response = account_sync_response(request_id,
-                                account_snapshot(None if full_sync else previous,
-                                    self.server.manifest["game"], progress, inventory, garage=garage,
-                                    training_return=self.choosing_training_tank(client.account_id)))
+                            snapshot = account_snapshot(None if full_sync else previous,
+                                self.server.manifest["game"], progress, inventory, garage=garage,
+                                training_return=self.choosing_training_tank(client.account_id))
+                            if garage is not None:
+                                from .camouflage import unlocked_paints
+                                snapshot['unlocks'] = {
+                                    'fullUnlocks': unlocked_paints(Path(self.server.manifest['game'])),
+                                    'vehUnlocks': {},
+                                }
+                            response = account_sync_response(request_id, snapshot)
                             client.account_revision = progress['revision']
                             client.training_hangar_sync = False
                             client.report_scan_at = time.monotonic()+1
@@ -2398,6 +2445,8 @@ class BaseEndpoint(asyncio.DatagramProtocol):
                             response = self.vehicle_ammo_setting(client,kind,body,request_id)
                         elif command_id in (110,111,130,133) and self.progression is not None:
                             response = self.vehicle_loadout(client,kind,body,request_id,command_id)
+                        elif command_id == 112 and self.progression is not None:
+                            response = self.vehicle_camouflage(client, kind, body, request_id)
                         elif command_id == 201 and self.progression is not None:
                             response = self.vehicle_research(client,kind,body,request_id)
                         elif command_id == 301 and self.progression is not None:

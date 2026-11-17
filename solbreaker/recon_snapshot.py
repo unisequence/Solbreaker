@@ -55,14 +55,15 @@ def build_recon_snapshot(state, roster, observer_id, *, battle_id, sequence, now
     return ReconSnapshot(battle_id, sequence, lamp, markers)
 
 
-def build_mad_games_snapshot(arena, observer_id, *, battle_id, sequence):
-    """Present the mode's team visibility through the existing marker transport."""
+def build_team_spotting_snapshot(arena, observer_id, *, battle_id, sequence):
+    """Send the enemy markers visible to this observer's team."""
     from .mad_games import concealed
 
     observer = arena.vehicles[observer_id]
+    phased = getattr(getattr(arena, 'time_stop', None), 'entity', None)
     targets = tuple(sorted(
         vehicle.entity_id for vehicle in arena.vehicles.values()
-        if vehicle.alive and vehicle.team != observer.team
+        if vehicle.alive and vehicle.entity_id != phased and vehicle.team != observer.team
         and arena._player_attached(vehicle) and not concealed(vehicle, observer.team)
     ))
     lamp = observer.alive and observer.mad_observation_warning

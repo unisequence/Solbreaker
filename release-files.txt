@@ -312,6 +312,8 @@ solbreaker/assets/launcher-cover-source.json
 solbreaker/assets/launcher-cover.png
 solbreaker/assets/solbreaker-reticle.packed.webp
 solbreaker/assets/solbreaker-reticle@2x.packed.webp
+solbreaker/assets/solbreaker-spread.packed.webp
+solbreaker/assets/solbreaker-spread@2x.packed.webp
 solbreaker/assets/solbreaker.ico
 solbreaker/assets/solbreaker.png
 solbreaker/assets/time-stop-clock.packed.webp

@@ -187,6 +187,9 @@ class BattleTimeStop:
             arena.big_boss.shields.pop(owner.entity_id, None)
             arena.big_boss.poison.pop(owner.entity_id, None)
         arena._lose_target(owner.entity_id)
+        if arena.team_spotting:
+            self.markers = tuple(sorted(tank.identity.ident for tank in snapshot.tanks
+                if tank.alive and tank.team != owner.team and tank.visible))
         if arena.recon is not None:
             self.markers = tuple(sorted(tank.identity.ident for tank in snapshot.tanks
                 if tank.alive and tank.team != owner.team and arena.recon.visible(

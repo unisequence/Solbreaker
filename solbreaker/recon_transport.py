@@ -62,7 +62,7 @@ class ReconTransport:
             except BindingUnavailable:
                 pass
             else:
-                if not getattr(bound.arena, 'mad_games_mode', False):
+                if not getattr(bound.arena, 'team_spotting', False):
                     bound.arena.recon_client_clear(client.account_id)
             del self._deliveries[id(client)]
         self.bindings.revoke_session(client)
@@ -83,7 +83,7 @@ class ReconTransport:
             self.bindings.accept_incoming(delivery.token, sequence)
         except BindingUnavailable:
             return True
-        if getattr(bound.arena, 'mad_games_mode', False):
+        if getattr(bound.arena, 'team_spotting', False):
             return True
         if delivery.last_aim is not None and now - delivery.last_aim >= .35:
             bound.arena.recon_aim(client.account_id, None)
@@ -118,7 +118,7 @@ class ReconTransport:
         try:
             # Negotiation takes ownership immediately; approximate server
             # point targeting must not create marks before client reports.
-            if not getattr(bound.arena, 'mad_games_mode', False):
+            if not getattr(bound.arena, 'team_spotting', False):
                 bound.arena.recon_client_aim(client.account_id, None)
             self.endpoint.send(addr, client, ack_message(epoch, bound.battle_id))
         except Exception:

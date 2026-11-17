@@ -13,14 +13,14 @@ import random
 import uuid
 
 from . import big_boss, mad_games
-from .aiming import GunAim, disperse_shot
+from .aiming import GunAim, disperse_shot, dispersion_tangent
 from .ammunition import (advance_pump, apply_burst_shell_switch, apply_queued_shell,
                          finish_magazine_reload, magazine_reload_allowed, spend_round,
                          start_pump_refill, switch_shell)
 from .ballistics import BodyState, Projectile, TrackContact, advance, body_states, missile_guidance_target
 from .bot_roster import vehicle_class
 from .collision import CollisionWorld, GroundMotion, Motion, Pose
-from .consumables import SHIELDED_SHELL_KINDS
+from .consumables import READY, SHIELDED_SHELL_KINDS
 from .entities import BattleEvent
 from .map_catalog import map_team_capacity
 from .mobility import (advance_speed, braking_acceleration, powered_acceleration,
@@ -825,11 +825,20 @@ class TimelineSimulation:
 
     def aim_marker(self):
         origin, direction = self._shot_ray()
-        _, point, _ = self.world.shot_path(origin, direction, self.aim_range,
-                                          ignore_entity=self.entity,
-                                          ignore_entities=self.hidden_targets,
-                                          movable_armor_states=self.frozen_armor)
-        return point, direction
+        shell = self.shells.get(self.shell_id)
+        speed = shell.speed if shell is not None else 0.
+        if self.snapshot.role == big_boss.BOSS:
+            charge = self.consumables.get(big_boss.MEGASHOT.ident)
+            if charge is not None and charge.state_at(self.time).state == READY:
+                speed = big_boss.MEGASHOT_SPEED
+        return origin, tuple(axis * speed for axis in direction), self.shot_dispersion()
+
+    def shot_dispersion(self):
+        loadout = self.snapshot.gun_loadout
+        shot_age = None if self.last_shot_at is None else self.time - self.last_shot_at
+        return dispersion_tangent(loadout.aiming, shot_age=shot_age,
+                                  factor=loadout.dispersion_factor, aim_factor=loadout.aiming_time_factor,
+                                  movement_factor=self.gun.movement_dispersion, gun_damaged=loadout.gun_damaged)
 
     def _drive(self, flags):
         world, entity = self.world, self.entity
@@ -926,7 +935,7 @@ class TimelineSimulation:
             return False
         if wall_time-self.snapshot.captured_at+1e-9 < self.time+self.STEP:
             return True
-        previous, previous_turret = self.pose, self.gun.yaw
+        previous, previous_turret, previous_pitch = self.pose, self.gun.yaw, self.gun.pitch
         self._drive(flags)
         pose = self.pose
         if self.aim_lock is not None:
@@ -934,7 +943,7 @@ class TimelineSimulation:
         self.gun.tick(self.STEP, pose.position, pose.yaw, pose.pitch, pose.roll)
         loadout = self.snapshot.gun_loadout
         self.gun.update_dispersion(loadout.aiming, previous, pose, previous_turret, self.STEP,
-                                   loadout.aiming_time_factor)
+                                   loadout.aiming_time_factor, previous_pitch=previous_pitch)
         self.world.set_turret(self.gun.yaw, self.entity, self.gun.pitch)
         self.steps += 1
         if self.world.destruction_events:
@@ -1164,11 +1173,8 @@ class TimelineSimulation:
 
     def _launch_round(self, action, shell, effect, shooting_count):
         origin, direction = self._shot_ray()
-        loadout = self.snapshot.gun_loadout
-        shot_age = None if self.last_shot_at is None else self.time - self.last_shot_at
-        direction = disperse_shot(direction, loadout.aiming, self.dispersion_rng, shot_age=shot_age,
-                                  factor=loadout.dispersion_factor, aim_factor=loadout.aiming_time_factor,
-                                  movement_factor=self.gun.movement_dispersion, gun_damaged=loadout.gun_damaged)
+        direction = disperse_shot(direction, self.shot_dispersion(), self.dispersion_rng, self.gun.aim_progress)
+        self.gun.aim_progress = 0.
         self.last_shot_at = self.time
         decorated = self._decorate_shell(shell)
         if decorated.effect_index != shell.effect_index:
@@ -1434,6 +1440,7 @@ def merge_frame(arena, snapshot, frame, *, rules=Rules(), defer_hit=None):
     owner.gun.set_angles(*frame.aim)
     owner.gun.yaw, owner.gun.pitch = frame.aim
     owner.gun.movement_dispersion = frame.movement_dispersion
+    owner.gun.aim_progress = frame.aim_progress
     world.set_turret(owner.gun.yaw, entity, owner.gun.pitch)
     motion = return_motion if pose is frame.pose else None
     if pose is origin and not snapshot.drive.motion.grounded:

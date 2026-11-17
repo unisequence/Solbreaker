@@ -106,6 +106,8 @@ class Vehicle:
     reload_speed_factor: float = 1.0
     aiming_time_factor: float = 1.0
     shot_dispersion_factor: float = 1.
+    consumable_aiming_time_factor: float = 1.
+    consumable_dispersion_factor: float = 1.
     last_shot_at: float | None = None
     interval_factor: float = 1.0
     consumable_clock: float = 0.0
@@ -118,6 +120,14 @@ class Vehicle:
     def battle_reward(self, won):
         return calculate_rewards(won=won, damage=self.damage,
             tier=getattr(self.definition, 'tier', 1), kills=self.kills, survived=self.alive)
+
+    @property
+    def effective_aiming_time_factor(self):
+        return self.aiming_time_factor * self.consumable_aiming_time_factor
+
+    @property
+    def effective_dispersion_factor(self):
+        return self.shot_dispersion_factor * self.consumable_dispersion_factor
 
     @property
     def shell_id(self):
@@ -149,7 +159,7 @@ class MotionSample:
     pose: Pose
     gun_packed: int
     gun_yaw: float
-    marker: tuple | None = None  # (target point, shot direction), no wire bytes.
+    marker: tuple | None = None  # (muzzle origin, unspread shell velocity, dispersion tangent).
     engine_mode: tuple[int, int] = (1, 0)
 
 

@@ -7,13 +7,38 @@ import numpy as np
 import pybullet as bullet
 
 from solbreaker.arena import Arena
+from solbreaker.arena_owner_game import GameArenaHandler
 from solbreaker.collision import CollisionWorld, Pose
 from solbreaker.mesh_files import MeshFiles
+from solbreaker.motion import vehicle_snapshot
 from solbreaker.static_visibility import VisibilityWorld
 from solbreaker.vehicle_data import SpottingProfile
 
 
 class TeamSpottingTests(unittest.TestCase):
+    def test_owner_motion_keeps_unspotted_teammates_visible(self):
+        arena = Arena([dict(id=1, nickname='A', team=1), dict(id=2, nickname='B', team=2),
+                       dict(id=3, nickname='C', team=1)],
+                      b'', SimpleNamespace(height=lambda x, z: 0.), solo=False, now=1.)
+        self.addCleanup(arena.close)
+        snapshots = {}
+        for account in (1, 2, 3):
+            vehicle = arena.vehicle_for(account)
+            vehicle.mad_unspotted = True
+            pose = vehicle.pose
+            snapshots[account] = vehicle_snapshot(vehicle.entity_id, pose.position,
+                                                  pose.yaw, pose.pitch, pose.roll)
+        arena._record_motion_frame(1.)
+        owner = GameArenaHandler(arena, None)
+
+        friendly, hostile = owner._motions((1, 2), arena.motion_frame)
+        self.assertIn(snapshots[1], friendly.body)
+        self.assertIn(snapshots[3], friendly.body)
+        self.assertNotIn(snapshots[2], friendly.body)
+        self.assertIn(snapshots[2], hostile.body)
+        self.assertNotIn(snapshots[1], hostile.body)
+        self.assertNotIn(snapshots[3], hostile.body)
+
     def test_visibility_rays_follow_range_and_refresh_after_fire_or_stop(self):
         arena = Arena([dict(id=1, nickname='A'), dict(id=2, nickname='B')],
                       b'', SimpleNamespace(height=lambda x, z: 0.), solo=False, now=1.)
