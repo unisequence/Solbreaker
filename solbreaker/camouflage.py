@@ -1,4 +1,5 @@
 """All-season paint from the player's pinned game resources."""
+from functools import lru_cache
 import json
 from pathlib import Path
 import xml.etree.ElementTree as ET
@@ -44,15 +45,10 @@ def _matches(block, nation, name, tags, level):
     )
 
 
-def compatible_paints(game, type_cd):
-    nation, name = vehicle_key(game, type_cd)
-    data = game / 'Data'
-    vehicles = data / 'XML/item_defs/vehicles'
-    tank = ET.fromstring(read(vehicles / nation / 'list.xml.dvpl')).find(name)
-    tags = set(tank.findtext('tags', '').split())
-    tier = int(tank.findtext('level'))
-    root = ET.fromstring(read(vehicles / 'common/camouflages.xml.dvpl'))
-    paints = {}
+@lru_cache(maxsize=4)
+def _paint_catalog(game):
+    root = ET.fromstring(read(game / 'Data/XML/item_defs/vehicles/common/camouflages.xml.dvpl'))
+    paints = []
     for paint in root.find('camouflages'):
         if (paint.findtext('script', '').strip() != 'Camouflage'
                 or set(paint.findtext('kind', '').split()) != {'summer', 'winter', 'desert'}
@@ -61,15 +57,32 @@ def compatible_paints(game, type_cd):
         restrictions = paint.findall('vehicleFilter/*')
         if any(not _known_filter(block) for block in restrictions):
             continue
-        includes = [block for block in restrictions if block.tag == 'include']
+        # ItemCompactDescr: kind 8 (camouflage), common nation 15.
+        compact_id = (int(paint.findtext('id')) << 8) | 0xf8
+        includes = tuple(block for block in restrictions if block.tag == 'include')
+        excludes = tuple(block for block in restrictions if block.tag == 'exclude')
+        paints.append((paint.tag, compact_id, includes, excludes))
+    return tuple(sorted(paints, key=lambda paint: paint[0]))
+
+
+def unlocked_paints(game):
+    return [compact_id for _, compact_id, _, _ in _paint_catalog(game)]
+
+
+def compatible_paints(game, type_cd):
+    nation, name = vehicle_key(game, type_cd)
+    vehicles = game / 'Data/XML/item_defs/vehicles'
+    tank = ET.fromstring(read(vehicles / nation / 'list.xml.dvpl')).find(name)
+    tags = set(tank.findtext('tags', '').split())
+    tier = int(tank.findtext('level'))
+    paints = {}
+    for tag, compact_id, includes, excludes in _paint_catalog(game):
         if includes and not any(_matches(block, nation, name, tags, tier) for block in includes):
             continue
-        if any(_matches(block, nation, name, tags, tier)
-               for block in restrictions if block.tag == 'exclude'):
+        if any(_matches(block, nation, name, tags, tier) for block in excludes):
             continue
-        # ItemCompactDescr: kind 8 (camouflage), common nation 15.
-        paints[paint.tag] = (int(paint.findtext('id')) << 8) | 0xf8
-    return dict(sorted(paints.items()))
+        paints[tag] = compact_id
+    return paints
 
 
 def configure(state, account_id, inventory_id, *, paint=None, clear=False, vehicles=False):

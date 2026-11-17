@@ -63,6 +63,7 @@ class Frame:
     burst: BurstState | None = None
     shot_age: float | None = None
     movement_dispersion: float = 1.
+    aim_progress: float = 0.
 
 
 @dataclass(frozen=True)
@@ -125,7 +126,7 @@ def _frame(branch):
         merge_visuals=tuple(branch.merge_visuals) if return_motion is not None else (),
         burst=BurstState.capture(branch) if branch.ended else None,
         shot_age=None if branch.last_shot_at is None else branch.time - branch.last_shot_at,
-        movement_dispersion=branch.gun.movement_dispersion)
+        movement_dispersion=branch.gun.movement_dispersion, aim_progress=branch.gun.aim_progress)
 
 
 def _run_branch(requests, replies, geometry, rules, activation, world=None):

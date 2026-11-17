@@ -49,7 +49,7 @@ UI_RESOURCES = (BASE_HEADER, BASE_LOBBY, BASE_LOBBY_ACTIONS, STATS_ITEM, INVENTO
                 client_battle_settings.BATTLE_MENU, *client_recon.MARKER_OPACITY)
 STRINGS_EN = "Strings/en.yaml.dvpl"
 STRINGS_RU = "Strings/ru.yaml.dvpl"
-SANDBOX_BINDINGS_VERSION = 17
+SANDBOX_BINDINGS_VERSION = 19
 SANDBOX_BINDING_STRINGS = {
     STRINGS_EN: {'Title': 'Solbreaker Sandbox',
                  'Boost': 'Toggle boost', 'Flight': 'Toggle flight',
@@ -171,18 +171,16 @@ LOCAL_MODE_STRINGS = {
                  'Local/TargetTitle': 'Полигон',
                  'Local/TargetDescription': 'Свободная езда и стрельба по неподвижным мишеням.'},
 }
-# Local Accelerated Aiming rule (consumables.AIMING_RATE_FACTOR) replaces the
-# Reticle Calibration texts. No duration: timer devices may extend it and the
-# native HUD shows the live one.
+# The native HUD shows the duration, including modifiers from installed equipment.
 CONSUMABLE_STRINGS = {
     STRINGS_EN: {
         "consumables/fireControlSystem/Name": "Accelerated Aiming",
-        "consumables/fireControlSystem/Description": "+30% to turret traverse speed and gun elevation speed.",
+        "consumables/fireControlSystem/Description": "Reduces aiming time and shot dispersion by 30%.",
     },
     STRINGS_RU: {
         "consumables/fireControlSystem/Name": "Ускоренное наведение",
         "consumables/fireControlSystem/Description":
-            "+30% к скорости поворота башни и вертикального наведения орудия.",
+            "Уменьшает время сведения и разброс орудия на 30%.",
     },
 }
 
@@ -431,6 +429,12 @@ action SolbreakerSettingsSaved(int arg1)
         if crew.get("prototype") != "Item/Item":
             raise ValueError("Unsupported crew tab prototype")
         parent["children"].remove(crew)
+        # Prepared clients load their cosmetics from the pinned resources.
+        # The live game's DLC status can remain false on a local server.
+        root, = document['Prototypes']
+        local_data = root['components']['UIDataLocalBindingsComponent']['data']
+        camo_gate, = (row for row in local_data if row[1] == 'camoHasLock')
+        camo_gate[2] = 'panel.camo.isUniqueInvisExist or isNull(tank)'
     elif relative == SIDEBAR:
         for name in ("Clans", "Tournaments"):
             matches = [item for item in walk_dicts(document) if item.get("name") == name]
@@ -637,7 +641,7 @@ def install_ui_guards(lab):
 
 
 def install_sandbox_bindings(lab, manifest):
-    """Update sandbox controls and local labels in a prepared, idle client."""
+    """Update sandbox controls, local labels and inventory in a prepared client."""
     if manifest.get('sandbox_bindings_version') == SANDBOX_BINDINGS_VERSION:
         return manifest
     from .connection import atomic_write
@@ -647,9 +651,13 @@ def install_sandbox_bindings(lab, manifest):
         return manifest
     source = Path(manifest.get('source_game', manifest['game'])).resolve(strict=True)
     overrides = dict(manifest.get('ui_overrides', {}))
-    patches = {KEYBOARD_OPTIONS: patched_resource(data/KEYBOARD_OPTIONS, KEYBOARD_OPTIONS)}
+    patches = {
+        KEYBOARD_OPTIONS: patched_resource(data/KEYBOARD_OPTIONS, KEYBOARD_OPTIONS),
+        INVENTORY_PANEL: patched_resource(source/'Data'/INVENTORY_PANEL, INVENTORY_PANEL),
+    }
     for relative in SANDBOX_BINDING_STRINGS:
         strings = yaml.load(dvpl.read(data/relative), Loader=_StringsLoader)
+        strings.update(CONSUMABLE_STRINGS[relative])
         _fill_vehicle_names(strings, relative)
         _fill_uprising_provisions(strings, relative)
         strings.update(_sandbox_binding_strings(relative))

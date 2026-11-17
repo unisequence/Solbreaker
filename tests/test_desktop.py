@@ -232,6 +232,25 @@ class DesktopTests(unittest.TestCase):
                 self.window.remote.setChecked(True)
                 self.assertFalse(self.window.prepare_maps_button.isVisible())
 
+    def test_home_banner_clears_connection_row_with_launch_status_visible(self):
+        from solbreaker.desktop import LauncherBanner
+
+        self.window.status_timer.stop()
+        self.window.timer.stop()
+        for item in (self.window.prepare_maps_button, self.window.open_replay_button,
+                     self.window.replay_folder_button, self.window.progress, self.window.notice):
+            item.show()
+        self.window.notice.setText('После запуска сервера откроется игра')
+        home = self.window.stack.widget(0)
+        banner = home.findChild(LauncherBanner)
+        for width, height in ((920, 640), (1120, 700)):
+            with self.subTest(width=width, height=height):
+                self.window.resize(width, height)
+                self.app.processEvents()
+                self.assertLess(banner.geometry().bottom(), self.window.own.geometry().top())
+                self.assertTrue(home.rect().contains(self.window.play_button.parentWidget().geometry()))
+                self.assertEqual(banner.version.isVisible(), height == 700)
+
     def test_small_window_icon_has_a_contrasting_background(self):
         from solbreaker.desktop import application_icon
         image = application_icon().pixmap(16, 16).toImage()

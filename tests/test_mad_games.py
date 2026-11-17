@@ -12,7 +12,8 @@ from solbreaker import client_battle_settings, dvpl, mad_games, sandbox
 from solbreaker.arena import Arena
 from solbreaker.armor import ShotResult
 from solbreaker.ballistics import Impact
-from solbreaker.battle import (active_equipment_message, chameleon_pose, consumable_message, create_avatar,
+from solbreaker.battle import (SOUND_ENEMY_SIGHTED, SOUND_PLAYER_SIGHTED, active_equipment_message,
+                               chameleon_pose, consumable_message, create_avatar, crew_voice_message,
                                event_messages, health_changed, initial_messages, observed_status_message,
                                provision_effect_message, provision_messages, reconnect_message_parts,
                                revenge_targets_message, spawn_message_parts, vehicle_client_effects_message,
@@ -55,13 +56,18 @@ class MadGamesTests(TestCase):
                 self.assertEqual(arena.recon is None, mode == mad_games.MODE)
 
     def test_spotted_markers_follow_the_team_in_both_battle_paths(self):
+        for mode in ('encounter', mad_games.MODE, 'uprising'):
+            with self.subTest(mode=mode):
+                self.check_team_spotting_transport(mode)
+
+    def check_team_spotting_transport(self, mode):
         from solbreaker.arena_owner_game import GameArenaHandler
         from solbreaker.base import ClientSession
         from solbreaker.arena_owner import Command
         from solbreaker.recon_transport import AIM_PREFIX, HELLO_PREFIX, ReconTransport
         from solbreaker.recon_wire import decode as decode_snapshot
 
-        arena = self.arena(mad_games.MODE)
+        arena = self.arena(mode)
         observer, target = arena.vehicle_for(1), arena.vehicle_for(2)
         arena.started = 1.
         arena.players[1].loaded = True
@@ -89,6 +95,9 @@ class MadGamesTests(TestCase):
             self.assertEqual(local, decode_snapshot(handler.apply(command).recon))
             self.assertEqual(local.markers, (target.entity_id,) if is_spotted else ())
             self.assertEqual(local.lamp, lamp)
+            body = event_messages(arena, arena.players[1], arena.drain_events())
+            self.assertEqual(crew_voice_message(SOUND_ENEMY_SIGHTED) in body, now == 3.)
+            self.assertEqual(crew_voice_message(SOUND_PLAYER_SIGHTED) in body, now == 6.)
 
     def test_mad_games_selects_the_native_arcade_gameplay(self):
         arena = self.arena(mad_games.MODE)

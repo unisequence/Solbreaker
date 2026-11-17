@@ -332,10 +332,11 @@ def targeting_info(vehicle=None, yaw_rate=None, pitch_rate=None):
     if pitch_rate is None:
         pitch_rate = vehicle.gun.pitch_rate if vehicle else math.radians(45)
     regular = pb_blob(1, pb_double(1, .1)) + pb_blob(2, pb_double(1, .1))
-    factors = (pb_double(1, getattr(vehicle, 'shot_dispersion_factor', 1.))
+    factors = (pb_double(1, vehicle.effective_dispersion_factor if vehicle else 1.)
                + pb_double(2, .1) + pb_blob(3, pb_blob(1, regular)))
     aiming_time = config.aiming_time if config else 1.7
-    aiming_time *= getattr(vehicle, 'aiming_time_factor', 1.)
+    if vehicle:
+        aiming_time *= vehicle.effective_aiming_time_factor
     info = (pb_double(1, 0) + pb_double(2, 0) + pb_double(3, yaw_rate)
             + pb_double(4, pitch_rate)
             + pb_double(5, aiming_time) + pb_blob(6, factors))
@@ -415,12 +416,14 @@ def team_points_message(team, score):
     return arena_update(13, pb_blob(12, pb_int(1, team) + pb_int(2, score)))
 
 
+SOUND_ENEMY_SIGHTED = 2
+SOUND_PLAYER_SIGHTED = 3
 VOICE_ENEMY_KILLED = 0x22
 VOICE_TRACK_DESTROYED = 0x4f
 
 
 def crew_voice_message(cue):
-    # Avatar37 routes the event to the pinned client's existing sound queue.
+    # Avatar37 routes cues to the pinned client's existing battle sound queue.
     return b'\x13' + variable8(96, b'\x03TFS1VOIC' + struct.pack('<I', cue) + b'\0')
 
 
@@ -971,9 +974,13 @@ def module_repair_message(entity_id, extra, progress, duration):
 
 
 def marker_message(arena, vehicle):
-    _,point = arena.aim_hit(vehicle)
-    _,direction = arena.shot_ray(vehicle)
-    return avatar_method(24,struct.pack('<7f',*point,*direction,0.))
+    return gun_marker(*arena.aim_marker(vehicle, arena.simulation_time))
+
+
+def gun_marker(origin, velocity, dispersion):
+    # Avatar24 traces from the muzzle using the unspread shell velocity.
+    # The tangent times twice the traced distance gives the circle diameter.
+    return avatar_method(24, struct.pack('<7f', *origin, *velocity, dispersion))
 
 
 def world_motion_messages(arena, frame=None, *, team=None):
@@ -1008,8 +1015,7 @@ def motion_messages(arena, player, frame=None, *, world_messages=None):
         if sample is None:
             result += marker_message(arena,own)
         elif sample.marker is not None:
-            point,direction = sample.marker
-            result += avatar_method(24,struct.pack('<7f',*point,*direction,0.))
+            result += gun_marker(*sample.marker)
     return bytes(result)
 
 
@@ -1030,8 +1036,7 @@ def temporal_motion(arena, player, timeline):
     if local is not None:
         result += b'\x13\xa7'+struct.pack('<f', local.aim[0])
         if local.marker is not None:
-            point, direction = local.marker
-            result += avatar_method(24, struct.pack('<7f', *point, *direction, 0.))
+            result += gun_marker(*local.marker)
     return bytes(result)
 
 
@@ -1072,6 +1077,7 @@ def event_messages(arena, player, events):
     update_gravity_traps = False
     update_revenge_targets = False
     update_team_score = False
+    enemy_sighted = False
     for event in events:
         actor = arena.vehicles.get(event.actor)
         own = event.actor == player.vehicle_id
@@ -1390,6 +1396,8 @@ def event_messages(arena, player, events):
             result += uprising_wait_respawn_message(event.actor, event.target)
         elif event.kind == 'mad_observation_warning' and own:
             result += observed_status_message(event.actor, d['observed'])
+            if d['observed']:
+                result += crew_voice_message(SOUND_PLAYER_SIGHTED)
         elif event.kind == 'mad_cloak':
             if actor.team != player.team:
                 viewer = arena.vehicles[player.vehicle_id]
@@ -1397,6 +1405,7 @@ def event_messages(arena, player, events):
                 pose = chameleon_pose(d['pose']) if d['enabled'] else d['pose']
                 result += b'\x14' + struct.pack('<III6f', event.actor, arena.space_id, 0,
                                                 *pose.position, pose.roll, pose.pitch, pose.yaw)
+                enemy_sighted |= not d['enabled'] and actor.alive
                 if not d['enabled'] and _can_view_reload(arena, player, actor):
                     allied_reload.add(event.actor)
         elif event.kind == 'uprising_cloak_fx' and actor.team == player.team:
@@ -1483,8 +1492,14 @@ def event_messages(arena, player, events):
                     and event.target in arena.vehicles and actor is not None
                     and event.actor != event.target and not d.get('applied_damage')
                     and d['result'].hit is not None):
+                outcome = d['result'].outcome
+                blocked_damage = d.get('blocked_damage', 0)
+                # The incoming HUD shows armor-block amounts for kind 1.
+                if event.target == player.vehicle_id and (track_blocked := d.get('track_blocked_damage')):
+                    outcome = 'not_penetrated'
+                    blocked_damage = track_blocked
                 result += received_damage_message(event.target,event.actor,0,
-                    outcome=d['result'].outcome,blocked_damage=min(0xffff,d.get('blocked_damage',0)),
+                    outcome=outcome,blocked_damage=min(0xffff, blocked_damage),
                     hit_effect=d.get('hit_effect'), reflector_hit=reflector_hit)
         elif event.kind=='feedback' and own:
             result += shot_feedback(event.target,d['outcome'])
@@ -1524,6 +1539,8 @@ def event_messages(arena, player, events):
                 update_team_score = update_team_score or (
                     getattr(arena, 'unlimited_lives', False) and arena.supremacy is None
                     and getattr(arena, 'big_boss', None) is None)
+    if enemy_sighted:
+        result += crew_voice_message(SOUND_ENEMY_SIGHTED)
     if update_revenge_targets:
         result += revenge_targets_message(arena, arena.vehicles[player.vehicle_id])
     if update_team_score:

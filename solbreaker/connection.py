@@ -245,12 +245,24 @@ def export_connection(lab,output):
     return dict(path=str(output.resolve()),server_id=profile['server_id'])
 
 
-def connect_client(lab,profile_path):
-    lab,manifest=ensure_lab(lab)
+def read_connection_profile(profile_path):
     path=Path(profile_path)
     if path.stat().st_size>CONNECTION_PROFILE_MAX_BYTES:raise ValueError('Connection profile is too large')
-    profile=json.loads(path.read_text())
+    return json.loads(path.read_bytes())
+
+
+def connect_client(lab,profile_path):
+    lab,manifest=ensure_lab(lab)
+    return apply_client_profile(lab, manifest, read_connection_profile(profile_path))
+
+
+def apply_client_profile(lab, manifest, profile):
     network,raw,ca,name=validate_connection_profile(profile,manifest)
+    from .server_identity import server_name
+    if (manifest.get('client_only') and manifest.get('server_id') == profile['server_id']
+            and load_network(lab, manifest) == network and public_key(lab)[1] == profile['server_id']
+            and manifest.get('tls_ca_certificate') == ca and server_name(manifest) == name):
+        return dict(server_id=profile['server_id'], network=network.document(), restart_required=False)
     return configure(lab,network,key=raw,client_only=True,tls_ca_certificate=ca,server_name=name)
 
 

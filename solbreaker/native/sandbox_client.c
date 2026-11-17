@@ -81,6 +81,7 @@ static const NativeString binding_captions[][2] = {
 static const uint8_t visible_bindings[] = {0, 1, 2, 3, 5, 6, 7, 8, 9, 10, 11};
 
 typedef struct { float x, y, z; } Vector;
+typedef struct { Vector origin, velocity; } AimRay;
 typedef struct { float x, y; } Point;
 typedef struct { float x, y, width, height; } Rect;
 typedef struct { Vector position, target; } CameraPose;
@@ -128,6 +129,10 @@ typedef struct {
     ParticleIdentity *temporal_particles;
     uint32_t temporal_particle_count, temporal_particle_capacity;
     void *temporal_particle_system;
+    void *marker_rotator;
+    uint32_t marker_tick;
+    AimRay marker_from, marker_ray;
+    float marker_dispersion;
 } Sandbox;
 
 extern uint32_t sandbox_delta(void);
@@ -291,6 +296,31 @@ static void seed_bindings(uint32_t delta, void *layout, int restore) {
     }
 }
 
+__attribute__((section(".late_sandbox"), noinline))
+void THISCALL sandbox_migrate_controls(void *options) {
+    typedef void (THISCALL *Reset)(void *);
+    uint32_t delta = sandbox_delta();
+    KeyBinding saved[FIRST_SANDBOX_ACTION];
+    /* The stock post-login migration resets the local controls at version 0.
+       On an existing private profile the layout already belongs to the user. */
+    if (!read_setting(delta, keyboard_path, saved, sizeof(saved)))
+        ((Reset)(0x01232a20u + delta))(options);
+}
+
+__attribute__((section(".late_sandbox"), noinline))
+void THISCALL sandbox_controls_version(void *controls, uint32_t version) {
+    typedef void (THISCALL *SetVersion)(void *, uint32_t);
+    uint32_t delta = sandbox_delta();
+    /* Disconnect supplies zero. It is a session sentinel, not a new schema. */
+    if (!version && FIELD(controls, 0x18) == 1) return;
+    ((SetVersion)(0x0123dd70u + delta))(controls, version);
+    void *layout = version ? keyboard_layout(delta) : 0;
+    if (layout) {
+        restore_keyboard(delta, layout);
+        seed_bindings(delta, layout, 1);
+    }
+}
+
 void THISCALL sandbox_reset_bindings(void *layout) {
     typedef void (THISCALL *Reset)(void *);
     uint32_t delta = sandbox_delta();
@@ -451,6 +481,7 @@ static void reset(uint32_t delta, Sandbox *s) {
     s->swap_value = 0;
     s->role_sent = s->respawn_sent = 0;
     s->aim_frame_tick = 0;
+    s->marker_rotator = 0;
     s->blur_tick = s->blur_camera = s->blur_scene = 0;
     s->blur_offset[0] = s->blur_offset[1] = 0;
     s->temporal_enabled = s->temporal_key = s->temporal_end = s->temporal_hud = 0;
@@ -943,8 +974,8 @@ int sandbox_message(uint32_t delta, const uint32_t *first, const uint32_t *end,
         return 1;
     }
     if (first && end == first+3 && first[0] == 0x31534654u && first[1] == 0x43494f56u) {
-        /* VOICE_ENEMY_KILLED and the stock TrackHealth voice. */
-        if (first[2] == 0x22 || first[2] == 0x4f)
+        /* Stock enemy/player sighted, kill and track-damage cues. */
+        if (first[2] == 2 || first[2] == 3 || first[2] == 0x22 || first[2] == 0x4f)
             crew_voice(delta, state(delta, 0), first[2]);
         return 1;
     }
@@ -1195,20 +1226,106 @@ void sandbox_frame(uint32_t delta, uint32_t *rotator) {
     poll_controls(delta, s, now);
 }
 
+static inline Vector marker_mix(Vector a, Vector b, float weight) {
+    return (Vector){a.x + (b.x-a.x)*weight, a.y + (b.y-a.y)*weight,
+                    a.z + (b.z-a.z)*weight};
+}
+
+__attribute__((section(".late_sandbox"), noinline))
+static AimRay marker_ray_at(const Sandbox *s, uint32_t now) {
+    const uint32_t blend_ms = 32;
+    uint32_t elapsed = now - s->marker_tick;
+    if (elapsed >= blend_ms) return s->marker_ray;
+    float weight = (float)elapsed / (float)blend_ms;
+    return (AimRay){marker_mix(s->marker_from.origin, s->marker_ray.origin, weight),
+                    marker_mix(s->marker_from.velocity, s->marker_ray.velocity, weight)};
+}
+
 /* Some gun controllers bypass the local aim hook. The periodic server
  * gun-marker update still runs on the local AvatarGameLogic. */
-void THISCALL sandbox_gun_marker(void *avatar, const Vector *point,
-                                const Vector *direction, const float *extra) {
+__attribute__((section(".late_sandbox"), noinline))
+void THISCALL sandbox_gun_marker(void *avatar, const Vector *origin,
+                                const Vector *velocity, const float *extra) {
     typedef void (THISCALL *Update)(void *, const Vector *, const Vector *, const float *);
     uint32_t delta = sandbox_delta();
-    ((Update)(0x1846390u + delta))(avatar, point, direction, extra);
+    ((Update)(0x1846390u + delta))(avatar, origin, velocity, extra);
     Sandbox *s = battle_state(delta, (uint32_t)avatar);
     if (s) {
         uint32_t now = clock_ms(delta);
+        if (*extra > 0.f && __builtin_isfinite(*extra)) {
+            /* BigWorld packets are Y-up. The native trace is DAVA Z-up. */
+            AimRay incoming = {{origin->x, origin->z, origin->y},
+                               {velocity->x, velocity->z, velocity->y}};
+            void *rotator = (void *)FIELD(avatar, 0x1fc);
+            Vector previous = s->marker_ray.origin;
+            float dx = incoming.origin.x - previous.x;
+            float dy = incoming.origin.y - previous.y;
+            float dz = incoming.origin.z - previous.z;
+            s->marker_from = rotator && s->marker_rotator == rotator && now - s->marker_tick <= 100u
+                && dx*dx + dy*dy + dz*dz < 64.f ? marker_ray_at(s, now) : incoming;
+            s->marker_ray = incoming;
+            s->marker_tick = now;
+            s->marker_dispersion = *extra;
+            s->marker_rotator = rotator;
+        } else s->marker_rotator = 0;
         if (!s->aim_frame_tick || now - s->aim_frame_tick > 100)
             poll_controls(delta, s, now);
     }
 }
+
+__attribute__((section(".late_sandbox"), noinline))
+void *THISCALL sandbox_compute_marker(void *rotator, const AimRay *ray, float dispersion) {
+    typedef void *(THISCALL *Compute)(void *, const AimRay *, float);
+    uint32_t delta = sandbox_delta();
+    Sandbox *s = state(delta, 0);
+    if (s && s->thread == thread_id() && s->marker_rotator == rotator) {
+        uint32_t now = clock_ms(delta);
+        if (now - s->marker_tick <= 500u) {
+            AimRay rendered = marker_ray_at(s, now);
+            /* Show bloom immediately, even while the center is interpolated. */
+            return ((Compute)(0x1e111c0u + delta))(rotator, &rendered, s->marker_dispersion);
+        }
+    }
+    return ((Compute)(0x1e111c0u + delta))(rotator, ray, dispersion);
+}
+
+__attribute__((section(".late_sandbox"), used, noinline))
+static void spread_ring_layout(void *layer, float dx, float dy) {
+    float radius = .5f * root(dx*dx + dy*dy);
+    if (!__builtin_isfinite(radius)) return;
+
+    uint32_t delta = sandbox_delta();
+    typedef void (THISCALL *SetPoint)(void *, const Point *);
+    SetPoint set_scale = (SetPoint)(0xcff760u + delta);
+    SetPoint set_pivot = (SetPoint)(0xcff410u + delta);
+    void **const segments = (void **)FIELD(layer, 0x210);
+    const float stroke = 1.25f;
+    /* The 32 native controls already rotate around a common center.
+       Adjacent tangents overlap slightly to make a continuous outline. */
+    Point scale = {(.2f * radius + .25f) / 6.f, stroke / 6.f};
+    Point pivot = {3.f, radius / scale.y + 3.f};
+    for (uint32_t i = 0; i < 32; ++i) {
+        set_scale(segments[i], &scale);
+        set_pivot(segments[i], &pivot);
+    }
+}
+
+__asm__(
+    ".pushsection .late_sandbox,\"ax\"\n"
+    ".intel_syntax noprefix\n"
+    ".globl sandbox_spread_ring\n"
+    "sandbox_spread_ring:\n"
+    /* The projection just produced the screen-space offset of a full
+       world-space diameter in XMM2/XMM1. Keep the native reload styling. */
+    "sub esp, 8\n"
+    "movss [esp], xmm2\n"
+    "movss [esp+4], xmm1\n"
+    "push esi\n"
+    "call spread_ring_layout\n"
+    "add esp, 12\n"
+    "jmp 0x1bca15a\n"
+    ".att_syntax prefix\n"
+    ".popsection\n");
 
 void THISCALL sandbox_move(void *logic, const uint32_t *shooter, const uint32_t *shot,
         const Vector *position, const Vector *aux, const Vector *velocity,

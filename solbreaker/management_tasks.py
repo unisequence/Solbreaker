@@ -14,7 +14,8 @@ from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 import zipfile
 
-from .connection import CONNECTION_PROFILE_MAX_BYTES, atomic_write, connect_client, ensure_lab
+from .connection import (CONNECTION_PROFILE_MAX_BYTES, apply_client_profile, atomic_write, connect_client,
+                         connection_profile, ensure_lab, read_connection_profile, validate_connection_profile)
 from .client_lock import client_configuration_access
 from .platform_runtime import require_executable_idle
 from .storage import account_access
@@ -55,7 +56,7 @@ def _launch_proton(args, lab, manifest, environment):
                                 print(f'Could not open replay folder: {error}', file=sys.stderr)
 
 
-def launch_client(lab, *, auto_login=None, profile=None, url=None, lighting=None, replay=None):
+def launch_client(lab, *, auto_login=None, profile=None, url=None, lighting=None, replay=None, refresh_lan=False):
     if replay is not None:
         replay = Path(replay).expanduser().resolve()
         if not replay.is_file() or replay.suffix.lower() != '.wotbreplay':
@@ -73,7 +74,12 @@ def launch_client(lab, *, auto_login=None, profile=None, url=None, lighting=None
             manifest = client_atgm_aim.upgrade(lab, manifest, digest)
             digest = manifest['client_exe_sha256']
         manifest = client_sandbox.upgrade(lab, manifest, digest)
-        if profile is not None or (url and not connection_url_matches(lab, url)):
+        if profile is not None and refresh_lan and replay is None:
+            selected = read_connection_profile(profile)
+            active_profile = refresh_lan_profile(lab, manifest, selected)
+            apply_client_profile(lab, manifest, active_profile)
+            lab, manifest = ensure_lab(lab)
+        elif profile is not None or (url and not connection_url_matches(lab, url)):
             _apply_connection(lab, profile, url)
             lab, manifest = ensure_lab(lab)
         from .client_battle_settings import upgrade_form
@@ -172,6 +178,42 @@ def fetch_profile(url):
     if len(data) > CONNECTION_PROFILE_MAX_BYTES:
         raise ValueError('Профиль подключения слишком большой')
     return data
+
+
+def refresh_lan_profile(lab, manifest, selected):
+    from . import discovery
+
+    def endpoint(profile):
+        network, _, _, _ = validate_connection_profile(profile, manifest)
+        http = urlsplit(network.advertise_http)
+        if (network.version == 1 and http.scheme == 'http' and discovery.discoverable_ip(http.hostname)
+                and http.hostname == network.advertise_login.host == network.advertise_base.host):
+            return http.hostname, http.port
+        return None
+
+    selected_endpoint = endpoint(selected)
+    if selected_endpoint is None:
+        return selected
+    identity = selected['server_id']
+    candidates = {selected_endpoint: selected}
+    if manifest.get('server_id') == identity:
+        active = connection_profile(lab)
+        if (active_endpoint := endpoint(active)) is not None:
+            candidates[active_endpoint] = active
+    offline = None
+    for address, profile in reversed(candidates.items()):
+        server = discovery.fetch_server(*address)
+        if server is not None and server.server_id == identity:
+            return json.loads(server.profile)
+        if server is None and offline is None:
+            offline = profile
+    interfaces = [interface for _, interface, _ in discovery.local_interfaces()]
+    for server in discovery.discover(interfaces):
+        if server.server_id == identity:
+            return json.loads(server.profile)
+    if offline is not None:
+        return offline
+    raise ValueError('По сохранённому адресу отвечает другой сервер Solbreaker')
 
 
 def _apply_connection(lab, profile, url):

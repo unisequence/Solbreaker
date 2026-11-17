@@ -185,6 +185,8 @@ def command(action, settings, *, windows=None, interface=None, replay=None):
             args += ['--url', server_url]
         elif connection:
             args += ['--connection', required(connection, 'файл подключения')]
+            if not settings.local_connection and replay is None:
+                args.append('--refresh-lan')
         return args
     if action == 'connect':
         args = cli + ['import-connection', '--lab', client]

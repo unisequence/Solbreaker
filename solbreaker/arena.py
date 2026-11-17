@@ -17,13 +17,12 @@ from .ammunition import (advance_pump, apply_burst_shell_switch, apply_queued_sh
                          finish_magazine_reload, magazine_reload_allowed, spend_round,
                          start_pump_refill, switch_shell)
 from .collision import CollisionWorld, Pose
-from .marker_batch import try_markers as _try_marker_batch
 from .entities import BattleEvent, BattleResult, MotionFrame, MotionSample, Player, Vehicle
 from .motion import game_tick
-from .aiming import GunAim, disperse_shot, wrap
+from .aiming import GunAim, disperse_shot, dispersion_tangent, wrap
 from .roster import TEAMS, validate_teams, training_spawn, training_yaw
 from .orientation import matrix
-from .consumables import (ACTIVE, COOLDOWN, HEAL, RESTORE, SHIELDED_SHELL_KINDS,
+from .consumables import (ACTIVE, COOLDOWN, HEAL, READY, RESTORE, SHIELDED_SHELL_KINDS,
                           ConsumableSpec, ConsumableState)
 
 from .loadout_effects import ANTI_HE_PROVISION
@@ -2924,13 +2923,9 @@ class Arena:
                     from_reserve=from_reserve)
         self.next_shot += 1
         origin,direction = self.shot_ray(vehicle)
-        aiming = getattr(vehicle.definition, 'aiming', None)
-        shot_age = None if vehicle.last_shot_at is None else now - vehicle.last_shot_at
-        gun_state = self.guns.get(vehicle.entity_id)
-        direction = disperse_shot(direction, aiming, self.dispersion_rng, shot_age=shot_age,
-                                  factor=vehicle.shot_dispersion_factor, aim_factor=vehicle.aiming_time_factor,
-                                  movement_factor=vehicle.gun.movement_dispersion,
-                                  gun_damaged=gun_state is not None and gun_state.damaged)
+        direction = disperse_shot(direction, self.shot_dispersion(vehicle, now), self.dispersion_rng,
+                                  vehicle.gun.aim_progress)
+        vehicle.gun.aim_progress = 0.
         vehicle.last_shot_at = now
         velocity = tuple(v*shell.speed for v in direction)
         self.projectiles[self.next_shot] = Projectile(self.next_shot,vehicle.entity_id,
@@ -3732,14 +3727,13 @@ class Arena:
             vehicle.rotation_factor = math.prod(v.rotation_factor for v in views)
             vehicle.forward_speed_bias = (speed_bonus + sum(v.forward_bias_kmh for v in views))/3.6
             vehicle.reverse_speed_bias = sum(v.reverse_bias_kmh for v in views)/3.6
-        # Local Accelerated Aiming rule. _fixed_step runs this before _aim, so a
-        # traverse change applies from the next slew; an expiry inside a step
-        # is approximated at that step's end (at most one 60Hz step). The
-        # owner's TargetingInfo is refreshed once per change with snapshots.
-        views = [s.state_at(now) for s in vehicle.consumables if s]
-        targeting_changed = vehicle.gun.set_factors(math.prod(v.yaw_rate_factor for v in views)
-                                                    * self._crew_role_factor(vehicle, 'gunner'),
-                                                    math.prod(v.pitch_rate_factor for v in views))
+        targeting_changed = vehicle.gun.set_factors(self._crew_role_factor(vehicle, 'gunner'), 1.)
+        aim_factor = math.prod(v.aiming_time_factor for v in views)
+        dispersion_factor = math.prod(v.dispersion_factor for v in views)
+        targeting_changed |= (aim_factor, dispersion_factor) != (vehicle.consumable_aiming_time_factor,
+                                                                vehicle.consumable_dispersion_factor)
+        vehicle.consumable_aiming_time_factor = aim_factor
+        vehicle.consumable_dispersion_factor = dispersion_factor
         if self.uprising is not None:
             duplet = self.uprising.has(vehicle.entity_id, uprising.DUPLET)
             aim_factor = uprising.DUPLET_AIM_FACTOR if duplet else 1.
@@ -4228,6 +4222,12 @@ class Arena:
                    and result.hit is not None and not result.hit.external and shell is not None
                    and shell.kind != 'HIGH_EXPLOSIVE'
                    and result.outcome in ('ricochet','not_penetrated') else 0)
+        track_blocked = 0
+        if (direct and enemy and target.alive and not damage and shell is not None
+                and result.hit is not None and result.hit.external
+                and result.hit.part in _TRACK_EXTRAS
+                and result.outcome in ('external', 'not_penetrated')):
+            track_blocked = int(shell.damage + .5)
         hit_effect = None
         state = (event.target_state if target_id == event.target and event.target_state is not None
                  else hit_state)
@@ -4243,6 +4243,7 @@ class Arena:
         self.emit('impact' if direct else 'splash',event.shooter,target_id or 0,shot=event.shot,point=event.point,
                   result=result,applied_damage=damage,at=event.at,**({'raw_damage':raw} if mitigated else {}),
                   **({'blocked_damage':blocked} if blocked else {}),
+                  **({'track_blocked_damage':track_blocked} if track_blocked else {}),
                   **({'hit_effect':hit_effect} if hit_effect is not None else {}),
                   **({'reflector_hit':True} if reflected and hit_effect is not None else {}),
                   **({'guided':True} if direct and shell and shell.missile is not None else {}))
@@ -5417,6 +5418,28 @@ class Arena:
             self.dropped_time += self.accumulator-self.MAX_CATCHUP
             self.accumulator = self.MAX_CATCHUP
 
+    def shot_dispersion(self, vehicle, now):
+        shot_age = None if vehicle.last_shot_at is None else now - vehicle.last_shot_at
+        gun_state = self.guns.get(vehicle.entity_id)
+        return dispersion_tangent(getattr(vehicle.definition, 'aiming', None), shot_age=shot_age,
+                                  factor=vehicle.effective_dispersion_factor,
+                                  aim_factor=vehicle.effective_aiming_time_factor,
+                                  movement_factor=vehicle.gun.movement_dispersion,
+                                  gun_damaged=gun_state is not None and gun_state.damaged)
+
+    def aim_marker(self, vehicle, now):
+        origin, direction = self.shot_ray(vehicle)
+        dispersion = self.shot_dispersion(vehicle, now)
+        if not dispersion:
+            return origin, direction, 0.
+        shell = self.shell_for(vehicle)
+        speed = shell.speed if shell is not None else 0.
+        if self._is_boss(vehicle) and any(
+                s and s.spec is big_boss.MEGASHOT and s.state_at(now).state == READY
+                for s in vehicle.consumables):
+            speed = big_boss.MEGASHOT_SPEED
+        return origin, tuple(axis * speed for axis in direction), dispersion
+
     def _record_motion_frame(self, now):
         """Capture the first complete simulation state for each 30 Hz label."""
         tick = game_tick(now,self.epoch)
@@ -5424,22 +5447,12 @@ class Arena:
             return
         timeline = getattr(self, 'time_stop', None)
         phased = timeline.entity if timeline is not None else None
-        markers = None
-        if os.environ.get('SOLBREAKER_MARKER_BATCH') == '1':
-            ready = [v for v in self.vehicles.values() if v.alive and v.entity_id != phased
-                     and (p := self.players.get(v.account_id)) is not None and p.attached]
-            markers = _try_marker_batch(self, ready, _MARKER_BATCH_ARENA_METHODS)
         samples = {}
         for vehicle in self.vehicles.values():
             marker = None
             player = self.players.get(vehicle.account_id)
             if vehicle.alive and vehicle.entity_id != phased and player is not None and player.attached:
-                if markers is not None:
-                    marker = markers[vehicle.entity_id]
-                else:
-                    _,point = self.aim_hit(vehicle)
-                    _,direction = self.shot_ray(vehicle)
-                    marker = (point,direction)
+                marker = self.aim_marker(vehicle, now)
             samples[vehicle.entity_id] = MotionSample(vehicle.pose,vehicle.gun.packed(),
                 vehicle.gun.yaw,marker,vehicle.engine_mode if vehicle.alive else (0,0))
         self.motion_frame = MotionFrame(tick,now,self.step_count,samples)
@@ -5654,7 +5667,8 @@ class Arena:
                 if vehicle.alive and entity != phased:
                     vehicle.gun.update_dispersion(getattr(vehicle.definition, 'aiming', None),
                                                   previous, current, before[entity].turret, dt,
-                                                  vehicle.aiming_time_factor)
+                                                  vehicle.effective_aiming_time_factor,
+                                                  previous_pitch=before[entity].pitch)
                 if self.team_spotting and vehicle.alive and entity != phased:
                     vehicle.spotting_moving = (
                         distance >= self.RECON_CAMOUFLAGE_STILL_SPEED * dt or

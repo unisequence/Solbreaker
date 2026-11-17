@@ -13,7 +13,8 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 
 from solbreaker import discovery, dvpl
 from solbreaker.build_info import BUILD_SHA256, VERSION
-from solbreaker.connection import configure_lan, key_id
+from solbreaker.connection import configure_lan, connect_client, key_id
+from solbreaker.management_tasks import refresh_lan_profile
 from solbreaker.network import load_network, parse_config
 
 
@@ -30,6 +31,24 @@ class DiscoveryTests(unittest.TestCase):
     def setUpClass(cls):
         cls.key = rsa.generate_private_key(65537, 2048).public_key().public_bytes(
             serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
+
+    def test_launch_finds_same_server_after_its_address_changes(self):
+        selected = dict(version=1, game_version=VERSION, exe_sha256=BUILD_SHA256,
+                        server_id=key_id(self.key), login_public_key=self.key.decode('ascii'),
+                        advertise=lan_network().document()['advertise'])
+        moved = dict(selected, advertise={key: value.replace('192.168.9.10', '192.168.9.12')
+                                         for key, value in selected['advertise'].items()})
+        other = discovery.DiscoveredServer('Other', '192.168.9.10', 18117, 'other-key', b'{}')
+        same = discovery.DiscoveredServer('Same', '192.168.9.12', 18117, selected['server_id'],
+                                          json.dumps(moved).encode())
+        manifest = dict(version=VERSION, exe_sha256=BUILD_SHA256, http_port=18117, login_port=20026)
+        with (patch.object(discovery, 'fetch_server', return_value=other),
+              patch.object(discovery, 'local_interfaces', return_value=[]),
+              patch.object(discovery, 'discover', return_value=[other, same]) as discover):
+            self.assertEqual(refresh_lan_profile(Path('.'), manifest, selected), moved)
+            discover.return_value = [other]
+            with self.assertRaisesRegex(ValueError, 'другой сервер'):
+                refresh_lan_profile(Path('.'), manifest, selected)
 
     def test_response_is_same_size_and_only_sent_to_allowed_peers(self):
         responder = discovery.Responder(lan_network())
@@ -92,3 +111,8 @@ class DiscoveryTests(unittest.TestCase):
             restored = json.loads((state/'connection.json').read_bytes())
             self.assertEqual(restored['server_id'], profile['server_id'])
             self.assertEqual(restored['advertise']['base'], '127.0.0.1:20027')
+
+            first = connect_client(state, state/'connection.json')
+            second = connect_client(state, state/'connection.json')
+            self.assertTrue(first['restart_required'])
+            self.assertFalse(second['restart_required'])
