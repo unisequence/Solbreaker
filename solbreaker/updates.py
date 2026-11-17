@@ -10,6 +10,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import time
 import tomllib
 from urllib.request import Request, urlopen
 from zipfile import ZipFile
@@ -123,9 +124,12 @@ def manifest(text):
     return files
 
 
-def download(release, destination):
+def download(release, destination, *, progress=None):
     digest = hashlib.sha256()
     size = 0
+    started = last = time.monotonic()
+    if progress:
+        progress('Скачиваем обновление…', 0, release.size)
     with request(release.url) as response, destination.open('xb') as stream:
         while chunk := response.read(1 << 20):
             size += len(chunk)
@@ -133,11 +137,14 @@ def download(release, destination):
                 raise ValueError('Update download exceeds the published size')
             digest.update(chunk)
             stream.write(chunk)
+            if progress and ((now := time.monotonic()) - last >= .2 or size == release.size):
+                progress('Скачиваем обновление…', size, release.size, size/max(now-started, .01))
+                last = now
     if size != release.size or digest.hexdigest() != release.digest:
         raise ValueError('Update download failed SHA-256 verification')
 
 
-def unpack(archive, payload, kind):
+def unpack(archive, payload, kind, *, progress=None):
     with ZipFile(archive) as bundle:
         members = {}
         folded = set()
@@ -183,6 +190,10 @@ def unpack(archive, payload, kind):
 
         payload.mkdir()
         (payload/CHECKSUMS).write_bytes(raw)
+        completed = len(raw)
+        last = time.monotonic()
+        if progress:
+            progress('Распаковываем и проверяем файлы…', completed, total)
         for name, expected in files.items():
             target = payload/name
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -191,14 +202,20 @@ def unpack(archive, payload, kind):
                 while chunk := source.read(1 << 20):
                     digest.update(chunk)
                     stream.write(chunk)
+                    completed += len(chunk)
+                    if progress and (now := time.monotonic()) - last >= .2:
+                        progress('Распаковываем и проверяем файлы…', completed, total)
+                        last = now
             if digest.hexdigest() != expected:
                 raise ValueError(f'Invalid SHA-256 for {name}')
-            if name.endswith('.sh'):
+            if name.endswith('.sh') or name == 'tools/depotdownloader/DepotDownloader':
                 target.chmod(0o755)
+        if progress:
+            progress('Распаковываем и проверяем файлы…', total, total)
         return files
 
 
-def prepare(root, current, kind):
+def prepare(root, current, kind, *, progress=None):
     release = check_release(current, kind)
     if release is None:
         return None
@@ -207,8 +224,8 @@ def prepare(root, current, kind):
     try:
         archive = stage/'download.zip'
         payload = stage/'payload'
-        download(release, archive)
-        files = unpack(archive, payload, kind)
+        download(release, archive, progress=progress)
+        files = unpack(archive, payload, kind, progress=progress)
         archive.unlink()
         with (payload/'pyproject.toml').open('rb') as stream:
             version = tomllib.load(stream)['project']['version']
@@ -216,7 +233,7 @@ def prepare(root, current, kind):
         if Version(version) != Version(release.version):
             raise ValueError('Package version differs from the GitHub release tag')
         if kind == 'source':
-            build_native(root, payload, files)
+            build_native(root, payload, files, progress=progress)
         shutil.copyfile(__file__, stage/'apply.py')
     except BaseException:
         shutil.rmtree(stage)
@@ -232,14 +249,16 @@ def linux_artifacts(root):
     return {path.relative_to(root).as_posix() for path in paths}
 
 
-def build_native(root, payload, after):
+def build_native(root, payload, after, *, progress=None):
     artifacts = linux_artifacts(root)
     if not artifacts:
         return
 
     def build_input(name):
-        return name.startswith('solbreaker/native/') or name in (
-            'tools/build_native.py', 'tools/build_contact_queries.py')
+        return (name.startswith(('solbreaker/native/sim_core/', 'solbreaker/native/impact_core/',
+                                 'solbreaker/native/armor_query/', 'solbreaker/native/rapier_dynamic/',
+                                 'solbreaker/native/physics_core/')) or name in (
+                    'solbreaker/native/contact_queries.c', 'tools/build_native.py', 'tools/build_contact_queries.py'))
 
     inputs = {name: digest for name, digest in after.items() if build_input(name)}
     if (root/'.git').exists():
@@ -258,6 +277,8 @@ def build_native(root, payload, after):
         if {name: digest for name, digest in before.items() if build_input(name)} == inputs:
             return
     environment = dict(os.environ, CARGO_TARGET_DIR=str(payload.parent/'cargo'))
+    if progress:
+        progress('Собираем серверные библиотеки…')
     log = root/'runtime/launcher-update.log'
     log.parent.mkdir(exist_ok=True)
     with log.open('wb') as output:

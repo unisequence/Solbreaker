@@ -71,12 +71,37 @@ class UpdateTests(unittest.TestCase):
         self.assertFalse(self.stage.exists())
         self.assertEqual((self.root/'pyproject.toml').read_bytes(), b'old')
 
+    def test_reports_download_and_verified_extraction_in_bytes(self):
+        files = {**self.next, 'pyproject.toml': b'[project]\nversion="0.1.1"\n'}
+        archive = self.root/'release.zip'
+        zip_package(archive, files)
+        data = archive.read_bytes()
+        candidate = updates.Release('0.1.1', 'https://example.test', len(data), hashlib.sha256(data).hexdigest())
+        events = []
+        with patch.object(updates, 'check_release', return_value=candidate), \
+             patch.object(updates, 'request', return_value=io.BytesIO(data)):
+            self.assertEqual(updates.prepare(self.root, '0.1.0', 'source', progress=lambda *args: events.append(args)),
+                             candidate)
+        self.assertEqual(events[0][1:], (0, len(data)))
+        self.assertEqual(events[1][1:3], (len(data), len(data)))
+        self.assertGreater(events[1][3], 0)
+        self.assertNotEqual(events[0][0], events[-1][0])
+        self.assertEqual(events[-1][1], events[-1][2])
+
     def test_rejects_paths_outside_the_package_before_extracting(self):
         archive = self.root/'update.zip'
         zip_package(archive, self.next, extra={'solbreaker/../data/private/accounts.db': b'bad'})
         with self.assertRaisesRegex(ValueError, 'Invalid update path'):
             updates.unpack(archive, self.stage, 'source')
         self.assertFalse(self.stage.exists())
+
+    @unittest.skipIf(os.name == 'nt', 'Linux executable permissions')
+    def test_unpack_makes_bundled_depot_downloader_executable(self):
+        archive = self.root/'update.zip'
+        binary = 'tools/depotdownloader/DepotDownloader'
+        zip_package(archive, {**self.next, binary: b'bundled executable'})
+        updates.unpack(archive, self.stage, 'source')
+        self.assertTrue((self.stage/binary).stat().st_mode & stat.S_IXUSR)
 
     def stage_update(self):
         archive = self.root/'update.zip'

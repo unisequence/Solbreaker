@@ -101,6 +101,11 @@ jobs:
           .venv/bin/python -c 'from tools.setup_state import verify_native; verify_native()'
           ./start-server.sh --version
           .venv/bin/python -m unittest tests.test_terminal
+      - name: Test DepotDownloader in the Linux launcher bundle
+        working-directory: ${{ runner.temp }}
+        run: |
+          unzip "solbreaker-release/Solbreaker-${GITHUB_REF_NAME#v}-source.zip" -d launcher
+          launcher/Solbreaker/tools/depotdownloader/DepotDownloader --version | grep -F 'DepotDownloader v3.4.0'
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: solbreaker-release
@@ -126,6 +131,10 @@ jobs:
           Expand-Archive -LiteralPath $archive.FullName -DestinationPath $env:RUNNER_TEMP
           Set-Location (Join-Path $env:RUNNER_TEMP Solbreaker)
           $env:QT_QPA_PLATFORM = 'offscreen'
+          $depotVersion = & ./tools/depotdownloader/DepotDownloader.exe --version
+          if ($LASTEXITCODE -ne 0 -or ($depotVersion -join "`n") -notmatch 'DepotDownloader v3\.4\.0') {
+            throw 'Bundled DepotDownloader did not report version 3.4.0'
+          }
           $version = & ./tools/start-server.cmd -Version
           if ($LASTEXITCODE -ne 0 -or $version -notmatch '^Solbreaker \d+\.\d+\.\d+') {
             throw "Server launcher did not report its version: $version"

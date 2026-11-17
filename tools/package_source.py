@@ -30,6 +30,8 @@ LINUX_LIBRARIES = {crate: f'tfs_{crate}.so' for crate in CRATES}
 LINUX_LIBRARIES.update(rapier_dynamic='libtfs_rapier_dynamic.so',
                        physics_core='libsolbreaker_physics_core.so')
 WHEEL = 'pybullet-3.2.7-cp312-cp312-win_amd64.whl'
+DEPOT_BUNDLE = 'tools/depotdownloader'
+DEPOT_NOTICES = {'LICENSE', 'DepotDownloader-source.tar.gz', 'DOTNET-LICENSE.txt', 'DOTNET-THIRD-PARTY-NOTICES.txt'}
 GAME_CATALOG = 'solbreaker/assets/build-11.21.0.1235_7376187-files.json.gz'
 FORBIDDEN_SUFFIXES = frozenset(('.pem', '.key', '.p12', '.pfx', '.sqlite', '.sqlite3',
     '.db', '.log', '.pcap', '.pcapng', '.dvpl', '.exe', '.dll', '.so', '.dylib',
@@ -131,7 +133,7 @@ def validate_contents(payloads):
 
 def package(output, *, windows_native=None, windows_wheel=None, windows_runtime=None,
             linux_native=None, server_only=False, windows_physics=None, windows_rapier=None,
-            windows_contact=None):
+            windows_contact=None, depot_bundle=None):
     if bool(windows_native) != bool(windows_wheel):
         raise ValueError('Provide both the Windows DLL directory and the Python 3.12 Bullet wheel')
     if windows_runtime and not windows_native:
@@ -196,6 +198,13 @@ def package(output, *, windows_native=None, windows_wheel=None, windows_runtime=
     if windows_runtime:
         from tools.windows_bundle import payloads as runtime_payloads
         payloads.update(runtime_payloads(windows_runtime, payloads, read_input, server_only=server_only))
+    if depot_bundle is not None:
+        binary = 'DepotDownloader.exe' if windows_native else 'DepotDownloader'
+        if server_only or set(depot_bundle) != DEPOT_NOTICES | {binary}:
+            raise ValueError('Invalid DepotDownloader bundle for this package')
+        depot_payloads = {f'{DEPOT_BUNDLE}/{name}': content for name, content in depot_bundle.items()}
+        validate_contents({GAME_CATALOG: payloads[GAME_CATALOG], **depot_payloads})
+        payloads.update(depot_payloads)
     hashes = [hashlib.sha256(content).hexdigest()+'  '+name for name, content in sorted(payloads.items())]
     payloads['SHA256SUMS'] = ('\n'.join(hashes)+'\n').encode()
     output = Path(output)
@@ -206,7 +215,7 @@ def package(output, *, windows_native=None, windows_wheel=None, windows_runtime=
             for name, content in sorted(payloads.items()):
                 entry = zipfile.ZipInfo('Solbreaker/'+name)
                 entry.create_system = 3
-                mode = 0o755 if name.endswith('.sh') else 0o644
+                mode = 0o755 if name.endswith('.sh') or name == f'{DEPOT_BUNDLE}/DepotDownloader' else 0o644
                 entry.external_attr = (stat.S_IFREG | mode) << 16
                 entry.compress_type = zipfile.ZIP_DEFLATED
                 archive.writestr(entry, content)
