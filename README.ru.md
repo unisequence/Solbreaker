@@ -1,7 +1,7 @@
 # Solbreaker
 
 <!-- release-download:start -->
-[Скачать 0.1.0-alpha.16](https://github.com/unisequence/Solbreaker/releases/tag/v0.1.0-alpha.16)
+[Скачать 0.1.0-rc.1](https://github.com/unisequence/Solbreaker/releases/tag/v0.1.0-rc.1)
 <!-- release-download:end -->
 
 [Все релизы](https://github.com/unisequence/Solbreaker/releases) ·

@@ -6,7 +6,7 @@ A self-hosted multiplayer tank server with a desktop launcher and terminal inter
 **Compatible with build 11.21.0.1235_7376187.**
 
 <!-- release-download:start -->
-[Download 0.1.0-alpha.16](https://github.com/unisequence/Solbreaker/releases/tag/v0.1.0-alpha.16)
+[Download 0.1.0-rc.1](https://github.com/unisequence/Solbreaker/releases/tag/v0.1.0-rc.1)
 <!-- release-download:end -->
 
 [All releases](https://github.com/unisequence/Solbreaker/releases) ·
