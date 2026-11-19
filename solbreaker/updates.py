@@ -320,9 +320,18 @@ def replace_release(root, stage, *, portable):
 
     destinations = {name: safe_destination(root, name) for name in names}
     for name, path in destinations.items():
-        if path.exists() and (path.is_dir() != (name == PORTABLE)
-                              or name not in before and name not in (CHECKSUMS, PORTABLE)):
+        if not path.exists():
+            continue
+        if path.is_dir() != (name == PORTABLE):
             raise ValueError(f'Update conflicts with a local file: {path}')
+        if name in before or name in (CHECKSUMS, PORTABLE):
+            continue
+        # An unmanaged file can become part of the release if it is already identical.
+        if name in after and path.is_file() and path.stat().st_size == incoming[name].stat().st_size:
+            with path.open('rb') as stream:
+                if hashlib.file_digest(stream, 'sha256').hexdigest() == after[name]:
+                    continue
+        raise ValueError(f'Update conflicts with a local file: {path}')
 
     transaction = stage/'transaction'
     transaction.touch(exist_ok=False)

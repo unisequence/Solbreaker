@@ -7,5 +7,7 @@ SAVED_RESULT = 127
 LOADED_RESULT = 128
 GET_TITLE = 'SolbreakerBotGet'
 GET_TITLE_V2 = 'SolbreakerBotV2!'
+GET_TITLE_V3 = 'SolbreakerBotV3!'
+SETUP_RESPONSE = 130
 ROOM_OPTIONS_PREFIX = '[room-options]'
 ROOM_FORM_PREFIX = '[room-form]'

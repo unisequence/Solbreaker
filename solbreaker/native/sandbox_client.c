@@ -25,16 +25,31 @@
 #define TIME_STOP (1u << 17)
 #define BRANCH_SHOT_BASE (1u << 30)
 #define GOD_MODE 32768u
-#define PRACTICE_ACTIONS (NEXT_TARGET | TOGGLE_TARGET_FIRE | CLEAR_TARGETS)
+#define REMOVE_TARGET (1u << 18)
+#define PICK_TARGET (1u << 19)
+#define TARGET_SELECTED (1u << 20)
+#define TARGET_UNAVAILABLE (1u << 21)
+#define TARGET_AI (1u << 22)
+#define TARGET_AI_CHANGED (1u << 23)
+#define TARGET_AI_MISSING (1u << 24)
+#define TOGGLE_MAP_BORDER (1u << 25)
+#define TANK_STATS (1u << 29)
+#define PRACTICE_MENU (1u << 30)
+#define PRACTICE_FEEDBACK (1u << 31)
+#define MAP_BORDER_OPEN (1u << 26)
+#define MAP_BORDER_CLOSED (1u << 27)
+#define MAP_BORDER_OUTSIDE (1u << 28)
+#define MAP_BORDER_NOTICES (MAP_BORDER_OPEN | MAP_BORDER_CLOSED | MAP_BORDER_OUTSIDE)
+#define PRACTICE_ACTIONS (NEXT_TARGET | TOGGLE_TARGET_FIRE | CLEAR_TARGETS | REMOVE_TARGET)
 #define ONE_SHOT_ACTIONS (SPAWN_TARGET | GRAVITY_JUMP | TELEPORT | PRACTICE_ACTIONS | RESTORE_HP)
 /* The pinned keyboard registry uses 0 through 0x32 for stock actions. */
 #define FIRST_SANDBOX_ACTION 0x33u
-#define SANDBOX_ACTION_COUNT 12u
-#define VISIBLE_SANDBOX_ACTIONS 11u
+#define SANDBOX_ACTION_COUNT 13u
 #define TELEPORT_KEY (1u << 5)
 #define RESTORE_HP_KEY (1u << 9)
 #define GOD_MODE_KEY (1u << 10)
-#define JUMP_KEY (1u << VISIBLE_SANDBOX_ACTIONS)
+#define REMOVE_TARGET_KEY (1u << 11)
+#define JUMP_KEY (1u << 12)
 #define SANDBOX_KEYS (JUMP_KEY - 1u)
 #define ABILITY_ONE_ACTION 7u /* Native Consumables4 / ABILITY 1. */
 
@@ -57,13 +72,15 @@ static const char keyboard_path[] = "..\\documents\\solbreaker-keyboard.bin";
 __attribute__((section(".boss_rodata")))
 static const char keyboard_temp[] = "..\\documents\\solbreaker-keyboard.tmp";
 
+__attribute__((section(".boss_rodata")))
 static const NativeString binding_names[] = {
     {"SolBoost", 8, 15}, {"SolFlight", 9, 15}, {"SolMissile", 10, 15},
     {"SolTarget", 9, 15}, {"SolJump", 7, 15}, {"SolReload", 9, 15},
     {"SolTeleport", 11, 15},
     {"SolNextTank", 11, 15}, {"SolTargetFire", 13, 15}, {"SolClear", 8, 15},
-    {"SolHeal", 7, 15}, {"SolGod", 6, 15},
+    {"SolHeal", 7, 15}, {"SolGod", 6, 15}, {"SolRemove", 9, 15},
 };
+__attribute__((section(".boss_rodata")))
 static const NativeString binding_captions[][2] = {
     {{"Local/SbBoost", 13, 15}, {"", 0, 15}},
     {{"Local/SbFlight", 14, 15}, {"", 0, 15}},
@@ -77,8 +94,10 @@ static const NativeString binding_captions[][2] = {
     {{"Local/SbClear", 13, 15}, {"", 0, 15}},
     {{"Local/SbHeal", 12, 15}, {"", 0, 15}},
     {{"Local/SbGod", 11, 15}, {"", 0, 15}},
+    {{"Local/SbRemove", 14, 15}, {"", 0, 15}},
 };
-static const uint8_t visible_bindings[] = {0, 1, 2, 3, 5, 6, 7, 8, 9, 10, 11};
+static const uint8_t visible_bindings[] = {1, 2, 6, 10, 11};
+#define VISIBLE_SANDBOX_ACTIONS (sizeof(visible_bindings)/sizeof(*visible_bindings))
 
 typedef struct { float x, y, z; } Vector;
 typedef struct { Vector origin, velocity; } AimRay;
@@ -88,6 +107,56 @@ typedef struct { Vector position, target; } CameraPose;
 typedef struct { void *control, *hidden_row; } TeamPanel;
 typedef struct { uint32_t effect, entity, renderer; } ParticleIdentity;
 typedef struct { void **begin, **end; } ParticleVector;
+enum { PICKER_RECORDS = 1024, PICKER_ROWS = 8, PICKER_MODULES = 8192, PICKER_SLOTS = 4, MODULE_COLUMNS = 5, TANK_STAT_COUNT = 11 };
+#define PICKER_MAGIC 0x33544253u  /* SBT3 */
+typedef struct {
+    uint16_t id;
+    uint8_t tier, nation, kind, reserved;
+    uint16_t modules_start, modules_count;
+    char key[64], search[182];
+} PickerEntry;
+typedef struct { uint8_t slot, turret; char key[62]; } PickerModule;
+typedef struct {
+    uint32_t magic, count, modules_count;
+    PickerEntry entry[PICKER_RECORDS];
+    PickerModule module[PICKER_MODULES];
+} PickerCatalog;
+_Static_assert(sizeof(PickerEntry) == 256, "picker index record size");
+_Static_assert(sizeof(PickerModule) == 64, "picker module record size");
+typedef struct {
+    void *menu, *stock, *panel, *command, *search;
+    void *row[PICKER_ROWS], *filter[3], *marker[3], *status, *previous, *next, *hint;
+    PickerCatalog *catalog;
+    uint16_t matches[PICKER_RECORDS];
+    unsigned selected[3], last, page, count;
+    char query[64];
+    uint8_t open;
+    void *modules_panel, *module_vehicle;
+    void *hub, *ai, *stats, *target_menu, *stat_slider[TANK_STAT_COUNT], *stat_amount[TANK_STAT_COUNT];
+    void *module_card[PICKER_SLOTS][MODULE_COLUMNS];
+    const PickerEntry *module_entry;
+    unsigned module_selected[PICKER_SLOTS];
+} TargetPicker;
+typedef struct __attribute__((packed)) {
+    uint8_t custom, active;
+    uint32_t slots[13];
+    uint8_t values[4][TANK_STAT_COUNT+1];
+} SetupProfile;
+typedef struct __attribute__((packed)) {
+    uint8_t custom;
+    uint32_t slots[14];
+} RoomLineup;
+_Static_assert(sizeof(RoomLineup) == 57, "room lineup envelope");
+
+typedef struct {
+    void *identity, *room_identity;
+    SetupProfile profile;
+    RoomLineup lineup;
+    unsigned room;
+    uint32_t slot, preset, tier, kind, received, team, stat_group;
+    TargetPicker picker;
+} SetupEditor;
+_Static_assert(sizeof(SetupProfile) == 102, "prebattle setup envelope");
 typedef struct {
     uint32_t thread, avatar, owner, scene, token, sequence, previous_keys;
     uint32_t toggles, last_report, missile_tick, shot, active_view, view_tick;
@@ -133,6 +202,11 @@ typedef struct {
     uint32_t marker_tick;
     AimRay marker_from, marker_ray;
     float marker_dispersion;
+    void *aim_time_label;
+    uint32_t aim_tenths;
+    uint8_t stats[TANK_STAT_COUNT];
+    TargetPicker picker;
+    SetupEditor setup;
 } Sandbox;
 
 extern uint32_t sandbox_delta(void);
@@ -183,7 +257,7 @@ static int read_setting(uint32_t delta, const char *path, void *data, uint32_t s
 }
 
 static int read_bindings(uint32_t delta, SavedBindings *data) {
-    static const uint8_t saved_counts[] = {SANDBOX_ACTION_COUNT, 11, 10, 7, 6, 5};
+    static const uint8_t saved_counts[] = {SANDBOX_ACTION_COUNT, 12, 11, 10, 7, 6, 5};
     for (unsigned index = 5; index < SANDBOX_ACTION_COUNT; index++)
         data->keys[index] = (SavedKey){0};
     for (unsigned index = 0; index < sizeof(saved_counts); index++) {
@@ -279,12 +353,21 @@ static void seed_bindings(uint32_t delta, void *layout, int restore) {
     NativeBind bind = (NativeBind)(0x0123c830u + delta);
     SavedBindings saved;
     int have_saved = restore && read_bindings(delta, &saved);
+    const KeyBinding unbound = {0,0,0,1};
+    static const uint8_t retired_bindings[] = {0, 3, 5, 7, 8, 9, 12};
+    for (unsigned index = 0; index < sizeof(retired_bindings); ++index) {
+        uint32_t binding = retired_bindings[index];
+        uint32_t action = FIRST_SANDBOX_ACTION + binding;
+        if (get_binding(delta, layout, action).device)
+            bind(layout, action, binding_names[binding], &unbound);
+    }
+
     for (uint32_t index = 0; index < VISIBLE_SANDBOX_ACTIONS; index++) {
         uint32_t binding = visible_bindings[index];
         uint32_t action = FIRST_SANDBOX_ACTION + binding;
         if (!get_binding(delta, layout, action).device) {
             /* Native keyboard device, Numpad 1 through 9 then 0. */
-            KeyBinding key = {0x400, binding == 10 ? 0x49 : 0x4a + index, 0, 9};
+            KeyBinding key = {0x400, binding == 10 ? 0x49 : 0x4a + binding - (binding > 4), 0, 9};
             if (binding == 11) key = (KeyBinding){0x400, 0x53, 0, 9};
             if (have_saved && saved.keys[binding].key && saved.keys[binding].key < 0x7f
                     && saved.keys[binding].modifiers < 16) {
@@ -373,12 +456,14 @@ static uint32_t binding_keys(uint32_t delta, Sandbox *s) {
     for (unsigned index = 0; index < sizeof(modifier_keys); index++)
         if ((uint8_t)*down(keyboard, &value, modifier_keys[index])) modifiers |= 1u << index;
     for (unsigned index = 0; index <= VISIBLE_SANDBOX_ACTIONS; index++) {
-        if (!(s->allowed_keys & (1u << index))) continue;
+        uint32_t binding = index == VISIBLE_SANDBOX_ACTIONS ? 0 : visible_bindings[index];
+        uint32_t bit = index == VISIBLE_SANDBOX_ACTIONS ? JUMP_KEY : 1u << (binding-(binding>4));
+        if (!(s->allowed_keys & bit)) continue;
         uint32_t action = index == VISIBLE_SANDBOX_ACTIONS ? ABILITY_ONE_ACTION
-                          : FIRST_SANDBOX_ACTION + visible_bindings[index];
+                          : FIRST_SANDBOX_ACTION + binding;
         KeyBinding key = get_binding(delta, layout, action);
         if (key.device == 0x400 && key.modifiers == modifiers && key.key
-                && (uint8_t)*down(keyboard, &value, key.key)) pressed |= 1u << index;
+                && (uint8_t)*down(keyboard, &value, key.key)) pressed |= bit;
     }
     return pressed;
 }
@@ -466,8 +551,17 @@ static void boss_picker_message(uint32_t delta, const uint32_t *message);
 static void boss_respawn_menu(void *menu, uint32_t delta);
 static void *find_control(void *root, const char *name, uint32_t delta);
 static void bind_battle_controls(uint32_t delta, Sandbox *s, void *root);
+static void boss_visible(void *control, uint32_t visible, uint32_t delta);
+static void update_blur_label(void *label, uint32_t percent, uint32_t delta);
+static void bind_stats(uint32_t delta, Sandbox *s, void *menu);
+static int setup_slider(uint32_t delta, void *slider, unsigned phase);
+static void setup_save_description(uint32_t delta, void *view, NativeString *description);
+static const char *setup_read_room_tag(const char *text, RoomLineup *lineup);
+static void setup_load_room(uint32_t delta, void *view, RoomLineup lineup, int bots1, int bots2);
+static unsigned setup_room_tag(uint32_t delta, void *view, char *output);
 static void temporal_audio_gain(uint32_t delta, Sandbox *s, uint32_t percent);
 static void temporal_roster(uint32_t delta, Sandbox *s, uint32_t entity);
+static void practice_roster(uint32_t delta, Sandbox *s, const uint32_t *ids, const uint32_t *end);
 
 static void reset(uint32_t delta, Sandbox *s) {
     temporal_audio_gain(delta, s, 100u);
@@ -476,6 +570,8 @@ static void reset(uint32_t delta, Sandbox *s) {
     s->owner = s->avatar = s->scene = s->token = s->sequence = 0;
     s->previous_keys = s->toggles = s->last_report = s->sent_flags = s->shot = 0;
     s->pending_actions = s->allowed_keys = 0;
+    __builtin_memset(s->stats, 0, sizeof(s->stats));
+    s->picker.menu = 0;
     s->bindings_layout = 0;
     s->respawn_menu = s->respawn_value = 0;
     s->swap_value = 0;
@@ -592,8 +688,9 @@ void THISCALL sandbox_notice_detach(void *listener) {
     ((Detach)(0x1debe30u + delta))(listener);
 }
 
+__attribute__((section(".boss_ui"), noinline))
 static void sandbox_notice(uint32_t delta, Sandbox *s, uint32_t index) {
-    static const NativeString keys[] = {
+    static const NativeString keys[] __attribute__((section(".boss_rodata"))) = {
         {"Local/SbBoost0", 14, 15}, {"Local/SbBoost1", 14, 15},
         {"Local/SbFly0", 12, 15}, {"Local/SbFly1", 12, 15},
         {"Local/SbCam0", 12, 15}, {"Local/SbCam1", 12, 15},
@@ -606,6 +703,11 @@ static void sandbox_notice(uint32_t delta, Sandbox *s, uint32_t index) {
         {"Local/SbClean", 13, 15}, {"Local/SbFull", 12, 15},
         {"Local/SbHealed", 14, 15}, {"Local/SbGod0", 12, 15}, {"Local/SbGod1", 12, 15},
         {"Local/SbTsGear", 14, 15},
+        {"Local/SbPicked", 14, 15}, {"Local/SbNoTank", 14, 15},
+        {"Local/SbAiSet", 13, 15}, {"Local/SbAiMiss", 14, 15},
+        {"Local/SbBorder0", 15, 15}, {"Local/SbBorder1", 15, 15}, {"Local/SbBorder2", 15, 15},
+        {"Local/SbTmMiss", 14, 15}, {"Local/SbTmHeal", 14, 15}, {"Local/SbTmKill", 14, 15},
+        {"Local/SbTmGone", 14, 15}, {"Local/SbTmFull", 14, 15},
     };
     void *controller = s->notice_controller;
     void *localization = (void *)FIELD(0x471eea0u + delta, 0);
@@ -618,7 +720,7 @@ static void sandbox_notice(uint32_t delta, Sandbox *s, uint32_t index) {
     ((Localize)(0x9bd130u + delta))(localization, &text, &keys[index]);
     if (text.size) {
         /* The adjacent 0x115 is the live +HP notice. */
-        uint32_t notice = index == 21 ? 0x116 : 0x100 + index;
+        uint32_t notice = 0x100 + index + (index >= 21);
         ((Show)(0x1de19b0u + delta))(controller, &text, notice);
     }
     ((Destroy)(0x69a720u + delta))(&text);
@@ -960,6 +1062,51 @@ int sandbox_message(uint32_t delta, const uint32_t *first, const uint32_t *end,
                     const uint32_t *second, const uint32_t *second_end) {
     typedef int (*Original)(uint32_t, const uint32_t *, const uint32_t *,
                             const uint32_t *, const uint32_t *);
+    if (first && end == first+3 && first[0] == 0x31534654u && first[1] == 0x54525254u
+            && second == second_end) {
+        Sandbox *s = state(delta, 0);
+        uint32_t entity = first[2];
+        if (s && s->scene && s->thread == thread_id() && entity && entity < (1u << 29)) {
+            typedef void (THISCALL *AttachTurret)(void *, uint32_t);
+            ((AttachTurret)(0x7bb000u + delta))((void *)s->scene, entity);
+        }
+        return 1;
+    }
+    if (first && end == first+6 && first[0] == 0x31534654u && first[1] == 0x54415453u) {
+        Sandbox *s = state(delta, 0);
+        if (s && s->thread == thread_id() && s->token && first[2] == s->token) {
+            const uint8_t *values = (const uint8_t *)(first+3);
+            for (unsigned i = 0; i < TANK_STAT_COUNT; ++i)
+                s->stats[i] = values[i] <= 100 ? values[i] : 0;
+        }
+        return 1;
+    }
+    if (first && end == first+3 && first[0] == 0x31534654u && first[1] == 0x544d4941u) {
+        Sandbox *s = state(delta, 0);
+        uint32_t tenths = first[2];
+        if (s && s->thread == thread_id() && s->aim_time_label
+                && tenths <= 999u && tenths != s->aim_tenths) {
+            s->aim_tenths = tenths;
+            if (tenths) {
+                NativeString text = {{"00.0"}, 4, 15};
+                text.text[0] += tenths / 100u;
+                text.text[1] += tenths / 10u % 10u;
+                text.text[3] += tenths % 10u;
+                if (tenths < 100u) text.text[0] = ' ';
+                ((void (THISCALL *)(void *, const NativeString *))(0xb8e900u + delta))(s->aim_time_label, &text);
+            }
+            ((void (THISCALL *)(void *, uint32_t))(0xd05020u + delta))(s->aim_time_label, !!tenths);
+        }
+        return 1;
+    }
+    if (first && end >= first+4 && first[0] == 0x31534654u && first[1] == 0x594d5544u) {
+        Sandbox *s = state(delta, 0);
+        if (s && s->thread == thread_id() && s->token && first[2] == s->token
+                && (s->allowed_keys & REMOVE_TARGET_KEY)
+                && second && second_end > second && second_end - second <= 7)
+            practice_roster(delta, s, second, second_end);
+        return 1;
+    }
     if (first && end == first+4 && first[0] == 0x31534654u && first[1] == 0x454c4f52u) {
         boss_picker_message(delta, first);
         return 1;
@@ -1054,7 +1201,8 @@ int sandbox_message(uint32_t delta, const uint32_t *first, const uint32_t *end,
         if (s && s->thread == thread_id() && s->owner && end == first+3
                 && (second == second_end || (second && second_end == second+1)) && first[2]) {
             uint32_t capabilities = second == second_end ? 15 : second[0];
-            if (capabilities & (64 | 256 | 1024 | 0x8000)) {
+            if (capabilities & (64 | 256 | 1024 | 0x8000 | TARGET_SELECTED | TARGET_UNAVAILABLE |
+                                TARGET_AI_CHANGED | TARGET_AI_MISSING | MAP_BORDER_NOTICES | PRACTICE_FEEDBACK)) {
                 if (s->token == first[2]) {
                     if ((capabilities & 64) && (s->allowed_keys & 8))
                         sandbox_notice(delta, s, 8);
@@ -1064,6 +1212,16 @@ int sandbox_message(uint32_t delta, const uint32_t *first, const uint32_t *end,
                         sandbox_notice(delta, s, 10 + ((capabilities >> 11) & 7));
                     if ((capabilities & 0x8000) && (s->allowed_keys & RESTORE_HP_KEY))
                         sandbox_notice(delta, s, 18);
+                    if (capabilities & (TARGET_SELECTED | TARGET_UNAVAILABLE))
+                        sandbox_notice(delta, s, (capabilities & TARGET_SELECTED) ? 22 : 23);
+                    if (capabilities & (TARGET_AI_CHANGED | TARGET_AI_MISSING))
+                        sandbox_notice(delta, s, (capabilities & TARGET_AI_CHANGED) ? 24 : 25);
+                    unsigned feedback = (capabilities >> 11) & 7;
+                    if ((capabilities & PRACTICE_FEEDBACK) && feedback < 5)
+                        sandbox_notice(delta, s, 29 + feedback);
+                    if (capabilities & MAP_BORDER_NOTICES)
+                        sandbox_notice(delta, s, (capabilities & MAP_BORDER_OPEN) ? 26 :
+                                       (capabilities & MAP_BORDER_CLOSED) ? 27 : 28);
                 }
                 return 1;
             }
@@ -1074,7 +1232,9 @@ int sandbox_message(uint32_t delta, const uint32_t *first, const uint32_t *end,
                               | ((capabilities & 128) ? TELEPORT_KEY : 0)
                               | ((capabilities & 512) ? 0x1c0 : 0)
                               | ((capabilities & 0x4000) ? RESTORE_HP_KEY : 0)
-                              | ((capabilities & 0x10000) ? GOD_MODE_KEY : 0);
+                              | ((capabilities & 0x10000) ? GOD_MODE_KEY : 0)
+                              | ((capabilities & REMOVE_TARGET) ? REMOVE_TARGET_KEY : 0)
+                              | (capabilities & (PICK_TARGET | TARGET_AI | TOGGLE_MAP_BORDER | TANK_STATS | PRACTICE_MENU));
             s->last_report = 0;
         }
         return 1;
@@ -1094,6 +1254,7 @@ void sandbox_reset(uint32_t delta, uint32_t *layer) {
         s->role_token = s->role_state = s->role_keys = 0;
         s->swap_token = 0;
         s->battle_controls_root = 0;
+        s->aim_time_label = 0;
         s->temporal_panel = s->temporal_label = 0;
         s->peer_root = s->peer_clock = s->peer_hand = s->peer_hour = s->peer_opacity = 0;
         s->peer_hidden_entity = 0;
@@ -1144,10 +1305,6 @@ static void poll_controls(uint32_t delta, Sandbox *s, uint32_t now) {
     uint32_t pressed = binding_keys(delta, s) & s->allowed_keys;
     uint32_t changes = pressed & ~s->previous_keys;
     s->previous_keys = pressed;
-    if (changes & 1) {
-        s->toggles ^= BOOST;
-        sandbox_notice(delta, s, !!(s->toggles & BOOST));
-    }
     if (changes & 2) {
         s->toggles ^= FLIGHT;
         sandbox_notice(delta, s, 2 + !!(s->toggles & FLIGHT));
@@ -1156,19 +1313,13 @@ static void poll_controls(uint32_t delta, Sandbox *s, uint32_t now) {
         s->toggles ^= MISSILE_VIEW;
         sandbox_notice(delta, s, 4 + !!(s->toggles & MISSILE_VIEW));
     }
-    if (changes & 8) s->pending_actions |= SPAWN_TARGET;
-    if (changes & 16) {
-        s->toggles ^= FAST_RELOAD;
-        sandbox_notice(delta, s, 6 + !!(s->toggles & FAST_RELOAD));
-    }
     if (changes & JUMP_KEY) s->pending_actions |= GRAVITY_JUMP;
     if (changes & TELEPORT_KEY) s->pending_actions |= TELEPORT;
     if (changes & GOD_MODE_KEY) {
         s->toggles ^= GOD_MODE;
         sandbox_notice(delta, s, 19 + !!(s->toggles & GOD_MODE));
     }
-    /* The four Numpad 7–0 action bits follow the order of their binding bits. */
-    s->pending_actions |= (changes << 3) & (PRACTICE_ACTIONS | RESTORE_HP);
+    if (changes & RESTORE_HP_KEY) s->pending_actions |= RESTORE_HP;
     uint32_t flags = s->toggles & (BOOST | FLIGHT | FAST_RELOAD | GOD_MODE);
     if ((flags & FLIGHT) && key(0x20) < 0) flags |= ASCEND;
     if ((flags & FLIGHT) && key(0x11) < 0) flags |= DESCEND;
@@ -1395,11 +1546,11 @@ static CameraPose swap_pose(uint32_t camera, CameraPose pose) {
 }
 
 __attribute__((section(".late_sandbox"), noinline))
-static float temporal_project(uint32_t delta, uint32_t camera, Vector p, Point *point) {
+static float temporal_project(uint32_t delta, uint32_t camera, Vector p, Point *point, float far) {
     typedef const float *(THISCALL *ViewProj)(uint32_t, uint32_t);
     const float *m = ((ViewProj)(0xa7aee0u + delta))(camera, 0);
     float depth = p.x*m[3]+p.y*m[7]+p.z*m[11]+m[15];
-    if (!(depth > .5f && depth < 260.f)) return 0;
+    if (!(depth > .5f && depth < far)) return 0;
     float x = (p.x*m[0]+p.y*m[4]+p.z*m[8]+m[12])/depth;
     float y = (p.x*m[1]+p.y*m[5]+p.z*m[9]+m[13])/depth;
     if (!(x > -1.25f && x < 1.25f && y > -1.35f && y < 1.15f)) return 0;
@@ -1419,7 +1570,7 @@ static void temporal_clock(uint32_t delta, Sandbox *s, uint32_t camera, uint32_t
         return;
     }
     Point point;
-    float depth = temporal_project(delta, camera, s->peer_origin, &point);
+    float depth = temporal_project(delta, camera, s->peer_origin, &point, 260.f);
     if (!depth) {
         visible(s->peer_clock, 0);
         return;
@@ -1526,7 +1677,7 @@ static void sample_temporal_glitch(uint32_t delta, Sandbox *s, uint32_t camera, 
     uint32_t duration = s->temporal_returning ? 230u : 180u;
     if (!s->temporal_transition_tick || !camera || elapsed >= duration) return;
     Point point;
-    float depth = temporal_project(delta, camera, s->temporal_transition_position, &point);
+    float depth = temporal_project(delta, camera, s->temporal_transition_position, &point, 260.f);
     if (!depth) return;
     float radius = 2.5f/depth;
     if (radius > .19f) radius = .19f;
@@ -1622,7 +1773,7 @@ void THISCALL sandbox_draw(void *scene) {
         temporal_audio_update(delta, s, now);
         temporal_update_hud(delta, s, now);
     }
-    if (s && s->owner && s->thread == thread_id() && (s->role_state || s->swap_token))
+    if (s && s->owner && s->thread == thread_id() && (s->role_state || s->swap_token || s->picker.menu))
         boss_picker_update(delta, s);
     if (!s || s->thread != thread_id() || s->scene != (uint32_t)scene) {
         draw(scene);
@@ -1721,7 +1872,7 @@ static void room_parameter(void *view, const char *name, int value) {
 typedef struct { int mode, lives, minutes, bots1, bots2, ammo; } RoomOptions;
 
 static const char *room_parse_options(const NativeString *value, RoomOptions *settings) {
-    const char *text = room_text(value);
+    const char *text = setup_read_room_tag(room_text(value), 0);
     int mode = *text ? 1 : -1, lives = 0, minutes = -1, ammo = 0;
     while (room_prefix(text, "[mode ") || room_prefix(text, "[lives ") ||
            room_prefix(text, "[time ") || room_prefix(text, "[ammo ")) {
@@ -1774,6 +1925,10 @@ void THISCALL room_load_description(void *view, const NativeString *value) {
     room_parameter(view, "roomInitialMinutes", options.minutes);
     room_parameter(view, "roomInitialBots1", options.bots1);
     room_parameter(view, "roomInitialBots2", options.bots2);
+    RoomLineup lineup = {0};
+    const char *encoded = room_text(value);
+    int has_lineup = setup_read_room_tag(encoded, &lineup) != encoded;
+    setup_load_room(delta, view, lineup, has_lineup ? -1 : options.bots1, options.bots2);
     NativeString clean;
     ((String)(0x69a7d0u + delta))(&clean, text);
     ((Set)(0x1e98000u + delta))(view, &clean);
@@ -1789,6 +1944,15 @@ void THISCALL room_header_description(void *view, const NativeString *value) {
     const char *text = room_parse_options(value, &options);
     room_parameter(view, "roomHeaderMode", options.mode);
     room_parameter(view, "roomHeaderMinutes", options.minutes);
+    RoomLineup lineup;
+    const char *encoded = room_text(value);
+    if (setup_read_room_tag(encoded, &lineup) != encoded && lineup.custom) {
+        options.bots1 = options.bots2 = 0;
+        for (unsigned i = 0; i < 7; ++i) {
+            options.bots1 += lineup.slots[i] != UINT32_MAX;
+            options.bots2 += lineup.slots[i+7] != UINT32_MAX;
+        }
+    }
     room_parameter(view, "roomHeaderBots1", options.bots1);
     room_parameter(view, "roomHeaderBots2", options.bots2);
     NativeString clean;
@@ -1809,16 +1973,21 @@ NativeString *THISCALL room_get_description(void *view, NativeString *result) {
     ((String)(0x69a7d0u + delta))(&path, "Settings/**/LocalRoomOptions");
     void *field = ((Find)(0xcde480u + delta))((void *)FIELD(view, 4), &path);
     ((Destroy)(0x69a720u + delta))(&path);
-    if (!field || result->size > 4096) return result;
+    if (result->size > 4096) return result;
+    const char *description = room_text(result);
+    if (room_prefix(description, "SolbreakerBots/")) {
+        setup_save_description(delta, view, result);
+        return result;
+    }
+    if (!field) return result;
     NativeString options;
     ((Get)(0xb7b0f0u + delta))(field, &options);
     const char *tags = room_text(&options);
-    const char *description = room_text(result);
     /* The same stock view also submits the solo bot recipe. */
-    if (!room_prefix(description, "SolbreakerBots/") && options.size > 0 && options.size < 128) {
+    if (options.size > 0 && options.size < 128) {
         static const char marker[] = "[room-form] ";
-        char combined[4096 + 128 + sizeof(marker)];
-        uint32_t length = 0;
+        char combined[4096 + 128 + sizeof(marker) + 10 + 2*sizeof(RoomLineup)];
+        uint32_t length = setup_room_tag(delta, view, combined);
         for (uint32_t i = 0; i < sizeof(marker)-1; ++i) combined[length++] = marker[i];
         for (uint32_t i = 0; i < options.size; ++i) combined[length++] = tags[i];
         for (uint32_t i = 0; i < result->size; ++i) combined[length++] = description[i];
@@ -1882,16 +2051,434 @@ BOSS_UI static void boss_visible(void *control, uint32_t visible, uint32_t delta
     if (control) ((Visible)(0xd05020u + delta))(control, visible);
 }
 
+BOSS_UI static void target_text(uint32_t delta, void *label, const char *text, int localize) {
+    typedef void (THISCALL *String)(NativeString *, const char *);
+    typedef void (THISCALL *Localize)(void *, NativeString *, const NativeString *);
+    typedef void (THISCALL *Set)(void *, const NativeString *);
+    typedef void (THISCALL *Destroy)(NativeString *);
+    if (!label) return;
+    NativeString key, translated;
+    ((String)(0x69a7d0u + delta))(&key, text);
+    void *localization = (void *)FIELD(0x471eea0u + delta, 0);
+    if (localize && localization) {
+        ((Localize)(0x9bd130u + delta))(localization, &translated, &key);
+        ((Set)(0xb8e900u + delta))(label, &translated);
+        ((Destroy)(0x69a720u + delta))(&translated);
+    } else {
+        ((Set)(0xb8e900u + delta))(label, &key);
+    }
+    ((Destroy)(0x69a720u + delta))(&key);
+}
+
+BOSS_UI static int target_catalog(uint32_t delta, TargetPicker *p) {
+    if (!p->catalog) {
+        typedef void *(STDCALL *Allocate)(void *, uint32_t, uint32_t, uint32_t);
+        p->catalog = (*(Allocate *)(0x036ef224u + delta))(0, sizeof(*p->catalog), 0x3000, 4);
+        if (!p->catalog) return 0;
+    }
+    if (p->catalog->magic != PICKER_MAGIC &&
+            !read_setting(delta, "..\\documents\\solbreaker-targets.bin",
+                          p->catalog, sizeof(*p->catalog)))
+        p->catalog->magic = 0;
+    return p->catalog->magic == PICKER_MAGIC && p->catalog->count <= PICKER_RECORDS
+        && p->catalog->modules_count <= PICKER_MODULES;
+}
+
+__attribute__((section(".late_sandbox"), noinline))
+static void bind_stats(uint32_t delta, Sandbox *s, void *menu) {
+    TargetPicker *p = &s->picker;
+    p->stats = find_control(menu, "SolTankStats", delta);
+    boss_visible(p->stats, 0, delta);
+    if (!p->stats || !p->hub) return;
+    boss_visible(find_control(p->hub, "Middle/VerticalBox/Stats", delta),
+                 (s->allowed_keys & TANK_STATS) && !s->temporal_end, delta);
+    static const char paths[TANK_STAT_COUNT][2][40] BOSS_DATA = {
+        {"Middle/VerticalBox/Boost", "Middle/VerticalBox/BoostAmount"},
+        {"Middle/VerticalBox/Reload", "Middle/VerticalBox/ReloadAmount"},
+        {"Middle/VerticalBox/Aim", "Middle/VerticalBox/AimAmount"},
+        {"Middle/VerticalBox/Accuracy", "Middle/VerticalBox/AccuracyAmount"},
+        {"Middle/VerticalBox/Turret", "Middle/VerticalBox/TurretAmount"},
+        {"Middle/VerticalBox/Hull", "Middle/VerticalBox/HullAmount"},
+        {"Middle/VerticalBox/Damage", "Middle/VerticalBox/DamageAmount"},
+        {"Middle/VerticalBox/Health", "Middle/VerticalBox/HealthAmount"},
+        {"Middle/VerticalBox/Brake", "Middle/VerticalBox/BrakeAmount"},
+        {"Middle/VerticalBox/Reverse", "Middle/VerticalBox/ReverseAmount"},
+        {"Middle/VerticalBox/Grip", "Middle/VerticalBox/GripAmount"},
+    };
+    for (unsigned i = 0; i < TANK_STAT_COUNT; ++i) {
+        void *slider = find_control(p->stats, paths[i][0], delta);
+        p->stat_slider[i] = slider;
+        p->stat_amount[i] = find_control(p->stats, paths[i][1], delta);
+        if (!slider) continue;
+        *(float *)((uintptr_t)slider + 0x15c) = (float)s->stats[i];
+        ((void (THISCALL *)(void *))(0xb85e10u + delta))(slider);
+        if (p->stat_amount[i]) update_blur_label(p->stat_amount[i], s->stats[i], delta);
+    }
+}
+
+__attribute__((noinline))
+static int stats_slider(uint32_t delta, Sandbox *s, void *slider, unsigned phase) {
+    if (!s || !s->picker.menu) return 0;
+    unsigned i = 0;
+    while (i < TANK_STAT_COUNT && s->picker.stat_slider[i] != slider) ++i;
+    if (i == TANK_STAT_COUNT) return 0;
+    float value = *(float *)((uintptr_t)slider + 0x15c);
+    if (value >= 0 && value <= 100) {
+        unsigned percent = (unsigned)(value+.5f);
+        if (phase == 3 && percent != s->stats[i] &&
+                send_control_value(delta,s,TANK_STATS,(Vector){0,0,0},(i<<8)|percent))
+            s->stats[i] = percent;
+        void *label = s->picker.stat_amount[i];
+        if (label) update_blur_label(label,phase == 3 ? s->stats[i] : percent,delta);
+    }
+    return 1;
+}
+
+BOSS_UI static int bind_picker_controls(uint32_t delta, TargetPicker *p) {
+    if (!p->panel) return 0;
+    p->search = find_control(p->panel, "Middle/VerticalBox/Search/Query", delta);
+    if (!p->search) return 0;
+    p->filter[0] = find_control(p->panel, "Middle/VerticalBox/Nation/Caption", delta);
+    p->filter[1] = find_control(p->panel, "Middle/VerticalBox/Tier/Caption", delta);
+    p->filter[2] = find_control(p->panel, "Middle/VerticalBox/Class/Caption", delta);
+    p->marker[0] = find_control(p->panel, "Middle/VerticalBox/NationActive", delta);
+    p->marker[1] = find_control(p->panel, "Middle/VerticalBox/TierActive", delta);
+    p->marker[2] = find_control(p->panel, "Middle/VerticalBox/ClassActive", delta);
+    p->status = find_control(p->panel, "Middle/VerticalBox/Status", delta);
+    p->hint = find_control(p->panel, "Middle/VerticalBox/Search/Hint", delta);
+    p->previous = find_control(p->panel, "Middle/VerticalBox/Prev", delta);
+    p->next = find_control(p->panel, "Middle/VerticalBox/Next", delta);
+    char path[] = "Middle/VerticalBox/Row0";
+    for (unsigned index = 0; index < PICKER_ROWS; ++index) {
+        path[sizeof(path)-2] = '0' + index;
+        p->row[index] = find_control(p->panel, path, delta);
+    }
+    if (p->modules_panel) {
+        void *list = find_control(p->modules_panel, "Middle/VerticalBox", delta);
+        p->module_vehicle = find_control(list, "Vehicle", delta);
+        char branch[] = "Branch0", name[] = "Card0";
+        for (unsigned slot = 0; slot < PICKER_SLOTS; ++slot) {
+            branch[6] = '0' + slot;
+            void *row = find_control(list, branch, delta);
+            for (unsigned column = 0; column < MODULE_COLUMNS; ++column) {
+                name[4] = '0' + column;
+                p->module_card[slot][column] = find_control(row, name, delta);
+            }
+        }
+    }
+    return 1;
+}
+
+BOSS_UI static void bind_target_picker(uint32_t delta, Sandbox *s, void *menu) {
+    TargetPicker *p = &s->picker;
+    void *button = find_control(menu, "menuDialog/**/SolTargetButton", delta);
+    p->panel = find_control(menu, "SolTargetPicker", delta);
+    boss_visible(p->panel, 0, delta);
+    p->modules_panel = find_control(menu, "SolTargetModules", delta);
+    boss_visible(p->modules_panel, 0, delta);
+    p->hub = find_control(menu, "SolSandboxHub", delta);
+    p->ai = find_control(menu, "SolTargetAI", delta);
+    p->target_menu = find_control(menu, "SolTargetMenu", delta);
+    boss_visible(p->target_menu, 0, delta);
+    if (p->target_menu)
+        boss_visible(find_control(p->target_menu, "Middle/VerticalBox/Choose", delta),
+                     !!(s->allowed_keys & PICK_TARGET), delta);
+    bind_stats(delta,s,menu);
+    boss_visible(p->hub, 0, delta);
+    boss_visible(p->ai, 0, delta);
+    p->module_entry = 0;
+    p->stock = find_control(menu, "menuDialog", delta);
+    boss_visible(p->stock, 1, delta);
+    p->menu = 0;
+    p->open = 0;
+    int available = p->hub && (s->allowed_keys & (PICK_TARGET | TARGET_AI | TOGGLE_MAP_BORDER | TANK_STATS | PRACTICE_MENU));
+    boss_visible(button, available, delta);
+    if (!available) return;
+    boss_visible(find_control(p->hub, "Middle/VerticalBox/Targets", delta), !!(s->allowed_keys & (PICK_TARGET | PRACTICE_MENU)), delta);
+    boss_visible(find_control(p->hub, "Middle/VerticalBox/AI", delta), !!(s->allowed_keys & TARGET_AI), delta);
+    boss_visible(find_control(p->hub, "Middle/VerticalBox/Borders", delta), !!(s->allowed_keys & TOGGLE_MAP_BORDER), delta);
+    p->command = find_control(menu, "SolTargetCommand", delta);
+    if (!p->command || !p->stock || !bind_picker_controls(delta, p)) return;
+    p->last = picker_value(p->command, delta);
+    p->menu = menu;
+}
+
+BOSS_UI static int target_query(uint32_t delta, TargetPicker *p) {
+    typedef NativeString *(THISCALL *Get)(void *, NativeString *);
+    typedef void (THISCALL *Destroy)(NativeString *);
+    NativeString value;
+    ((Get)(0xb7b0f0u + delta))(p->search, &value);
+    const uint8_t *input = (const uint8_t *)room_text(&value);
+    char folded[sizeof(p->query)];
+    unsigned length = value.size;
+    if (length >= sizeof(folded)) length = sizeof(folded)-1;
+    for (unsigned i = 0; i < length; ++i) {
+        uint8_t ch = input[i];
+        if (ch == 0xd0 && i+1 < length) {
+            uint8_t next = input[i+1];
+            if (next >= 0x90 && next <= 0x9f) {
+                folded[i++] = 0xd0;
+                ch = next + 0x20;
+            } else if (next >= 0xa0 && next <= 0xaf) {
+                folded[i++] = 0xd1;
+                ch = next - 0x20;
+            } else if (next == 0x81) {
+                folded[i++] = 0xd1;
+                ch = 0x91;
+            }
+        }
+        folded[i] = ch >= 'A' && ch <= 'Z' ? ch + 32 : ch;
+    }
+    folded[length] = 0;
+    int changed = 0;
+    for (unsigned i = 0; i <= length; ++i) {
+        if (p->query[i] != folded[i]) changed = 1;
+        p->query[i] = folded[i];
+    }
+    ((Destroy)(0x69a720u + delta))(&value);
+    return changed;
+}
+
+BOSS_UI static int target_matches(const char *text, const char *query) {
+    if (!*query) return 1;
+    for (; *text; ++text) {
+        const char *candidate = text, *match = query;
+        while (*match && *candidate == *match) {
+            ++candidate;
+            ++match;
+        }
+        if (!*match) return 1;
+    }
+    return 0;
+}
+
+BOSS_UI static void target_collect(TargetPicker *p) {
+    p->count = p->page = 0;
+    if (!p->catalog || p->catalog->magic != PICKER_MAGIC || p->catalog->count > PICKER_RECORDS)
+        return;
+    for (unsigned i = 0; i < p->catalog->count; ++i) {
+        PickerEntry *row = &p->catalog->entry[i];
+        if (row->id && !row->key[sizeof(row->key)-1] && !row->search[sizeof(row->search)-1] &&
+                (!p->selected[0] || p->selected[0] == row->nation) &&
+                (!p->selected[1] || p->selected[1] == row->tier) &&
+                (!p->selected[2] || p->selected[2] == row->kind) &&
+                target_matches(row->search, p->query))
+            p->matches[p->count++] = i;
+    }
+}
+
+BOSS_UI static void target_icons(uint32_t delta, void *button, const PickerEntry *entry) {
+    char flag[] = "Flag0", type[] = "Type0";
+    for (unsigned i = 1; i <= 9; ++i) {
+        flag[4] = '0'+i;
+        boss_visible(find_control(button, flag, delta), entry->nation == i, delta);
+    }
+    for (unsigned i = 1; i <= 4; ++i) {
+        type[4] = '0'+i;
+        boss_visible(find_control(button, type, delta), entry->kind == i, delta);
+    }
+}
+
+BOSS_UI static void target_render(uint32_t delta, TargetPicker *p) {
+    static const char tiers[11][5] BOSS_DATA = {
+        "", "I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X",
+    };
+    char nation[] = "Local/SbPickNation0", kind[] = "Local/SbPickClass0";
+    nation[sizeof(nation)-2] += p->selected[0];
+    kind[sizeof(kind)-2] += p->selected[2];
+    target_text(delta, p->filter[0], nation, 1);
+    target_text(delta, p->filter[1], p->selected[1] ? tiers[p->selected[1]] : "Local/SbPickTier",
+                p->selected[1] == 0);
+    target_text(delta, p->filter[2], kind, 1);
+    for (unsigned i = 0; i < 3; ++i)
+        boss_visible(p->marker[i], p->selected[i] != 0, delta);
+    boss_visible(p->hint, !p->query[0], delta);
+    unsigned start = p->page*PICKER_ROWS;
+    for (unsigned i = 0; i < PICKER_ROWS; ++i) {
+        void *button = p->row[i];
+        if (!button) continue;
+        boss_visible(button, start+i < p->count, delta);
+        if (start+i < p->count) {
+            const PickerEntry *entry = &p->catalog->entry[p->matches[start+i]];
+            target_text(delta, find_control(button, "Caption", delta), entry->key, entry->key[0] == '#');
+            target_text(delta, find_control(button, "Rank", delta),
+                        entry->tier <= 10 ? tiers[entry->tier] : "", 0);
+            target_icons(delta, button, entry);
+        }
+    }
+    boss_visible(p->previous, p->page != 0, delta);
+    boss_visible(p->next, start+PICKER_ROWS < p->count, delta);
+    const char *empty = (p->catalog && p->catalog->magic == PICKER_MAGIC)
+        ? "Local/SbPickEmpty" : "Local/SbPickUnavailable";
+    target_text(delta, p->status, p->count ? "Local/SbPickHow" : empty, 1);
+}
+
+BOSS_UI static unsigned target_modules(const TargetPicker *p, unsigned slot,
+                                       const PickerModule **options) {
+    const PickerEntry *entry = p->module_entry;
+    unsigned count = 0, end = entry->modules_start + entry->modules_count;
+    if (end > p->catalog->modules_count || end > PICKER_MODULES) return 0;
+    for (unsigned i = entry->modules_start; i < end && count < MODULE_COLUMNS; ++i) {
+        const PickerModule *option = p->catalog->module + i;
+        if (option->slot != slot || (slot == 2 && option->turret != p->module_selected[1]))
+            continue;
+        if (options) options[count] = option;
+        ++count;
+    }
+    return count;
+}
+
+BOSS_UI static void target_render_modules(uint32_t delta, const TargetPicker *p) {
+    for (unsigned slot = 0; slot < PICKER_SLOTS; ++slot) {
+        const PickerModule *options[MODULE_COLUMNS];
+        unsigned count = target_modules(p, slot, options);
+        for (unsigned column = 0; column < MODULE_COLUMNS; ++column) {
+            void *card = p->module_card[slot][column];
+            if (!card) continue;
+            int shown = column < count || column == 0;
+            boss_visible(card, shown, delta);
+            if (!shown) continue;
+            const PickerModule *option = column < count ? options[column] : 0;
+            if (option && option->key[sizeof(option->key)-1]) option = 0;
+            const char *key = option ? option->key : "Local/SbPickStock";
+            target_text(delta, find_control(card, "Caption", delta), key, !option || key[0] == '#');
+            int selected = column == p->module_selected[slot];
+            boss_visible(find_control(card, "Selected", delta), selected, delta);
+            if (slot == 1) boss_visible(find_control(card, "GunLink", delta), selected, delta);
+        }
+    }
+}
+
+BOSS_UI static int target_confirm(uint32_t delta, Sandbox *s, unsigned flags, unsigned selection) {
+    uint32_t now = clock_ms(delta);
+    if ((s->last_report && now - s->last_report < 55) ||
+            !send_control_value(delta, s, flags, (Vector){0, 0, 0}, selection))
+        return 0;
+    s->last_report = now ? now : 1;
+    TargetPicker *p = &s->picker;
+    void *menu = p->menu;
+    boss_visible(p->panel, 0, delta);
+    boss_visible(p->modules_panel, 0, delta);
+    boss_visible(p->ai, 0, delta);
+    boss_visible(p->target_menu, 0, delta);
+    boss_visible(p->stock, 1, delta);
+    p->menu = 0;
+    p->module_entry = 0;
+    s->respawn_menu = s->respawn_value = s->swap_value = 0;
+    typedef void (THISCALL *Close)(void *);
+    ((Close)(0x19449c0u + delta))(menu);
+    return 1;
+}
+
+BOSS_UI static void update_target_picker(uint32_t delta, Sandbox *s) {
+    TargetPicker *p = &s->picker;
+    if (!p->menu) return;
+    if (battle_input_active(delta)) {
+        p->menu = 0;
+        return;
+    }
+    unsigned value = picker_value(p->command, delta);
+    unsigned action = value != p->last ? value % 64 : 0;
+    if (p->module_entry) {
+        if (action == 16) {
+            p->module_entry = 0;
+            boss_visible(p->modules_panel, 0, delta);
+            boss_visible(p->panel, 1, delta);
+        } else if (action == 17) {
+            unsigned selection = p->module_entry->id;
+            for (unsigned slot = 0; slot < PICKER_SLOTS; ++slot)
+                selection |= p->module_selected[slot] << (16 + 4 * slot);
+            if (!target_confirm(delta, s, PICK_TARGET, selection)) return;
+        } else if (action >= 18 && action < 18+MODULE_COLUMNS*PICKER_SLOTS) {
+            unsigned slot = (action-18)/MODULE_COLUMNS, column = (action-18)%MODULE_COLUMNS;
+            if (column != p->module_selected[slot] && column < target_modules(p, slot, 0)) {
+                p->module_selected[slot] = column;
+                if (slot == 1) p->module_selected[2] = 0;
+                target_render_modules(delta, p);
+            }
+        }
+        p->last = value;
+        return;
+    }
+    if (action == 52 && !(s->allowed_keys & PRACTICE_MENU)) action = p->open ? 2 : 1;
+    if (action == 1) {
+        p->open = 1;
+        boss_visible(p->target_menu, 0, delta);
+        boss_visible(p->hub, 0, delta);
+        boss_visible(p->panel, 1, delta);
+        target_catalog(delta, p);
+    } else if (action == 2) {
+        p->open = 0;
+        boss_visible(p->panel, 0, delta);
+        boss_visible(p->ai, 0, delta);
+        boss_visible(p->stats, 0, delta);
+        boss_visible(p->target_menu, 0, delta);
+        boss_visible(p->hub, 1, delta);
+    } else if (action == 39) {
+        boss_visible(p->hub, 0, delta);
+        boss_visible(p->stock, 1, delta);
+    } else if (action == 40) {
+        boss_visible(p->stock, 0, delta);
+        boss_visible(p->hub, 1, delta);
+    } else if (action == 41 || action == 51) {
+        boss_visible(p->hub, 0, delta);
+        boss_visible(action == 41 ? p->ai : p->stats, 1, delta);
+    } else if (action >= 42 && action < 50) {
+        if (!target_confirm(delta, s, TARGET_AI, action - 42)) return;
+    } else if (action == 50) {
+        if (!target_confirm(delta, s, TOGGLE_MAP_BORDER, 0)) return;
+    } else if (action == 52) {
+        p->open = 0;
+        boss_visible(p->panel, 0, delta);
+        boss_visible(p->hub, 0, delta);
+        boss_visible(p->target_menu, 1, delta);
+    } else if (action >= 53 && action <= 58 && (s->allowed_keys & PRACTICE_MENU)) {
+        if (!target_confirm(delta, s, PRACTICE_MENU, action - 53)) return;
+    }
+    if (p->open) {
+        int changed = target_query(delta, p);
+        static const unsigned sizes[3] BOSS_DATA = {10, 11, 5};
+        if (action >= 5 && action <= 7) {
+            unsigned filter = action-5;
+            p->selected[filter] = (p->selected[filter]+1) % sizes[filter];
+            changed = 1;
+        }
+        if (changed || action == 1) target_collect(p);
+        if (action == 3 && p->page) --p->page;
+        if (action == 4 && (p->page+1)*PICKER_ROWS < p->count) ++p->page;
+        if (changed || (action && action <= 7)) target_render(delta, p);
+        if (action >= 8 && action < 8+PICKER_ROWS) {
+            unsigned index = p->page*PICKER_ROWS + action-8;
+            if (index < p->count) {
+                const PickerEntry *entry = &p->catalog->entry[p->matches[index]];
+                if (p->modules_panel) {
+                    p->module_entry = entry;
+                    __builtin_memset(p->module_selected, 0, sizeof(p->module_selected));
+                    boss_visible(p->panel, 0, delta);
+                    boss_visible(p->modules_panel, 1, delta);
+                    target_text(delta, p->module_vehicle, entry->key, entry->key[0] == '#');
+                    target_render_modules(delta, p);
+                } else if (!target_confirm(delta, s, PICK_TARGET, entry->id)) {
+                    return;
+                }
+            }
+        }
+    }
+    p->last = value;
+}
+
 /* Both team controls own an ordered map of vehicle IDs to row controls.
  * Resolve the current row on each use. A native update may replace a row. */
-BOSS_UI static void *temporal_team_row(uint32_t delta, void *control, uint32_t entity) {
+BOSS_UI static uint32_t team_row_map(uint32_t delta, void *control) {
     if (!control) return 0;
     uint32_t vtable = FIELD(control, 0)-delta;
-    unsigned offset;
-    if (vtable == 0x3848eb4u) offset = 0x168;       /* UITeamPanel */
-    else if (vtable == 0x384c5e0u) offset = 0x148;  /* ShortTeamPanel */
-    else return 0;
-    uint32_t head = FIELD(control, offset);
+    if (vtable == 0x3848eb4u) return FIELD(control, 0x168);  /* UITeamPanel */
+    if (vtable == 0x384c5e0u) return FIELD(control, 0x148);  /* ShortTeamPanel */
+    return 0;
+}
+
+BOSS_UI static void *temporal_team_row(uint32_t delta, void *control, uint32_t entity) {
+    uint32_t head = team_row_map(delta, control);
     for (uint32_t node = head ? FIELD(head, 4) : 0; node && node != head;) {
         uint32_t id = FIELD(node, 0x10);
         if (id == entity) return (void *)FIELD(node, 0x14);
@@ -1902,7 +2489,7 @@ BOSS_UI static void *temporal_team_row(uint32_t delta, void *control, uint32_t e
 
 BOSS_UI static void bind_team_panels(uint32_t delta, Sandbox *s) {
     void *root = s->battle_controls_root;
-    if (!root || !s->peer_clock) return;
+    if (!root) return;
     void *hud = find_control(root, "BattleHUD/HUDLayer", delta);
     if (!hud) return;
     s->team_panels[0].control = find_control(hud, "AllyTeamPanelContainer/AllyTeamPanel", delta);
@@ -1912,6 +2499,28 @@ BOSS_UI static void bind_team_panels(uint32_t delta, Sandbox *s) {
     if (score) {
         s->team_panels[2].control = find_control(score, "left/allyPanel", delta);
         s->team_panels[3].control = find_control(score, "right/enemyPanel", delta);
+    }
+}
+
+/* Polygon is a solo mode. Its enemy panels contain only practice targets. */
+BOSS_UI static void hide_replaced_rows(uint32_t delta, uint32_t head, uint32_t node,
+                                      const uint32_t *ids, const uint32_t *end, unsigned depth) {
+    if (!node || node == head || !depth) return;
+    const uint32_t *id = ids;
+    while (id != end && *id != FIELD(node, 0x10)) ++id;
+    void *row = (void *)FIELD(node, 0x14);
+    if (id == end && row && (*(uint8_t *)((uintptr_t)row + 0x4c) & 2u))
+        boss_visible(row, 0, delta);
+    hide_replaced_rows(delta, head, FIELD(node, 0), ids, end, depth-1);
+    hide_replaced_rows(delta, head, FIELD(node, 8), ids, end, depth-1);
+}
+
+BOSS_UI static void practice_roster(uint32_t delta, Sandbox *s, const uint32_t *ids, const uint32_t *end) {
+    if (!s->team_panels[1].control || !s->team_panels[3].control)
+        bind_team_panels(delta, s);
+    for (unsigned i = 1; i < 4; i += 2) {
+        uint32_t head = team_row_map(delta, s->team_panels[i].control);
+        if (head) hide_replaced_rows(delta, head, FIELD(head, 4), ids, end, 32);
     }
 }
 
@@ -1940,6 +2549,8 @@ BOSS_UI static void temporal_roster(uint32_t delta, Sandbox *s, uint32_t entity)
 BOSS_UI static void bind_battle_controls(uint32_t delta, Sandbox *s, void *root) {
     if (s->battle_controls_root == root) return;
     s->battle_controls_root = root;
+    s->aim_time_label = find_control(root, "SolAimTime", delta);
+    s->aim_tenths = 0;
     s->temporal_panel = find_control(root, "SolTimeHUD", delta);
     s->temporal_label = s->temporal_panel ? find_control(s->temporal_panel, "SolTimeValue", delta) : 0;
     s->temporal_hud = 0;
@@ -2021,10 +2632,12 @@ BOSS_UI static void boss_respawn_menu(void *menu, uint32_t delta) {
     s->swap_sent = s->swap_value ? picker_value(s->swap_value, delta) : 0;
     boss_visible(swap_button, s->swap_value != 0, delta);
     boss_visible(button, s->role_state == 1, delta);
+    bind_target_picker(delta, s, menu);
 }
 
 BOSS_UI static void boss_picker_update(uint32_t delta, Sandbox *s) {
     typedef int16_t (STDCALL *Key)(int);
+    update_target_picker(delta, s);
     if (s->swap_value && picker_value(s->swap_value, delta) != s->swap_sent &&
             send_control_value(delta, s, CHANGE_TANK, (Vector){0, 0, 0}, 0)) {
         typedef void (THISCALL *Close)(void *);
@@ -2092,8 +2705,10 @@ void THISCALL sandbox_blur_slider(void *slider, void *event) {
     ((Input)(0xb7dd20u + delta))(slider, event);
     if (!event || (FIELD(event, 0x38) != 1 && FIELD(event, 0x38) != 2 &&
                    FIELD(event, 0x38) != 3)) return;
-    void *label = find_control(slider, "SolbreakerBlurPercent", delta);
+    if (setup_slider(delta, slider, FIELD(event, 0x38))) return;
     Sandbox *s = state(delta, 0);
+    if (stats_slider(delta,s,slider,FIELD(event, 0x38))) return;
+    void *label = find_control(slider, "SolbreakerBlurPercent", delta);
     if (!label || !s || s->graphics_thread != thread_id()) return;
     float value = *(float *)((uintptr_t)slider + 0x15c);
     if (!(value >= 0 && value <= 100)) return;
@@ -2105,3 +2720,532 @@ void THISCALL sandbox_blur_slider(void *slider, void *event) {
         s->blur_percent = percent;
     update_blur_label(label, percent, delta);
 }
+
+__attribute__((section(".late_sandbox"), noinline))
+static void setup_save_description(uint32_t delta, void *view, NativeString *description) {
+    Sandbox *s = state(delta, 0);
+    if (!s || !s->setup.identity || description->size > 250) return;
+    void *identity = find_control((void *)FIELD(view, 4), "**/SolSetupIdentity", delta);
+    if (identity != s->setup.identity) return;
+    static const char marker[] BOSS_DATA = "/custom1/";
+    static const char hex[] BOSS_DATA = "0123456789abcdef";
+    const char *original = room_text(description);
+    char output[250+sizeof(marker)+2*sizeof(SetupProfile)];
+    uint32_t length = 0;
+    for (; length < description->size; ++length) output[length] = original[length];
+    for (unsigned i = 0; i < sizeof(marker)-1; ++i) output[length++] = marker[i];
+    const uint8_t *bytes = (const uint8_t *)&s->setup.profile;
+    for (unsigned i = 0; i < sizeof(SetupProfile); ++i) {
+        output[length++] = hex[bytes[i] >> 4];
+        output[length++] = hex[bytes[i] & 15];
+    }
+    typedef void (THISCALL *Assign)(NativeString *, const char *, uint32_t);
+    ((Assign)(0x6a4ef0u + delta))(description, output, length);
+
+}
+
+static const char room_lineup_marker[] BOSS_DATA = "[lineup ";
+static const char setup_hex_digits[] BOSS_DATA = "0123456789abcdef";
+
+__attribute__((section(".late_sandbox"), noinline))
+static const char *setup_read_room_tag(const char *text, RoomLineup *lineup) {
+    if (!room_prefix(text, room_lineup_marker)) return text;
+    const char *cursor = text + sizeof(room_lineup_marker)-1;
+    RoomLineup decoded;
+    uint8_t *bytes = (uint8_t *)&decoded;
+    for (unsigned i = 0; i < sizeof(decoded); ++i) {
+        unsigned value = 0;
+        for (unsigned digit = 0; digit < 2; ++digit) {
+            unsigned j = 0;
+            while (j < 16 && setup_hex_digits[j] != *cursor) ++j;
+            if (j == 16) return text;
+            value = 16*value + j;
+            ++cursor;
+        }
+        bytes[i] = value;
+    }
+    if (decoded.custom > 1 || *cursor != ']') return text;
+    if (lineup) *lineup = decoded;
+    ++cursor;
+    return *cursor == ' ' ? cursor+1 : cursor;
+}
+
+__attribute__((section(".late_sandbox"), noinline))
+static void setup_load_room(uint32_t delta, void *view, RoomLineup lineup, int bots1, int bots2) {
+    void *form = (void *)FIELD(view, 4);
+    void *identity = form ? find_control(form, "**/SolSetupIdentity", delta) : 0;
+    if (!identity) return;
+    Sandbox *s = state(delta, 1);
+    if (!s) return;
+    SetupEditor *e = &s->setup;
+    e->room_identity = identity;
+    if (bots1 >= 0) {
+        lineup.custom = 0;
+        for (unsigned i = 0; i < 14; ++i) {
+            unsigned count = i < 7 ? (unsigned)bots1 : (unsigned)bots2;
+            lineup.slots[i] = i%7 < count ? 0 : UINT32_MAX;
+        }
+    }
+    e->lineup = lineup;
+}
+
+__attribute__((section(".late_sandbox"), noinline))
+static unsigned setup_room_tag(uint32_t delta, void *view, char *output) {
+    Sandbox *s = state(delta, 0);
+    void *form = (void *)FIELD(view, 4);
+    if (!s || !s->setup.room_identity || !form ||
+        find_control(form, "**/SolSetupIdentity", delta) != s->setup.room_identity) return 0;
+    unsigned length = 0;
+    for (; length < sizeof(room_lineup_marker)-1; ++length)
+        output[length] = room_lineup_marker[length];
+    const uint8_t *bytes = (const uint8_t *)&s->setup.lineup;
+    for (unsigned i = 0; i < sizeof(RoomLineup); ++i) {
+        output[length++] = setup_hex_digits[bytes[i] >> 4];
+        output[length++] = setup_hex_digits[bytes[i] & 15];
+    }
+    output[length++] = ']';
+    output[length++] = ' ';
+    return length;
+}
+
+static unsigned setup_slot_index(const SetupEditor *e, unsigned index) {
+    return !e->room ? index : index == 13 ? 0 : index+1;
+}
+
+static uint32_t setup_get_slot(const SetupEditor *e, unsigned index) {
+    return e->room ? e->lineup.slots[index] : e->profile.slots[index];
+}
+
+static void setup_set_slot(SetupEditor *e, unsigned index, uint32_t value) {
+    if (e->room) e->lineup.slots[index] = value;
+    else e->profile.slots[index] = value;
+}
+
+__attribute__((section(".late_sandbox"), noinline))
+static void *setup_body(uint32_t delta, void *form, const char *name) {
+    void *panel = find_control(form, name, delta);
+    return panel ? find_control(panel, "Middle/VerticalBox", delta) : 0;
+}
+
+__attribute__((section(".late_sandbox"), noinline))
+static void setup_panel(uint32_t delta, void *form, unsigned which) {
+    static const char names[][20] BOSS_DATA = {"SolSetupRoster", "SolSetupSlot", "SolSetupPresets",
+                                              "SolTargetPicker", "SolTargetModules"};
+    for (unsigned i = 0; i < sizeof(names)/sizeof(*names); ++i)
+        boss_visible(find_control(form, names[i], delta), i+1 == which, delta);
+}
+
+__attribute__((section(".late_sandbox"), noinline))
+static void setup_roster_labels(uint32_t delta, void *form, SetupEditor *editor) {
+    void *body = setup_body(delta, form, "SolSetupRoster");
+    if (!body) return;
+    boss_visible(find_control(body, "AlliesSelected", delta), !editor->team, delta);
+    boss_visible(find_control(body, "EnemiesSelected", delta), editor->team, delta);
+    boss_visible(find_control(body, "YourTank", delta), !editor->team && !editor->room, delta);
+    boss_visible(find_control(body, "FillAllies", delta), !editor->team, delta);
+    boss_visible(find_control(body, "FillEnemies", delta), editor->team, delta);
+    target_text(delta, find_control(body, "Allies/Caption", delta),
+                editor->room ? "Local/SbSetupTeam1" : "Local/SbSetupAllies", 1);
+    target_text(delta, find_control(body, "Enemies/Caption", delta),
+                editor->room ? "Local/SbSetupTeam2" : "Local/SbSetupEnemies", 1);
+    unsigned custom = editor->room ? editor->lineup.custom : editor->profile.custom;
+    target_text(delta, find_control(body, "Mode/Caption", delta),
+                custom ? "Local/SbSetupCustom" : "Local/SbSetupAuto", 1);
+    TargetPicker *p = &editor->picker;
+    int loaded = target_catalog(delta, p);
+    char path[] = "Slot00";
+    for (unsigned i = 0; i < 14; ++i) {
+        path[4] = '0' + i/10;
+        path[5] = '0' + i%10;
+        void *button = find_control(body, path, delta);
+        int show = ((i >= 6 && i < 13) == editor->team) && (i != 13 || editor->room);
+        boss_visible(button, show, delta);
+        if (!show || !button) continue;
+        uint32_t value = setup_get_slot(editor, setup_slot_index(editor, i));
+        const char *key = value == UINT32_MAX ? "Local/SbSetupEmpty" :
+            value == 0 ? "Local/SbSetupAutomatic" : "Local/SbSetupRandom";
+        if (loaded && (value & 15) == 1) {
+            for (unsigned j = 0; j < p->catalog->count; ++j) {
+                const PickerEntry *row = &p->catalog->entry[j];
+                if (row->id == (value & 65535) && !row->key[sizeof(row->key)-1]) {
+                    key = row->key;
+                    break;
+                }
+            }
+        }
+        target_text(delta, find_control(button, "Caption", delta), key, 1);
+    }
+}
+
+__attribute__((section(".late_sandbox"), noinline))
+static void setup_slot_labels(uint32_t delta, void *form, SetupEditor *editor) {
+    void *body = setup_body(delta, form, "SolSetupSlot");
+    if (!body) return;
+    char kind[] = "Local/SbSetupClass0";
+    kind[sizeof(kind)-2] += editor->kind;
+    target_text(delta, find_control(body, "Class/Caption", delta), kind, 1);
+    char number[] = "10";
+    const unsigned value = editor->tier;
+    if (value < 10) {
+        number[0] = '0' + value;
+        number[1] = 0;
+    }
+    target_text(delta, find_control(body, "Tier/Caption", delta),
+                value ? number : "Local/SbSetupTierAny", !value);
+}
+
+static const char setup_stat_names[TANK_STAT_COUNT][10] BOSS_DATA = {
+    "Boost", "Reload", "Aim", "Accuracy", "Turret", "Hull", "Damage", "Health", "Brake", "Reverse", "Grip"
+};
+
+__attribute__((section(".late_sandbox"), noinline))
+static void *setup_stat_control(uint32_t delta, void *body, unsigned index, const char *suffix) {
+    char name[16];
+    unsigned n = 0;
+    while (setup_stat_names[index][n]) {
+        name[n] = setup_stat_names[index][n];
+        ++n;
+    }
+    unsigned j = 0;
+    do { name[n+j] = suffix[j]; } while (suffix[j++]);
+    return find_control(body, name, delta);
+}
+
+__attribute__((section(".late_sandbox"), noinline))
+static void setup_preset_labels(uint32_t delta, void *form, SetupEditor *editor) {
+    void *body = setup_body(delta, form, "SolSetupPresets");
+    if (!body) return;
+    unsigned selected = editor->preset;
+    unsigned on = editor->profile.active == selected+1;
+    target_text(delta, find_control(body, "State", delta),
+                on ? "Local/SbSetupPresetOn" : "Local/SbSetupPresetOff", 1);
+    target_text(delta, find_control(body, "Activate/Caption", delta),
+                on ? "Local/SbSetupDeactivate" : "Local/SbSetupActivate", 1);
+    target_text(delta, find_control(body, "Bots/Caption", delta),
+                editor->profile.values[selected][TANK_STAT_COUNT] ?
+                "Local/SbSetupBotsOn" : "Local/SbSetupBotsOff", 1);
+    char path[] = "Preset0/Caption";
+    for (unsigned i = 0; i < 4; ++i) {
+        path[6] = '0'+i;
+        char number[] = {'1'+i, 0, 0, 0};
+        if (selected == i) {
+            number[0] = '[';
+            number[1] = '1'+i;
+            number[2] = ']';
+        }
+        target_text(delta, find_control(body, path, delta), number, 0);
+    }
+    char group[] = "StatsGroup0";
+    for (unsigned i = 0; i < 3; ++i) {
+        group[sizeof(group)-2] = '0'+i;
+        boss_visible(find_control(body, group, delta), i == editor->stat_group, delta);
+    }
+    static const uint8_t groups[TANK_STAT_COUNT] BOSS_DATA = {1, 0, 0, 0, 0, 1, 0, 2, 1, 1, 1};
+    for (unsigned i = 0; i < TANK_STAT_COUNT; ++i) {
+        int show = groups[i] == editor->stat_group;
+        unsigned value = editor->profile.values[selected][i];
+        void *slider = find_control(body, setup_stat_names[i], delta);
+        boss_visible(slider, show, delta);
+        if (show && slider) {
+            *(float *)((uintptr_t)slider + 0x15c) = (float)value;
+            ((void (THISCALL *)(void *))(0xb85e10u + delta))(slider);
+        }
+        void *label = setup_stat_control(delta, body, i, "Value");
+        boss_visible(setup_stat_control(delta, body, i, "Label"), show, delta);
+        boss_visible(label, show, delta);
+        if (show && label) update_blur_label(label, value, delta);
+    }
+}
+
+__attribute__((section(".late_sandbox"), noinline))
+static void setup_assign(uint32_t delta, void *form, SetupEditor *e, uint32_t value) {
+    if (e->room) e->lineup.custom = 1;
+    else e->profile.custom = 1;
+    setup_set_slot(e, e->slot, value);
+    setup_roster_labels(delta, form, e);
+    setup_panel(delta, form, 1);
+}
+
+__attribute__((section(".late_sandbox"), noinline))
+static void setup_catalog_event(uint32_t delta, void *form, SetupEditor *e, unsigned action) {
+    TargetPicker *p = &e->picker;
+    if (action == 52) {
+        setup_panel(delta, form, 2);
+        return;
+    }
+    if (p->module_entry && action >= 16 && action < 38) {
+        if (action == 16) {
+            p->module_entry = 0;
+            setup_panel(delta, form, 4);
+        } else if (action == 17) {
+            uint32_t value = p->module_entry->id;
+            for (unsigned slot = 0; slot < PICKER_SLOTS; ++slot)
+                value |= p->module_selected[slot] << (16+4*slot);
+            p->module_entry = 0;
+            setup_assign(delta, form, e, value);
+        } else {
+            unsigned slot = (action-18)/MODULE_COLUMNS, column = (action-18)%MODULE_COLUMNS;
+            if (column < target_modules(p, slot, 0)) {
+                p->module_selected[slot] = column;
+                if (slot == 1) p->module_selected[2] = 0;
+                target_render_modules(delta, p);
+            }
+        }
+        return;
+    }
+    if (!p->search || !target_catalog(delta, p)) return;
+    int changed = target_query(delta, p);
+    if (action >= 5 && action <= 7) {
+        static const unsigned sizes[] BOSS_DATA = {10, 11, 5};
+        unsigned i = action-5;
+        p->selected[i] = (p->selected[i]+1) % sizes[i];
+        changed = 1;
+    }
+    if (changed) target_collect(p);
+    if (action == 3 && p->page) --p->page;
+    if (action == 4 && (p->page+1)*PICKER_ROWS < p->count) ++p->page;
+    if (action >= 8 && action < 16 && !changed) {
+        unsigned index = p->page*PICKER_ROWS + action-8;
+        if (index < p->count) {
+            p->module_entry = &p->catalog->entry[p->matches[index]];
+            __builtin_memset(p->module_selected, 0, sizeof(p->module_selected));
+            target_text(delta, p->module_vehicle, p->module_entry->key, 1);
+            target_render_modules(delta, p);
+            setup_panel(delta, form, 5);
+            return;
+        }
+    }
+    target_render(delta, p);
+}
+
+__attribute__((section(".late_sandbox"), noinline))
+static int setup_slider(uint32_t delta, void *slider, unsigned phase) {
+    void *marker = find_control(slider, "SolSetupAction", delta);
+    if (!marker) return 0;
+    void *form = slider, *identity = 0;
+    for (unsigned depth = 0; form && depth < 18 && !identity; ++depth) {
+        form = (void *)FIELD(form, 0x38);
+        if (form) identity = find_control(form, "SolSetupIdentity", delta);
+    }
+    if (!identity) return 1;
+    Sandbox *s = state(delta, 1);
+    if (!s) return 1;
+    SetupEditor *e = &s->setup;
+    unsigned action = picker_value(marker, delta);
+    if (phase == 3 && (action == 101 || action == 103 || action == 106)) {
+        e->room = action == 106;
+        e->picker.module_entry = 0;
+        if (e->room && e->room_identity != identity) {
+            e->room_identity = identity;
+            e->lineup.custom = 0;
+            for (unsigned i = 0; i < 14; ++i) e->lineup.slots[i] = UINT32_MAX;
+        }
+    }
+    if (!e->room && e->identity != identity) {
+        e->identity = identity;
+        __builtin_memset(&e->profile, 0, sizeof(e->profile));
+        e->preset = e->profile.active ? e->profile.active-1 : 0;
+        e->picker.module_entry = 0;
+    }
+    if (action >= 180 && action < 180+TANK_STAT_COUNT) {
+        const unsigned index = action-180;
+        float raw = *(float *)((uintptr_t)slider + 0x15c);
+        if (raw >= 0 && raw <= 100) {
+            unsigned value = (unsigned)(raw+.5f);
+            if (phase == 3) e->profile.values[e->preset][index] = value;
+            void *body = setup_body(delta, form, "SolSetupPresets");
+            void *label = body ? setup_stat_control(delta, body, index, "Value") : 0;
+            if (label) update_blur_label(label, value, delta);
+        }
+        return 1;
+    }
+    if (phase != 3) return 1;
+    if (action == 101 || action == 106) {
+        setup_roster_labels(delta, form, e);
+        setup_panel(delta, form, 1);
+    } else if (action == 103) {
+        setup_preset_labels(delta, form, e);
+        setup_panel(delta, form, 3);
+    } else if (action == 102) {
+        setup_panel(delta, form, 0);
+    } else if (action == 100) {
+        if (e->room) e->lineup.custom ^= 1;
+        else e->profile.custom ^= 1;
+        setup_roster_labels(delta, form, e);
+    } else if (action == 104 || action == 105) {
+        unsigned split = e->room ? 7 : 6;
+        unsigned start = action == 104 ? 0 : split;
+        unsigned end = action == 104 ? split : split+7;
+        for (unsigned i = start; i < end; ++i) setup_set_slot(e, i, 2);
+        if (e->room) e->lineup.custom = 1;
+        else e->profile.custom = 1;
+        setup_roster_labels(delta, form, e);
+    } else if (action == 115 || action == 116) {
+        e->team = action-115;
+        setup_roster_labels(delta, form, e);
+    } else if (action >= 120 && action <= 132+(e->room != 0)) {
+        e->slot = setup_slot_index(e, action-120);
+        uint32_t value = setup_get_slot(e, e->slot);
+        unsigned random = (value & 15) == 2;
+        e->tier = random ? (value>>4)&15 : 0;
+        e->kind = random ? (value>>8)&15 : 0;
+        if (e->tier > 10) e->tier = 0;
+        if (e->kind > 4) e->kind = 0;
+        setup_slot_labels(delta, form, e);
+        setup_panel(delta, form, 2);
+    } else if (action == 109) {
+        TargetPicker *p = &e->picker;
+        p->panel = find_control(form, "SolTargetPicker", delta);
+        p->modules_panel = find_control(form, "SolTargetModules", delta);
+        if (p->panel && p->modules_panel && bind_picker_controls(delta,p)) {
+            p->module_entry = 0;
+            target_catalog(delta, p);
+            target_query(delta,p);
+            target_collect(p);
+            target_render(delta,p);
+            setup_panel(delta, form, 4);
+        }
+    } else if (action == 110 || action == 111) {
+        if (action == 110) e->tier = (e->tier+1) % 11;
+        else e->kind = (e->kind+1) % 5;
+        setup_slot_labels(delta, form, e);
+    } else if (action == 108 || action == 112 || action == 113) {
+        uint32_t value = action == 108 ? 0 : action == 113 ? UINT32_MAX :
+                         2 | e->tier<<4 | e->kind<<8;
+        setup_assign(delta, form, e, value);
+    } else if (action == 114) {
+        setup_panel(delta, form, 1);
+    } else if (action >= 140 && action <= 147) {
+        if (action < 144) e->preset = action-140;
+        else if (action == 145) e->profile.active = e->profile.active == e->preset+1 ? 0 : e->preset+1;
+        else if (action == 146) e->profile.values[e->preset][TANK_STAT_COUNT] ^= 1;
+        else if (action == 147)
+            __builtin_memset(e->profile.values[e->preset], 0, sizeof(e->profile.values[e->preset]));
+        setup_preset_labels(delta, form, e);
+    } else if (action >= 150 && action <= 152) {
+        e->stat_group = action-150;
+        setup_preset_labels(delta, form, e);
+    } else {
+        setup_catalog_event(delta, form, e, action);
+    }
+    return 1;
+}
+
+__attribute__((section(".late_sandbox"), used, noinline))
+static void setup_receive(void *view, uint32_t index, uint32_t word) {
+    uint32_t delta = sandbox_delta();
+    if (!view) return;
+    void *form = (void *)FIELD(view, 4);
+    void *identity = form ? find_control(form, "**/SolSetupIdentity", delta) : 0;
+    if (!identity) return;
+    Sandbox *s = state(delta, 1);
+    if (!s) return;
+    SetupEditor *e = &s->setup;
+    if (!index) {
+        __builtin_memset(&e->profile, 0, sizeof(e->profile));
+        e->identity = identity;
+        e->received = 0;
+        e->picker.module_entry = 0;
+    }
+    if (e->identity != identity || index != e->received) return;
+    unsigned offset = index*4;
+    uint8_t *data = (uint8_t *)&e->profile;
+    for (unsigned i = 0; i < 4 && offset+i < sizeof(SetupProfile); ++i)
+        data[offset+i] = word >> (8*i);
+    ++e->received;
+    if (e->received == (sizeof(SetupProfile)+3)/4) {
+        if (e->profile.active > 4 || e->profile.custom > 1)
+            __builtin_memset(&e->profile, 0, sizeof(e->profile));
+        e->preset = e->profile.active ? e->profile.active-1 : 0;
+    }
+}
+
+/* Original frame at the pinned bot-settings response trampoline. */
+__asm__(
+    ".section .late_sandbox,\"ax\"\n"
+    ".globl sandbox_setup_reply\n"
+    "sandbox_setup_reply:\n"
+    "cmpl $130, 12(%ebp)\n"
+    "jb 1f\n"
+    "cmpl $155, 12(%ebp)\n"
+    "ja 1f\n"
+    "pushal\n"
+    "movl 12(%ebp), %eax\n"
+    "subl $130, %eax\n"
+    "pushl 8(%ebp)\n"
+    "pushl %eax\n"
+    "pushl 0x178(%esi)\n"
+    "call setup_receive\n"
+    "addl $12, %esp\n"
+    "popal\n"
+    "jmp 0x1e92bcc\n"
+    "1: cmpl $127, 12(%ebp)\n"
+    "je 0x4b1de82\n"
+    "jmp 0x4b1de6a\n"
+    ".text\n");
+
+
+/* SmartZoom is a native keyboard/mouse preference, saved per prepared client. */
+static const char zoom_path[] BOSS_DATA = "..\\documents\\solbreaker-sniper-zoom.bin";
+static const char zoom_temp[] BOSS_DATA = "..\\documents\\solbreaker-sniper-zoom.tmp";
+
+__attribute__((section(".late_sandbox"), noinline))
+void THISCALL sandbox_zoom_changed(void *toggle, unsigned event, void *input) {
+    uint32_t delta = sandbox_delta();
+    typedef void (THISCALL *SendEvent)(void *, unsigned, void *);
+    void *parent = (void *)FIELD(toggle, 0x38);
+    void *row = parent ? (void *)FIELD(parent, 0x38) : 0;
+    if (row) {
+        const char *name = (const char *)FIELD(row, 0x30);
+        const char key[] = "SmartZoom";
+        unsigned i = 0;
+        if (name) {
+            while (key[i] && name[i] == key[i]) ++i;
+            if (!key[i] && !name[i]) {
+                uint8_t value = *(uint8_t *)((uintptr_t)toggle + 0x14c);
+                /* The checkbox uses the inverse of the stored SmartZoom option. */
+                if (value <= 1) {
+                    value ^= 1;
+                    write_setting(delta, zoom_path, zoom_temp, &value, sizeof(value));
+                }
+            }
+        }
+    }
+    ((SendEvent)(0xb84750u + delta))(toggle, event, input);
+}
+
+__attribute__((section(".late_sandbox"), used, noinline))
+static unsigned zoom_restore(unsigned fallback) {
+    uint8_t value;
+    return read_setting(sandbox_delta(), zoom_path, &value, sizeof(value)) && value <= 1
+           ? value : fallback;
+}
+
+__attribute__((section(".late_sandbox"), used, noinline))
+static int zoom_migrate(void *options) {
+    unsigned value = zoom_restore(2);
+    if (value > 1) return 0;
+    uint32_t delta = sandbox_delta();
+    NativeString key = {"SmartZoom", 9, 15};
+    typedef void (THISCALL *Set)(void *, const NativeString *, unsigned);
+    ((Set)(0x123cbb0u + delta))(options, &key, value);
+    return 1;
+}
+
+__asm__(
+    ".section .late_sandbox,\"ax\"\n"
+    ".globl sandbox_zoom_migration\n"
+    "sandbox_zoom_migration:\n"
+    "pushal\n"
+    "pushl %edi\n"
+    "call zoom_migrate\n"
+    "addl $4, %esp\n"
+    "testl %eax, %eax\n"
+    "jz 1f\n"
+    "movb $0, -0x5d(%ebp)\n"
+    "1: popal\n"
+    "cmpb $0, -0x5d(%ebp)\n"
+    "movl $0, -0x18(%ebp)\n"
+    "jmp 0x1237313\n"
+    ".text\n"
+);

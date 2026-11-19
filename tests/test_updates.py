@@ -120,6 +120,21 @@ class UpdateTests(unittest.TestCase):
         self.assertEqual((self.root/'runtime/manager.json').read_bytes(), b'user preferences')
         self.assertEqual((self.root/'data/private/accounts.db').read_bytes(), b'user data')
 
+    def test_adopts_an_identical_unmanaged_file_and_protects_a_different_one(self):
+        self.stage_update()
+        path = self.root/'tools/install_dependencies.py'
+        path.parent.mkdir(exist_ok=True)
+        path.write_bytes(b'own')
+        with patch.object(updates.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0)) as run:
+            with self.assertRaisesRegex(ValueError, 'Update conflicts with a local file'):
+                updates.replace_release(self.root, self.stage, portable=False)
+            run.assert_not_called()
+            self.assertEqual(path.read_bytes(), b'own')
+            path.write_bytes(self.next['tools/install_dependencies.py'])
+            updates.replace_release(self.root, self.stage, portable=False)
+        self.assertEqual(path.read_bytes(), self.next['tools/install_dependencies.py'])
+        self.assertIn('tools/install_dependencies.py', updates.manifest((self.root/updates.CHECKSUMS).read_text()))
+
     def test_failed_dependency_install_restores_the_previous_release(self):
         self.stage_update()
         with patch.object(updates.subprocess, 'run', side_effect=[

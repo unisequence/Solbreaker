@@ -23,6 +23,18 @@ def battle_framebuffer(source):
     patch_boss_screen(document)
     root, = document['Prototypes']
     patch_hud(root)
+    root['children'].insert(-1, {
+        'class': 'UIStaticText', 'name': 'SolAimTime', 'input': False, 'visible': False,
+        'size': [64., 26.],
+        'components': {
+            'Anchor': {'hCenterAnchorEnabled': True, 'vCenterAnchorEnabled': True, 'vCenterAnchor': -104.},
+            'UITextComponent': {
+                'text': '0.0', 'fontPath': '~res:/Fonts/WarHeliosCondCBold.ttf', 'fontSize': 16.,
+                'align': ['HCENTER', 'VCENTER'], 'color': [.12, .12, .12, .94],
+                'shadowColor': [1., 1., 1., .6], 'shadowOffset': [0., -1.],
+            },
+        },
+    })
     scene, = (node for node in _walk(root) if node.get('class') == 'UI3DView' and node.get('name') == 'Scene')
     scene['components'].setdefault('SceneComponent', {})['drawToFramebuffer'] = True
     return dvpl.encode(yaml.safe_dump(document, sort_keys=False).encode())

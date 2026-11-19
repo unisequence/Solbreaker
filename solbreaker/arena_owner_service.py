@@ -91,6 +91,7 @@ class ArenaOwnerService:
             space_id=arena.space_id, entity_base=arena.entity_base,
             recon_enabled=getattr(self.endpoint.server, 'recon_enabled', False),compact_inputs=True,
             bot_roster=arena.bot_roster, bot_scene_settings=arena.bot_scene_settings,
+            custom_bot_slots=arena.custom_bot_slots,
             prebattle_seconds=arena.prebattle_seconds,
             sandbox_enabled=arena.sandbox_enabled,
             room_mode=arena.room_mode, room_settings=arena.room_settings,
@@ -281,6 +282,7 @@ class ArenaOwnerService:
             arena.owner_training_reentry = state.get('training_reentry', False)
             if getattr(arena, 'practice', False):
                 arena.practice_spawned = set(state['practice_spawned'])
+                arena.practice_client_ids = dict(state.get('practice_client_ids', {}))
             capture = getattr(arena, 'base_capture', None)
             view = state.get('base_capture')
             if capture is not None and view is not None:

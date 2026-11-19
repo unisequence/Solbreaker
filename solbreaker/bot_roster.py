@@ -5,6 +5,7 @@ than constructing every garage vehicle, and never changes a player's loadout.
 The returned definitions are the recipe: parent and owner must share it instead
 of drawing two independent rosters.
 """
+from collections import Counter
 from dataclasses import dataclass
 from functools import lru_cache
 import math
@@ -15,7 +16,7 @@ import xml.etree.ElementTree as ET
 
 from .dvpl import read
 from .roster import TEAMS, TEAM_SIZE, validate_teams
-from .vehicle_data import VehicleDefinition, load_vehicle
+from .vehicle_data import VehicleConfiguration, VehicleDefinition, load_vehicle
 
 
 BOT_NICKNAMES = (
@@ -29,8 +30,8 @@ BOT_NICKNAMES = (
     'CopperComet_bot', 'RockyFalcon_bot', 'MidnightLynx_bot', 'SilverBison_bot',
 )
 
-MAX_ALTERNATE_TYPES = 4
-MAX_LOAD_ATTEMPTS = 24
+MAX_LOAD_ATTEMPTS = 40
+TOP, MOBILITY, GUN = range(3)
 BOT_SCENE_FIELDS = ('internal_geometry', 'engine_spec', 'ammo_rack_spec',
                     'fuel_tank_spec', 'fire_policy', 'fire_min_damage',
                     'crew_specs', 'crew_bindings')
@@ -46,6 +47,7 @@ class BotVehicle:
     slot: int
     definition: VehicleDefinition
     vehicle_class: str | None
+    sandbox_preset: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,9 +94,9 @@ def _catalog(game):
 
 @lru_cache(maxsize=64)
 def _geometry_supported(game, definition):
-    """Check the exact stock configuration before sharing a frozen recipe.
+    """Check the exact module configuration before sharing a frozen recipe.
 
-    ArmorModel also validates collision materials, which asset existence alone
+    ArmorModel validates collision materials, which asset existence alone
     cannot establish. Only its verdict is retained, never meshes or a scene.
     The selected human vehicle does not pass through this NPC admission path.
     """
@@ -106,14 +108,10 @@ def _geometry_supported(game, definition):
     return True
 
 
-@lru_cache(maxsize=64)
-def stock_vehicle(game, nation, name):
-    # Public loading refuses unsupported mechanics and validates the matching
-    # descriptor, ammunition and existence of its own visual/collision assets.
-    # Cache failures as well, so an unsupported candidate is not retried in
-    # every subsequent battle. No CollisionScene or Bullet world is cached here.
+@lru_cache(maxsize=96)
+def _supported_vehicle(game, nation, name, configuration=None):
     try:
-        definition = load_vehicle(game, nation, name)
+        definition = load_vehicle(game, nation, name, configuration)
     except (OSError, ValueError, ET.ParseError):
         return None
     values = (definition.drive.forward, definition.drive.reverse,
@@ -121,14 +119,50 @@ def stock_vehicle(game, nation, name):
     if (any(not math.isfinite(value) or value <= 0 for value in values)
             or not definition.weapon.shells or definition.armor_states_controller is not None):
         return None
-    if not _geometry_supported(game, definition):
-        return None
-    return definition
+    return definition if _geometry_supported(game, definition) else None
+
+
+def stock_vehicle(game, nation, name):
+    return _supported_vehicle(game, nation, name)
+
+
+def _module_index(modules, upgrade):
+    # XML level breaks ties between alternate branch options. Declaration
+    # order is the fallback for equal levels and older entries with no level.
+    return max(range(len(modules)), key=lambda i: (modules[i].level, i)) if upgrade else 0
+
+
+@lru_cache(maxsize=128)
+def _bot_configuration(game, nation, name, grade):
+    from .practice_catalog import Target, modules
+
+    choices = modules(game, Target(0, nation, name, '', None, None, True))
+    combat = grade != MOBILITY
+    mobility = grade != GUN
+    turret = _module_index(choices.turrets, combat)
+    return VehicleConfiguration(
+        chassis=choices.chassis[_module_index(choices.chassis, mobility)].tag,
+        turret=choices.turrets[turret].tag,
+        gun=choices.guns[turret][_module_index(choices.guns[turret], combat)].tag,
+        engine=choices.engines[_module_index(choices.engines, mobility)].tag)
+
+
+@lru_cache(maxsize=96)
+def _bot_vehicle(game, nation, name, grade):
+    for version in dict.fromkeys((grade, TOP)):
+        try:
+            configuration = _bot_configuration(game, nation, name, version)
+        except (OSError, ValueError, IndexError, ET.ParseError):
+            break
+        tank = _supported_vehicle(game, nation, name, configuration)
+        if tank is not None:
+            return tank
+    return stock_vehicle(game, nation, name)
 
 
 def _dpm(definition):
     weapon = definition.weapon
-    # A stock gun's first loaded shell is its normal ammunition. Clip and
+    # The first loaded shell is the gun's normal ammunition. Clip and
     # burst timing stay the XML values; this is a selection estimate only.
     shells = max(1, weapon.clip)
     burst = max(1, weapon.burst_count)
@@ -138,15 +172,17 @@ def _dpm(definition):
     return weapon.shells[0].damage*shells*60/cycle
 
 
-def _counterpart(player, definition):
-    """A conservative stock alternative for a one-opponent battle."""
-    player_values = player.health, _dpm(player), player.weapon.shells[0].penetration[0]
-    candidate_values = definition.health, _dpm(definition), definition.weapon.shells[0].penetration[0]
-    if any(not math.isfinite(value) or value <= 0 for value in (*player_values, *candidate_values)):
-        return False
-    health, firepower, penetration = (a/b for a, b in zip(candidate_values, player_values))
-    return (.75 <= health <= 4/3 and .5 <= firepower <= 2.
-            and .65 <= penetration <= 1.5)
+def _combat_difference(left, right):
+    if left is None:
+        return 0.
+    lhs = left.health, _dpm(left), left.weapon.shells[0].penetration[0]
+    rhs = right.health, _dpm(right), right.weapon.shells[0].penetration[0]
+    return sum(weight * abs(math.log(a/b)) for a, b, weight in zip(lhs, rhs, (1., .7, .5))
+               if a > 0 and b > 0)
+
+
+def _role(vehicle_class):
+    return 'mobile' if vehicle_class in ('mediumTank', 'lightTank') else vehicle_class
 
 
 def vehicle_class(game, definition):
@@ -170,99 +206,128 @@ def _vehicle_classes(game, nation):
     return result
 
 
-def select_bot_roster(game, player_definition, *, enemies, allies, seed):
-    """Return enemies first (slots0..), followed by allies (slots1..).
-
-    Equal-sized teams get an exact counterpart of the selected player and
-    matching pairs of sampled stock tanks. Their aggregate tiers, classes,
-    health and gun definitions therefore match, including the player's actual
-    installed modules. This is composition balance, not a claim of equal skill.
-
-    A lone enemy instead prefers a different, comparable tank of the same tier
-    and class. Unknown/custom players and unsupported catalogs keep the old
-    clone behavior. Unequal team sizes remain the user's requested handicap.
-    """
-    if (type(enemies) is not int or not 1 <= enemies <= TEAM_SIZE
-            or type(allies) is not int or not 0 <= allies < TEAM_SIZE
-            or type(seed) not in (int, str, bytes)):
-        raise ValueError('Invalid bot roster request')
+def _balanced_roster(game, humans, bot_counts, seed):
     game = Path(game)
+    rng = random.Random(seed)
     try:
         catalog = _catalog(game)
     except (OSError, ValueError, ET.ParseError):
         catalog = ()
-    key = player_definition.nation, player_definition.name
-    own = next((item for item in catalog if item.key == key
-                and item.tier == player_definition.tier), None)
-    own_class = own.vehicle_class if own is not None else None
-    randomizer = random.Random(seed)
+    classes = {item.key: item.vehicle_class for item in catalog}
+    used = Counter((tank.nation, tank.name) for team in TEAMS for tank in humans[team])
+    fallback = next(tank for team in TEAMS for tank in humans[team])
+    anchor_tiers = {tank.tier for team in TEAMS for tank in humans[team]}
+    pool = [item for item in catalog if item.available and
+            any(abs(item.tier-tier) <= 1 for tier in anchor_tiers)]
+    rng.shuffle(pool)
     loaded = {}
+    failed = set()
     attempts = 0
+    roles = {team: Counter(_role(classes.get((tank.nation, tank.name))) for tank in humans[team])
+             for team in TEAMS}
 
-    def load(item):
+    def pick(tier, kind, grade, opponent=None):
         nonlocal attempts
-        if item.key not in loaded and attempts < MAX_LOAD_ATTEMPTS:
-            attempts += 1
-            definition = stock_vehicle(game, *item.key)
-            # A mismatched/stale list must not silently put another tier or
-            # identity into the roster, even when a custom loader is supplied.
-            loaded[item.key] = (definition if definition is not None
-                and (definition.nation, definition.name) == item.key
-                and definition.tier == item.tier else None)
-        return loaded.get(item.key)
+        desired_role = _role(kind)
+        # Identity comes first so even a rare human vehicle does not force a
+        # mirror. The search stays within the human tier band.
+        def priority(item):
+            return (used[item.key], abs(item.tier-tier),
+                    _role(item.vehicle_class) != desired_role, item.vehicle_class != kind)
 
-    def candidates(tier):
-        rows = [item for item in catalog if item.tier == tier and item.key != key and item.available]
-        randomizer.shuffle(rows)
-        return rows
-
-    lone = enemies == 1 and allies == 0
-    alternatives = []
-    if own is not None and lone:
-        rows = candidates(own.tier)
-        # Stable sort preserves the seeded ordering within each class group.
-        rows.sort(key=lambda item: item.vehicle_class != own_class)
-        for item in rows:
-            definition = load(item)
-            if definition is not None and _counterpart(player_definition, definition):
-                alternatives.append((definition, item.vehicle_class))
+        candidates = sorted(pool, key=priority)
+        best = None
+        considered = 0
+        for item in candidates:
+            rank = priority(item)
+            if best and rank != best[0]:
                 break
-            if attempts >= MAX_LOAD_ATTEMPTS:
+            load_key = item.key, grade
+            tank = loaded.get(load_key)
+            if tank is None:
+                if load_key in failed or attempts >= MAX_LOAD_ATTEMPTS:
+                    continue
+                attempts += 1
+                tank = _bot_vehicle(game, *item.key, grade)
+                if (tank is None or (tank.nation, tank.name) != item.key or tank.tier != item.tier):
+                    failed.add(load_key)
+                    continue
+                loaded[load_key] = tank
+            difference = _combat_difference(opponent, tank)
+            if best is None or difference < best[1]:
+                best = rank, difference, tank, item.vehicle_class
+            if difference < .20 or attempts >= MAX_LOAD_ATTEMPTS:
                 break
-    elif own is not None:
-        wanted = min(MAX_ALTERNATE_TYPES, max(enemies-1, allies))
-        rows = candidates(own.tier)
-        # Rotate classes rather than taking the first four shuffled lights or
-        # heavies. At low tiers absent classes simply drop out of the cycle.
-        queues = {kind: [item for item in rows if item.vehicle_class == kind]
-                  for kind in _CLASSES}
-        while len(alternatives) < wanted and attempts < MAX_LOAD_ATTEMPTS and any(queues.values()):
-            for kind in _CLASSES:
-                while queues[kind] and attempts < MAX_LOAD_ATTEMPTS:
-                    item = queues[kind].pop()
-                    definition = load(item)
-                    if definition is not None:
-                        alternatives.append((definition, kind))
-                        break
-                if len(alternatives) >= wanted:
-                    break
-        # Same-tier composition is preferred to increasing variety with a
-        # weaker/stronger tank. No tier change is necessary for a safe fallback.
+            # Exclude testing an unlimited number of near-identical tanks
+            # even when the requested role has dozens of compatible models.
+            considered += 1
+            if considered >= 3:
+                break
+        if best is not None:
+            _, _, tank, kind = best
+        else:
+            # Once the load budget is exhausted, recycle a verified definition
+            # before falling back to the already-admitted human configuration.
+            if loaded:
+                tank = min(loaded.values(), key=lambda candidate: (
+                    used[candidate.nation, candidate.name], abs(candidate.tier-tier),
+                    _role(classes.get((candidate.nation, candidate.name))) != desired_role,
+                    _combat_difference(opponent, candidate)))
+            else:
+                tank = opponent or fallback
+            kind = classes.get((tank.nation, tank.name))
+        used[tank.nation, tank.name] += 1
+        return tank, kind
 
-    own_choice = player_definition, own_class
-    choices = alternatives or [own_choice]
-    if lone:
-        return (BotVehicle(2, 0, *choices[0]),)
-    result = [BotVehicle(2, 0, *own_choice)]
-    for slot in range(1, enemies):
-        result.append(BotVehicle(2, slot, *choices[(slot-1) % len(choices)]))
-    for slot in range(1, allies+1):
-        result.append(BotVehicle(1, slot, *choices[(slot-1) % len(choices)]))
-    return tuple(result)
+    roster = {team: [] for team in TEAMS}
+    sizes = {team: len(humans[team])+bot_counts[team-1] for team in TEAMS}
+    kinds = list(_CLASSES)
+    rng.shuffle(kinds)
+    groups = [(slot, vacancies) for slot in range(max(sizes.values()))
+              if (vacancies := [team for team in TEAMS if len(humans[team]) <= slot < sizes[team]])]
+    mixed = rng.randint(1, max(1, len(groups)//2)) if len(groups) >= 3 else 0
+    grades = [TOP] * (len(groups)-mixed) + [rng.choice((MOBILITY, GUN)) for _ in range(mixed)]
+    rng.shuffle(grades)
+
+    def role_gap(team, kind):
+        role = _role(kind)
+        return roles[team][role] - roles[3-team][role]
+
+    for (slot, vacancies), grade in zip(groups, grades):
+        if len(vacancies) == 2 and rng.getrandbits(1):
+            vacancies.reverse()
+        reference = None
+        for team in vacancies:
+            other = 3-team
+            if slot < len(humans[other]):
+                reference = humans[other][slot]
+                kind = classes.get((reference.nation, reference.name))
+            elif reference is None:
+                kind = min(kinds, key=lambda candidate: (
+                    role_gap(team, candidate), roles[team][_role(candidate)]+roles[other][_role(candidate)]))
+            else:
+                need = min(kinds, key=lambda candidate: role_gap(team, candidate))
+                if role_gap(team, need) < min(0, role_gap(team, kind)-1):
+                    kind = need
+            tier = reference.tier if reference is not None else fallback.tier
+            tank, selected_class = pick(tier, kind, grade, reference)
+            roles[team][_role(selected_class)] += 1
+            roster[team].append(BotVehicle(team, slot, tank, selected_class))
+            reference, kind = tank, selected_class
+    return tuple(roster[2]+roster[1])
 
 
-def select_room_bot_roster(game, player_definition, *, teams, bot_counts, seed):
-    """Fill slots after the human participants, using the same tank pool on both teams."""
+def select_bot_roster(game, player_definition, *, enemies, allies, seed):
+    """Keep the configured counts and balance independently selected bot models."""
+    if (type(enemies) is not int or not 1 <= enemies <= TEAM_SIZE
+            or type(allies) is not int or not 0 <= allies < TEAM_SIZE
+            or type(seed) not in (int, str, bytes)):
+        raise ValueError('Invalid bot roster request')
+    return _balanced_roster(game, {1: (player_definition,), 2: ()}, (allies, enemies), seed)
+
+
+def select_room_bot_roster(game, player_definition, *, teams, bot_counts, seed, human_definitions=None):
+    """Fill vacancies after the human participants using their real teams and tanks."""
     if (not isinstance(bot_counts, (tuple, list)) or len(bot_counts) != len(TEAMS)
             or any(type(count) is not int or not 0 <= count <= TEAM_SIZE for count in bot_counts)):
         raise ValueError('Invalid room bot counts')
@@ -271,10 +336,86 @@ def select_room_bot_roster(game, player_definition, *, teams, bot_counts, seed):
     validate_teams([*teams, *([1]*bot_counts[0]), *([2]*bot_counts[1])])
     if not any(bot_counts):
         return ()
-    choices = select_bot_roster(game, player_definition, enemies=max(bot_counts), allies=0, seed=seed)
+    definitions = (player_definition,) * len(teams) if human_definitions is None else tuple(human_definitions)
+    if len(definitions) != len(teams):
+        raise ValueError('A tank definition is required for each room participant')
+    humans = {team: tuple(tank for side, tank in zip(teams, definitions) if side == team) for team in TEAMS}
+    return _balanced_roster(game, humans, bot_counts, seed)
+
+
+def custom_bot_roster(game, player, setup, *, capacity, seed):
+    slots = {1: setup.slots[:capacity-1], 2: setup.slots[6:6+capacity]}
+    return _custom_roster(game, {1: (player,), 2: ()}, slots, seed)
+
+
+def custom_room_bot_roster(game, human_definitions, teams, lineup, *, capacity, seed):
+    humans = {team: tuple(tank for side, tank in zip(teams, human_definitions) if side == team)
+              for team in TEAMS}
+    slots = {team: lineup.team_slots(team, capacity-len(humans[team])) for team in TEAMS}
+    return _custom_roster(game, humans, slots, seed)
+
+
+def _custom_roster(game, humans, room_slots, seed):
+    from . import battle_setup, practice_catalog
+    game = Path(game)
+    rng = random.Random(seed)
+    catalogue = practice_catalog.catalog(game)
+    regular = _catalog(game)
+    slots = [(team, slot, value) for team in (2, 1)
+             for slot, value in enumerate(room_slots[team], len(humans[team]))]
+    automatic = {(row.team, row.slot): row for row in _balanced_roster(
+        game, humans, tuple(len(room_slots[team]) for team in TEAMS), seed
+    )} if any(value == battle_setup.AUTOMATIC for _, _, value in slots) else {}
+    player = next(tank for team in TEAMS for tank in humans[team])
+    used = Counter((tank.nation, tank.name) for team in TEAMS for tank in humans[team])
+    definitions = {}
+    for team, slot, value in slots:
+        if value != battle_setup.EMPTY and value & 15 == 1:
+            target = catalogue.get(value & 0xffff)
+            if target is None or not target.installed:
+                raise ValueError('An assigned bot tank is missing from the installed catalog')
+            tank = practice_catalog.definition(game, target, value >> 16)
+            if tank.armor_states_controller is not None or not _geometry_supported(game, tank):
+                raise ValueError('An assigned bot tank has unsupported collision geometry')
+            definitions[team, slot] = BotVehicle(team, slot, tank, target.vehicle_class)
+            used[target.nation, target.model] += 1
+
+    attempts = 0
+    for team, slot, value in slots:
+        if (team, slot) in definitions or value == battle_setup.EMPTY:
+            continue
+        row = automatic.get((team, slot))
+        if row is not None:
+            definitions[team, slot] = row
+            used[row.definition.nation, row.definition.name] += 1
+            continue
+        tier, class_id = battle_setup.random_filter(value)
+        anchor = humans[team][0] if humans[team] else player
+        kind = battle_setup.CLASSES[class_id-1] if class_id else None
+        candidates = [item for item in regular if item.available and
+                      (item.tier == tier if tier else abs(item.tier-anchor.tier) <= 1)
+                      and (kind is None or item.vehicle_class == kind)]
+        rng.shuffle(candidates)
+        candidates.sort(key=lambda item: (used[item.key], abs(item.tier-anchor.tier)))
+        for item in candidates:
+            if attempts >= MAX_LOAD_ATTEMPTS:
+                break
+            attempts += 1
+            grade = rng.choice((TOP, TOP, TOP, MOBILITY, GUN))
+            tank = _bot_vehicle(game, *item.key, grade)
+            if tank is not None:
+                definitions[team, slot] = BotVehicle(team, slot, tank, item.vehicle_class)
+                used[item.key] += 1
+                break
+        else:
+            raise ValueError('No compatible bot tank matches the selected level and class')
+        if (team, slot) not in definitions:
+            raise ValueError('No compatible bot tank found within the lineup load budget')
+    # Empty slots control team size. The surviving vehicles use consecutive
+    # spawn anchors so mixed small/large map layouts remain compatible.
     roster = []
-    for team, count in ((2, bot_counts[1]), (1, bot_counts[0])):
-        first_slot = teams.count(team)
-        roster.extend(BotVehicle(team, first_slot+index, item.definition, item.vehicle_class)
-                      for index, item in enumerate(choices[:count]))
+    for team in (2, 1):
+        side = [row for (row_team, _), row in sorted(definitions.items()) if row_team == team]
+        roster.extend(BotVehicle(team, slot, row.definition, row.vehicle_class)
+                      for slot, row in enumerate(side, len(humans[team])))
     return tuple(roster)

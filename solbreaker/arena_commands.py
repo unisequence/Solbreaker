@@ -102,6 +102,12 @@ def apply_input(arena, command):
     """Apply one decoded command using the established Arena methods."""
     if command is None:
         return
+    if command.action in ('autoaim', 'autoaim_point'):
+        from .sandbox import vehicle_arena_id
+        entity, target, *point = command.arguments
+        target_id = vehicle_arena_id(arena, target)
+        if target_id != target:
+            command = ArenaCommand(command.account_id, command.action, (entity, target_id, *point), command.now)
     timeline = getattr(arena, 'time_stop', None)
     if timeline is not None and timeline.accept(command):
         return

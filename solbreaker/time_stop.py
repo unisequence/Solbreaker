@@ -24,10 +24,11 @@ from .consumables import READY, SHIELDED_SHELL_KINDS
 from .entities import BattleEvent
 from .map_catalog import map_team_capacity
 from .mobility import (advance_speed, braking_acceleration, powered_acceleration,
-                       rolling_acceleration, skid_velocity, slope_grip_acceleration, terrain_at)
+                       rolling_acceleration, slope_grip_acceleration, steering_skid, terrain_at)
 from .orientation import matrix
 from .roster import training_spawn, training_yaw
-from .sandbox import BOOST_POWER, BRANCH_SHOT_BASE
+from .sandbox import (BOOST_POWER, BRANCH_SHOT_BASE, STAT_BRAKE, STAT_DAMAGE, STAT_GRIP, STAT_REVERSE,
+                      boost_factor, brake_assist, stat_bonus, stat_percent)
 from .vehicle_data import Shell
 
 # A 15-second branch can never receive this many player input commands.
@@ -161,14 +162,16 @@ class DriveSnapshot:
     broken_track: bool
     engine_destroyed: bool
     rigid_spin: tuple[float, float, float] | None = None
+    brake_percent: int = 0
+    reverse_bonus: float = 1.
+    lateral_grip: float = 1.
 
     @classmethod
     def capture(cls, arena, vehicle):
         world, entity = arena.world, vehicle.entity_id
         engine = arena.engines.get(entity)
         power = vehicle.engine_factor * (1.5 if arena.gravity_mode else 1.)
-        if getattr(vehicle, 'sandbox_boost', False):
-            power *= BOOST_POWER
+        power *= boost_factor(vehicle, BOOST_POWER)
         support = world._support_memory.get(entity)
         if support is not None:
             pose, heights, speeds = support
@@ -177,9 +180,11 @@ class DriveSnapshot:
                    world._road_poses[entity], world._lean_states.get(entity),
                    support, world._carrying_supported.get(entity, True),
                    arena._drive_speed_factor(vehicle), power,
-                   vehicle.rotation_factor, (vehicle.forward_speed_bias, vehicle.reverse_speed_bias),
+                   vehicle.effective_hull_rotation_factor, (vehicle.forward_speed_bias, vehicle.reverse_speed_bias),
                    any(track.broken for track in vehicle.tracks.values()), bool(engine and engine.destroyed),
-                   world.flight_spin(entity) if entity in world.dynamic_bodies else None)
+                   world.flight_spin(entity) if entity in world.dynamic_bodies else None,
+                   stat_percent(vehicle, STAT_BRAKE), stat_bonus(vehicle, STAT_REVERSE),
+                   stat_bonus(vehicle, STAT_GRIP, maximum=3.))
 
 
 @dataclass(frozen=True)
@@ -228,6 +233,7 @@ class GunSnapshot:
     dispersion_factor: float = 1.
     shot_age: float | None = None
     gun_damaged: bool = False
+    damage_factor: float = 1.
 
     @classmethod
     def capture(cls, arena, vehicle, selected):
@@ -242,9 +248,10 @@ class GunSnapshot:
                    burst_count, arena._burst_duration(vehicle) if burst_count > 1 else 0.,
                    BurstState.capture(vehicle), refill_times, _remaining(vehicle.pump_at, arena.simulation_time),
                    vehicle.pump_total, vehicle.pump_waiting, getattr(vehicle.definition, 'aiming', None),
-                   vehicle.aiming_time_factor, vehicle.shot_dispersion_factor,
+                   vehicle.effective_aiming_time_factor, vehicle.effective_dispersion_factor,
                    None if vehicle.last_shot_at is None else arena.simulation_time - vehicle.last_shot_at,
-                   gun_state is not None and gun_state.damaged)
+                   gun_state is not None and gun_state.damaged,
+                   stat_bonus(vehicle, STAT_DAMAGE))
 
 
 def _remaining(deadline, now):
@@ -281,6 +288,7 @@ class Snapshot:
     suspended_poison: tuple = ()
     aim_lock: tuple[Entity, tuple] | None = None
     poisoned_targets: frozenset[int] = frozenset()
+    open_map_border: bool = False
 
     @classmethod
     def capture(cls, arena, account_id, wall_time):
@@ -342,7 +350,8 @@ class Snapshot:
                    DriveSnapshot.capture(arena, vehicle), GunSnapshot.capture(arena, vehicle, shell),
                    tuple(arena.world.object_health.items()), consumables, heal_wave,
                    role, level, arena.unlimited_ammo or arena.practice, arena.gun_destroyed(vehicle),
-                   shield, poison, aim_lock, frozenset(boss.poison if boss is not None else ()))
+                   shield, poison, aim_lock, frozenset(boss.poison if boss is not None else ()),
+                   vehicle.entity_id in getattr(arena.world, 'open_map_borders', ()))
 
     def restore_owner_status(self, arena):
         boss = arena.big_boss
@@ -726,6 +735,7 @@ class TimelineSimulation:
         try:
             if set(self.world.bodies) != set(initial):
                 raise ValueError('Time Stop snapshot does not match prepared geometry')
+            self.world.open_map_borders = frozenset((self.entity,)) if snapshot.open_map_border else frozenset()
             self.world.relocate_training_body(self.entity, initial[self.entity],
                 motion=copy(self.drive.motion), road=self.drive.road, lean=self.drive.lean)
             self.world._carrying_supported[self.entity] = self.drive.carrying_supported
@@ -861,7 +871,7 @@ class TimelineSimulation:
             cos_pitch = max(.05, math.cos(pitch))
             mobility = terrain_at(world.terrain, definition, self.pose.position)
             cap = (assets.forward_speed + drive.speed_bias[0] if forward > 0
-                   else assets.reverse_speed + drive.speed_bias[1])
+                   else (assets.reverse_speed + drive.speed_bias[1]) * drive.reverse_bonus)
             target = forward * cap * drive.speed_factor * cos_pitch
             if not forward or self.speed*forward < 0.:
                 acceleration = braking_acceleration(definition)
@@ -879,7 +889,12 @@ class TimelineSimulation:
             rolling = rolling_acceleration(mobility.resistance, pitch, world.GRAVITY) * self.STEP
             if drive.engine_destroyed:
                 self.speed = 0.
+            brake_percent = 0 if drive.broken_track or drive.engine_destroyed else drive.brake_percent
+            target, acceleration, instant_brake = brake_assist(
+                brake_percent, self.speed, forward, target, acceleration, slope, self.STEP)
             speed, effort = advance_speed(self.speed, target, acceleration, slope, rolling, self.STEP)
+            if instant_brake:
+                speed = 0.
             yaw_delta = turn * assets.rotation_speed * drive.rotation_factor * mobility.turn_factor * self.STEP
             displacement = None
             if ground is not None:
@@ -888,8 +903,9 @@ class TimelineSimulation:
                 yaw = self.pose.yaw
                 previous = (ground.velocity if ground.active and ground.velocity is not None else
                             (self.speed*math.sin(yaw), self.speed*math.cos(yaw)))
-                velocity, residual_slip = skid_velocity(previous, yaw+yaw_delta*.5,
-                                                         speed, world.GROUND_LATERAL_GRIP*self.STEP)
+                grip_step = world.GROUND_LATERAL_GRIP * drive.lateral_grip * self.STEP
+                velocity, residual_slip = steering_skid(previous, yaw, yaw_delta, speed,
+                    math.inf if instant_brake else grip_step, mobility.turn_factor)
                 displacement = tuple(axis*self.STEP for axis in velocity)
                 ground.yaw_rate = yaw_rate
             world.set_drive_effort(entity, effort, speed*yaw_delta/self.STEP, forward)
@@ -1179,7 +1195,8 @@ class TimelineSimulation:
         decorated = self._decorate_shell(shell)
         if decorated.effect_index != shell.effect_index:
             effect = decorated.effect_index
-        shell = decorated
+        factor = self.snapshot.gun_loadout.damage_factor
+        shell = replace(decorated, damage=decorated.damage * factor) if factor != 1. else decorated
         spend_round(self, self.snapshot.infinite_ammo)
         self.shots_fired += 1
         velocity = tuple(v*shell.speed for v in direction)

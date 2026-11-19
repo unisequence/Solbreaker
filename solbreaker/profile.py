@@ -5,12 +5,16 @@ from pathlib import Path
 from .vehicles import stock_m2, stock_ammo
 
 TRAINING_RETURN = 'Local/BattleSettings/ReturnToBattle'
+ARCADE_ABILITIES = {'uprising': 'hellgames', 'mad_games': 'arcade'}
 
 
-def game_mode_descriptions(training_return):
+def game_mode_descriptions(training_return, rules=None):
+    abilities = ARCADE_ABILITIES.get(rules, '')
     return {
-        1: {'description': TRAINING_RETURN if training_return else 'Local/TargetDescription'},
-        7: {'description': TRAINING_RETURN if training_return else 'Local/BotsDescription'},
+        1: {'description': TRAINING_RETURN if training_return else 'Local/TargetDescription',
+            'arcadeAbilities': abilities if training_return else ''},
+        7: {'description': TRAINING_RETURN if training_return else 'Local/BotsDescription',
+            'arcadeAbilities': abilities},
     }
 
 
@@ -20,7 +24,7 @@ def vehicle_descriptor(game):
 
 
 def account_snapshot(previous_revision, game, progress, inventory=None, *, garage=None,
-                     training_return=False):
+                     training_return=False, bot_rules=None):
     """Full bootstrap when previous_revision is None; otherwise a cache delta."""
     if garage is not None:
         inventory = next((v for v in garage['vehicles'] if v['id'] == garage['selected_id']), None)
@@ -37,7 +41,7 @@ def account_snapshot(previous_revision, game, progress, inventory=None, *, garag
                                 (6, "tutorial"), (7, "rating"))}
     modes[1]['titleString'] = 'Local/TargetTitle'
     modes[7]['titleString'] = 'Local/BotsTitle'
-    for mode, fields in game_mode_descriptions(training_return).items():
+    for mode, fields in game_mode_descriptions(training_return, bot_rules).items():
         modes[mode].update(fields)
     snapshot = {"prevRev": previous_revision, "rev": progress["revision"],
             "stats": {"credits": progress["credits"], "gold": progress.get("gold", 0), "freeXP": 0, "slots": 5,

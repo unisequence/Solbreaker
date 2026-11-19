@@ -43,6 +43,10 @@ TARGETED_ABILITIES = (HUNTERS_MARK, CURSE, TORNADO)
 ACTIVE_ABILITIES = (MOONWALK, BERSERK, TIME_JUMP, PLAY_DEAD, *TARGETED_ABILITIES)
 
 
+def active_cloak(vehicle, now):
+    return next((spec for spec in reversed(CLOAKS) if active(vehicle, spec, now)), None)
+
+
 def install_ability(vehicle, game, *, cooldown_limit=None):
     slots = tuple(slot for slot in vehicle.consumables
                   if slot is None or slot.spec not in ACTIVE_ABILITIES)

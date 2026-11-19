@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.1.0-rc.1
+
+- Set up bot teams before battle or in a training room. Pick a tank and its
+  modules for each slot, set filters for automatic selection, or leave it empty.
+- Use the sandbox menu to pick and replace targets on the Polygon and save up
+  to four presets for tank stats.
+- The original reticle returns with a solid dispersion ring and a timer for
+  full aim. Manual sniper zoom persists across restarts.
+- Tanks slide along walls, carry momentum through teleports and coast after
+  destruction. Rams can register against airborne tanks. A lethal high-speed
+  ram can detach the turret, which is restored on respawn.
+- High-Octane Fuel adds hull traverse and reduces lateral grip. Dash adds an
+  impulse on the ground or in the air and lets the tank keep its momentum.
+- The hangar shows tank abilities for Mad Games and Uprising. Uprising restores
+  the spawn cloak visuals and clears velocity when an ability turns a tank.
+- Steam depot downloads can resume after interruption. The launcher removes
+  its temporary depot after a successful installation.
+
 ## 0.1.0-alpha.16
 
 - The launcher shows the update download percentage, bytes transferred and

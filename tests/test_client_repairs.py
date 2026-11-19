@@ -19,58 +19,32 @@ def digest(data):
 
 
 class ClientRepairs(unittest.TestCase):
-    def test_reticle_yaml_uses_no_aliases(self):
-        from solbreaker.client_reticle import _patch_aim, _patch_aim_style, _patch_readouts, _show_spread
+    def test_reticle_upgrade_restores_stock_sights_and_keeps_the_continuous_ring(self):
+        from solbreaker import client_reticle
 
-        reload_text = {'name': 'reloadTime', 'components': {
-            'UIDynamicAtlasTextComponent': {'fontSize': 16.},
-            'SizePolicy': {'horizontalValue': 40., 'verticalValue': 20.},
-        }}
-
-        def readout(name):
-            return {'name': name, 'components': {'UIDynamicAtlasTextComponent': {}}}
-
-        reload_container = {'name': 'reloadTimeContainer', 'size': [40., 20.],
-                            'components': {}, 'children': [readout('atgm-bg'), reload_text]}
-        reload_group = {'name': 'reloadAndFuelContainer', 'size': [40., 20.],
-                        'components': {}, 'children': [reload_container, readout('fuelIcon')]}
-        distance = {'name': 'distanceContainer', 'components': {},
-                    'children': [readout('atgm-bg'), readout('distance'), readout('m')]}
-        rotate = {'name': 'rotateControl',
-                  'children': [{'name': 'sightCursorZoom'}, reload_group, distance]}
-        drum = {'name': 'DrumReload', 'components': {'Anchor': {}}}
-        aim = {'Prototypes': [{'children': [{'name': 'UISightCursor', 'children': [rotate, drum]}]}]}
-        _patch_aim(aim)
-        colors = {'StyleSheets': [
-            {'selectors': [f'.cont.{state} ?'], 'properties': {}}
-            for state in ('loaded', 'loading', 'rangefinder', 'over')
-        ]}
-        _patch_readouts(colors)
-        self.assertEqual(reload_text['components']['UIDynamicAtlasTextComponent']['fontSize'], 21.)
-        self.assertEqual(reload_group['size'], distance['size'])
-        backing = next(child for child in rotate['children'] if child.get('name') == 'solbreakerReadoutBar')
-        self.assertEqual(backing['components']['Anchor'], reload_group['components']['Anchor'])
-        self.assertLess(rotate['children'].index(backing), rotate['children'].index(reload_group))
-        reload_left = reload_text['components']['Anchor']['leftAnchor']
-        self.assertLess(reload_left, 0)
-        self.assertGreater(distance['children'][1]['components']['Anchor']['leftAnchor'], 0)
-        self.assertTrue(all(row['properties']['atlasText-color'][3] > 0 for row in colors['StyleSheets']))
-        aimed_style = {'selectors': ['.sight.shell.aimed .arcade-sight'],
-                       'properties': {'atlasImage-frame': 1}}
-        style = {'StyleSheets': [aimed_style]}
-        _patch_aim_style(style)
-        self.assertEqual(aimed_style['properties']['atlasImage-frame'], 0)
-        native_spread = {'imagePath': '~res:/Gfx/Battle/HUD/aim/GunSpread.psd'}
-        spread = {'Prototypes': [{'components': {
-            'UIDynamicAtlasImageComponent': native_spread,
-            'UIOpacityComponent': {'opacity': 0.},
-        }}]}
-        _show_spread(spread)
-        self.assertEqual(spread['Prototypes'][0]['components'], {'UIDynamicAtlasImageComponent': native_spread})
-        # The native package loader rejects aliases even though PyYAML accepts them.
-        for document in (aim, colors, style):
-            self.assertFalse(any(isinstance(event, yaml.AliasEvent)
-                                 for event in yaml.parse(yaml.safe_dump(document))))
+        legacy_overrides = {'unrelated.yaml.dvpl': 'unrelated-hash'}
+        for relative in client_reticle._STOCK_RESOURCES:
+            source = self.game/'Data'/relative
+            prepared = self.client/'Data'/relative
+            source.parent.mkdir(parents=True, exist_ok=True)
+            prepared.parent.mkdir(parents=True, exist_ok=True)
+            source.write_bytes(dvpl.encode(relative.encode()))
+            prepared.write_bytes(dvpl.encode(b'old overlay'))
+            legacy_overrides[relative] = digest(prepared.read_bytes())
+        self.write_manifest(reticle_ui_version=21, ui_overrides=legacy_overrides)
+        result = client_reticle.install(self.lab, json.loads(self.manifest.read_text()))
+        self.assertEqual(result['reticle_ui_version'], 22)
+        self.assertEqual(result['ui_overrides']['unrelated.yaml.dvpl'], 'unrelated-hash')
+        for relative in client_reticle._STOCK_RESOURCES:
+            self.assertNotIn(relative, result['ui_overrides'])
+            self.assertEqual(dvpl.read(self.client/'Data'/relative), relative.encode())
+        for suffix in ('', '@2x'):
+            relative = f'Gfx/Battle/HUD/aim/GunSpread{suffix}.packed.webp.dvpl'
+            sprite = self.client/'Data'/relative
+            expected = Path(client_reticle.__file__).with_name('assets')/f'solbreaker-spread{suffix}.packed.webp'
+            self.assertEqual(dvpl.read(sprite), expected.read_bytes())
+            self.assertEqual(result['ui_overrides'][relative], digest(sprite.read_bytes()))
+        self.assertIs(client_reticle.install(self.lab, result), result)
 
     def setUp(self):
         work = TemporaryDirectory()
@@ -86,6 +60,15 @@ class ClientRepairs(unittest.TestCase):
     def write_manifest(self, **fields):
         self.manifest.write_text(json.dumps(dict(game=str(self.game), client=str(self.client),
                                                   exe_sha256=BUILD_SHA256, **fields)))
+
+    def test_polygon_menu_serializes_without_yaml_aliases(self):
+        from solbreaker.client_practice_picker import patch_menu
+
+        root = {'components': {'UIDataLocalVarsComponent': {'data': []}}, 'children': []}
+        document = {'ImportedPackages': [], 'Prototypes': [root]}
+        patch_menu(document, root, [])
+        events = yaml.parse(yaml.safe_dump(document))
+        self.assertFalse(any(isinstance(event, yaml.AliasEvent) for event in events))
 
     def test_weather_maps_have_separate_client_rows_and_use_pinned_scenes(self):
         from solbreaker.map_catalog import training_map_catalog

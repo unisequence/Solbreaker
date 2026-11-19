@@ -1,6 +1,7 @@
 """Mad Games modifiers for the pinned Blitz build."""
 from dataclasses import dataclass
 from functools import lru_cache
+import math
 from pathlib import Path
 import xml.etree.ElementTree as ET
 
@@ -14,7 +15,8 @@ CLIENT_GAME_MODE = 8
 CLIENT_GAMEPLAY = b'arcade'
 FUEL_ID = 24
 HIGH_OCTANE = ConsumableSpec('afterburner_ability', FUEL_ID, (FUEL_ID << 8) | 0xfb,
-                             15., 30., engine_factor=4., rotation_factor=.75)
+                             15., 30., engine_factor=4., rotation_factor=1.10)
+HIGH_OCTANE_LATERAL_GRIP = .80
 DASH_ID = 21
 ACCELERATOR = ConsumableSpec('dash', DASH_ID, (DASH_ID << 8) | 0xfb, 1.15, 15.)
 CHAMELEON_ID = 25
@@ -50,9 +52,14 @@ TOXIC_STARE_MODIFIER = 175
 REVENGE_DAMAGE = 1.20
 REVENGE_DURATION = 30.
 ACTIVE_SPECS = (HIGH_OCTANE, ACCELERATOR, CHAMELEON, DISCHARGE, IRRADIATOR, REFLECTOR)
-DASH_SPEED = 50. / ACCELERATOR.duration
-DASH_EXIT_SPEED = 15.
+DASH_VELOCITY_BOOST = 50. / ACCELERATOR.duration
 DASH_RAM_DAMAGE_FACTOR = .15
+RAM_BLAST_MIN_CLOSING_SPEED = 32.  # metres per second along the contact normal
+RAM_BLAST_MIN_ENERGY = 4_000_000.  # joules absorbed by the destroyed hull
+RAM_BLAST_RADIUS = 18.
+RAM_BLAST_SPEED = 16.
+RAM_TURRET_LIFETIME = 8.
+RAM_TURRET_ENTITY_BASE = 1 << 28
 SPEED_FACTOR = 2.
 TERRAIN_RESISTANCE_FACTOR = .4
 HIGH_OCTANE_CHASSIS_HEALTH = 15.
@@ -72,6 +79,26 @@ PASSIVE_PROVISIONS = {
     TOXIC_STARE: 114,
 }
 REGENERATOR_EFFECT = (PASSIVE_PROVISIONS[REGENERATOR] << 8) | 0xfd
+
+
+@dataclass(frozen=True)
+class RamTurret:
+    entity: int
+    launched_at: float
+    origin: tuple[float, float, float]
+    landing: tuple[float, float, float]
+    yaw: float
+    pitch: float
+    roll: float
+
+    def pose_at(self, at):
+        fraction = min(1., max(0., (at - self.launched_at) / 2.1))
+        x, y, z = (a + (b - a) * fraction for a, b in zip(self.origin, self.landing))
+        height = 24. * fraction * (1. - fraction)
+        # End with the turret on its side after a full roll in flight.
+        eased = fraction * (2. - fraction)
+        return ((x, y + height, z), self.yaw + math.pi * eased,
+                self.pitch * (1. - eased), self.roll + 2.5 * math.pi * eased)
 
 
 @dataclass(frozen=True)

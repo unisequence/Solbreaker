@@ -187,7 +187,8 @@ def hold_windows_directory(path):
             api.close(handle)
 
 
-def _open_windows(private, filename, create, writable, exclusive, *, create_directories=True):
+def _open_windows(private, filename, create, writable, exclusive, *, create_directories=True,
+                  allow_readonly_hardlinks=False):
     api = _windows_api()
     private = Path(os.path.abspath(os.path.expanduser(os.fspath(private))))
     held = []
@@ -215,7 +216,8 @@ def _open_windows(private, filename, create, writable, exclusive, *, create_dire
         disposition = _CREATE_NEW if exclusive else _OPEN_ALWAYS if create else _OPEN_EXISTING
         handle = api.open(path, _READ | (_WRITE if writable else 0), disposition, _OPEN_REPARSE)
         info = api.information(handle)
-        if info['attributes'] & (_REPARSE | _DIRECTORY) or not info['disk'] or info['links'] != 1:
+        if (info['attributes'] & (_REPARSE | _DIRECTORY) or not info['disk']
+                or (info['links'] != 1 and (writable or not allow_readonly_hardlinks))):
             raise ValueError('Private file must be regular, without reparse points or hardlinks')
         # Re-open the same path while ancestors and file cannot be renamed.
         check = api.open(path, _READ, _OPEN_EXISTING, _OPEN_REPARSE)

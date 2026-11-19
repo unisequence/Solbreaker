@@ -81,6 +81,10 @@ class AccountStore:
                 FOREIGN KEY(account_id,unique_id) REFERENCES battle_reports(account_id,unique_id));
             CREATE INDEX IF NOT EXISTS pending_result_notifications
                 ON result_notifications(account_id,delivered);
+            CREATE TABLE IF NOT EXISTS battle_setup (
+                account_id INTEGER PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
+                payload BLOB NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS training_settings (
                 account_id INTEGER PRIMARY KEY REFERENCES accounts(id), payload TEXT NOT NULL);
         ''')
@@ -133,14 +137,28 @@ class AccountStore:
                               (account_id,)).fetchone()
         return TrainingConfig.from_dict(json.loads(row['payload'])) if row else default
 
-    def save_training_config(self, account_id, config):
+    def save_training_config(self, account_id, config, *, setup=None):
         from .training_config import TrainingConfig
         if not isinstance(config, TrainingConfig):
             raise ValueError('Invalid account training settings')
         with self.db:
+            if setup is not None:
+                self._save_battle_setup(account_id, setup)
             self.db.execute('INSERT INTO training_settings VALUES (?,?) '
                             'ON CONFLICT(account_id) DO UPDATE SET payload=excluded.payload',
                             (account_id, json.dumps(config.to_dict())))
+
+    def battle_setup(self, account_id):
+        from .battle_setup import BattleSetup
+        row = self.db.execute('SELECT payload FROM battle_setup WHERE account_id=?', (account_id,)).fetchone()
+        return BattleSetup.decode(row['payload']) if row else BattleSetup()
+
+    def _save_battle_setup(self, account_id, setup):
+        from .battle_setup import BattleSetup
+        payload = BattleSetup.decode(setup.encode()).encode()
+        self.db.execute('INSERT INTO battle_setup VALUES (?,?) '
+                        'ON CONFLICT(account_id) DO UPDATE SET payload=excluded.payload',
+                        (account_id, payload))
 
     def _registration_available(self, username, nickname):
         row = self.db.execute('SELECT username FROM accounts WHERE username=? OR lower(nickname)=? '

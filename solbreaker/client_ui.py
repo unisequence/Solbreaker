@@ -12,6 +12,7 @@ import tempfile
 import yaml
 
 from . import dvpl, client_branding, client_provisions, client_recon, client_bot_mode, client_battle_settings
+from .client_practice_picker import STRINGS as PRACTICE_PICKER_STRINGS
 
 
 BASE_HEADER = "UI/Screens3/Lobby/Common/Headers/BaseHeader.yaml.dvpl"
@@ -38,18 +39,24 @@ SKIP_7X7 = "UI/Screens3/Lobby/Hangar/SolbreakerSkip7x7.animation.dvpl"
 LOGIN_ENTRY = 'UI/Screens3/PreLogin/Entry.yaml.dvpl'
 SERVER_SELECTION = 'UI/Screens3/PreLogin/ServerSelection.yaml.dvpl'
 SERVER_MAP_ELEMENT = 'UI/Screens3/PreLogin/ServerMapElement.yaml.dvpl'
+SETTINGS_CASE_RESOURCES = (
+    'UI/Screens/Common/Settings/Settings.yaml.dvpl',
+    *(f'UI/Screens/Common/Settings/PersonalizedTab/{name}.yaml.dvpl' for name in (
+        'ParentalcareContent', 'PersonalizedContent', 'PersonalizedContentCategory',
+        'PersonalizedOptionsPage', 'PersonalizedWithdrawResetContent')),
+)
 HIDDEN_SECTIONS = ("crew_skills", "clans", "tournaments")
 LOCAL_MAP_STRING_PREFIX = "#maps:user_map:"
 UI_RESOURCES = (BASE_HEADER, BASE_LOBBY, BASE_LOBBY_ACTIONS, STATS_ITEM, INVENTORY_PANEL, INVENTORY_ACTIONS,
                 HANGAR, HANGAR_ACTIONS, BATTLE_BUTTON, TANKS_PANEL, OWNED_TANK_CELL, INVENTORY,
                 SIDEBAR, ACCOUNT_OPTIONS, KEYBOARD_OPTIONS, GAME_TYPES, GAME_TYPE_CARD,
-                AVATAR_RATING, CALIBRATION_POPUP, NOTIFICATION_7X7,
+                AVATAR_RATING, CALIBRATION_POPUP, NOTIFICATION_7X7, *SETTINGS_CASE_RESOURCES,
                 LOGIN_ENTRY, SERVER_SELECTION, SERVER_MAP_ELEMENT,
                 client_battle_settings.FORM, client_battle_settings.ROOM,
                 client_battle_settings.BATTLE_MENU, *client_recon.MARKER_OPACITY)
 STRINGS_EN = "Strings/en.yaml.dvpl"
 STRINGS_RU = "Strings/ru.yaml.dvpl"
-SANDBOX_BINDINGS_VERSION = 19
+SANDBOX_BINDINGS_VERSION = 30
 SANDBOX_BINDING_STRINGS = {
     STRINGS_EN: {'Title': 'Solbreaker Sandbox',
                  'Boost': 'Toggle boost', 'Flight': 'Toggle flight',
@@ -57,6 +64,8 @@ SANDBOX_BINDING_STRINGS = {
                  'Reload': 'Fast reload and cooldowns',
                  'God': 'Toggle God Mode', 'God0': 'God Mode off', 'God1': 'God Mode on',
                  'TsGear': 'Time Stop is unavailable while a consumable is active.',
+                 'Picked': 'Target selected. Place it with Num 4.',
+                 'NoTank': 'The selected tank cannot be used on this Polygon.',
                  'Jump': 'Gravity Force thruster',
                  'Boost0': 'Boost off', 'Boost1': 'Boost on',
                  'Fly0': 'Flight off', 'Fly1': 'Flight on',
@@ -65,17 +74,19 @@ SANDBOX_BINDING_STRINGS = {
                  'Spawn': 'Target placed', 'TP': 'Teleport to aim point',
                  'Moved': 'Teleported', 'Heal': 'Restore full HP', 'Healed': 'HP restored',
                  'Next': 'Cycle training target tank', 'Fire': 'Toggle target return fire',
-                 'Clear': 'Clear training targets',
+                 'Clear': 'Clear training targets', 'Remove': 'Remove target under reticle',
                  'Own': 'Target tank: your tank', 'T59': 'Target tank: Type 59',
                  'KV1': 'Target tank: KV-1', 'PzIV': 'Target tank: Pz. IV',
                  'Fire0': 'New targets hold fire', 'Fire1': 'New targets return fire',
-                 'Clean': 'Training targets cleared', 'Full': 'This tank has no free target slots'},
+                 'Clean': 'Training targets cleared', 'Full': 'No target slot is available for this tank'},
     STRINGS_RU: {'Title': 'Песочница Solbreaker',
                  'Boost': 'Включить или выключить форсаж', 'Flight': 'Взлететь или сесть',
                  'Missile': 'Переключить камеру ПТУР', 'Target': 'Поставить мишень на Полигоне',
                  'Reload': 'Быстрая перезарядка и откат',
                  'God': 'Режим бога', 'God0': 'Режим бога выключен', 'God1': 'Режим бога включён',
                  'TsGear': 'Остановка времени недоступна, пока действует снаряжение.',
+                 'Picked': 'Мишень выбрана. Чтобы поставить её, нажми Num 4.',
+                 'NoTank': 'Выбранный танк недоступен на этом Полигоне.',
                  'Jump': 'Прыгнуть в «Гравитации»',
                  'Boost0': 'Форсаж выключен', 'Boost1': 'Форсаж включён',
                  'Fly0': 'Полёт выключен', 'Fly1': 'Полёт включён',
@@ -85,12 +96,18 @@ SANDBOX_BINDING_STRINGS = {
                  'Moved': 'Танк перемещён', 'Heal': 'Восстановить прочность',
                  'Healed': 'Прочность восстановлена',
                  'Next': 'Выбрать следующий танк-мишень', 'Fire': 'Переключить ответный огонь мишеней',
-                 'Clear': 'Убрать мишени с Полигона',
+                 'Clear': 'Убрать мишени с Полигона', 'Remove': 'Убрать мишень под прицелом',
                  'Own': 'Мишень — твой танк', 'T59': 'Мишень — Type 59',
                  'KV1': 'Мишень — КВ-1', 'PzIV': 'Мишень — Pz. IV',
                  'Fire0': 'Новые мишени не стреляют', 'Fire1': 'Новые мишени отвечают огнём',
-                 'Clean': 'Мишени убраны', 'Full': 'Все мишени этого типа уже стоят'},
+                 'Clean': 'Мишени убраны', 'Full': 'Нет свободного места для этого танка'},
 }
+for _index, _locale in enumerate((STRINGS_EN, STRINGS_RU)):
+    SANDBOX_BINDING_STRINGS[_locale].update(
+        (key, value[_index]) for key, value in PRACTICE_PICKER_STRINGS.items())
+    from .client_battle_setup import STRINGS as SETUP_STRINGS
+    SANDBOX_BINDING_STRINGS[_locale].update(
+        ('Setup'+key, value[_index]) for key, value in SETUP_STRINGS.items())
 LOCAL_TRAINING_MAP_STRINGS = {
     STRINGS_EN: {"#maps:lagoon:15_lagoon_ln/15_lagoon_ln.sc2": "Lagoon"},
     STRINGS_RU: {"#maps:lagoon:15_lagoon_ln/15_lagoon_ln.sc2": "Лагуна"},
@@ -212,7 +229,8 @@ class _StringsLoader(getattr(yaml, "CBaseLoader", yaml.BaseLoader)):
 
 
 def _sandbox_binding_strings(relative):
-    return {f'Local/Sb{key}': value
+    captions = {'Title', 'Flight', 'Missile', 'TP', 'Heal', 'God', 'Jump'}
+    return {f'Local/Sb{key}': value.upper() if key in captions else value
             for key, value in SANDBOX_BINDING_STRINGS[relative].items()}
 
 
@@ -285,6 +303,7 @@ def patched_strings(source, relative, *, navigation_enabled=True):
     _fill_uprising_provisions(document, relative)
     document.update(LOCAL_MODE_STRINGS.get(relative, {}))
     document.update(_sandbox_binding_strings(relative))
+    _settings_parameter_case(document)
     _weather_map_strings(document, relative)
     locale = 'ru' if relative == STRINGS_RU else 'en'
     document.update({'Local/BattleSettings/'+key: value
@@ -295,6 +314,43 @@ def patched_strings(source, relative, *, navigation_enabled=True):
     # otherwise resolve to another type; all other keys keep their values.
     return dvpl.encode(yaml.safe_dump(document, sort_keys=False, allow_unicode=True,
                                       width=1 << 30).encode())
+
+
+_SETTINGS_SHARED_LABELS = frozenset((
+    'Options', 'hangar menu settings', 'hangar menu logout', 'SETTINGS_BUTTON_LANGUAGE',
+    'MARKER_SETTINGS_DESTROYED', 'Allies', 'Enemies', 'Apply', 'Cancel', 'Clear', 'Warning',
+    '#battle_results:TeamPage/TeamAlly', '#battle_results:TeamPage/TeamEnemy',
+    'Switch/HubridPanel/Lobby/Close',
+))
+_SETTINGS_SHARED_PREFIXES = (
+    '#language:Selection/', '#common:DialogButton/', '#account:Completion/',
+    '#account:Blocks/MobilePhone/', '#bonus_code:Dialog_Add/',
+    'AccountDeletionCodeDialog/', 'AccountManagement/ClanLeaderWarningDialog',
+    'DeletionConfirmationDialog/', 'DeletionPortalOnlyDialog/',
+    'Persona/CredentialsConflict', 'Persona/UseExistingAccountError/',
+)
+
+
+def _settings_parameter_case(strings):
+    for key, value in strings.items():
+        if (not isinstance(key, str) or not isinstance(value, str)
+                or any(marker in value for marker in ('{', '%', '<'))):
+            continue
+        setting = key.startswith('#settings:') and '/InBattleCommands/' not in key
+        if not (setting or key in _SETTINGS_SHARED_LABELS or key.startswith(_SETTINGS_SHARED_PREFIXES)):
+            continue
+        if any(word in key.casefold() for word in ('description', 'tooltip', 'hint')):
+            continue
+        strings[key] = value.upper()
+
+
+def _settings_label_bindings(document):
+    for node in walk_dicts(document):
+        for binding in node.get('bindings', []):
+            if (isinstance(binding, list) and len(binding) >= 2
+                    and binding[0] == 'UITextComponent.text'
+                    and binding[1].startswith('capitalize(') and binding[1].endswith(')')):
+                binding[1] = binding[1][11:-1]
 
 
 def patched_resource(source, relative, *, navigation_enabled=True):
@@ -480,15 +536,17 @@ action SolbreakerSettingsSaved(int arg1)
             info.update({
                 'prototype': 'StyledButton/StyledButton', 'name': 'ButtonInfo',
                 'classes': 'button button-color-gray',
-                'bindings': [['visible', client_bot_mode.SELECTED_BOT_MODE]],
+                'bindings': [['visible', f'({client_bot_mode.SELECTED_BOT_MODE}) or '
+                                         f'({client_bot_mode.SELECTED_POLYGON_MODE})']],
                 'components': {
                     'Anchor': {'hCenterAnchorEnabled': True, 'vCenterAnchorEnabled': True,
                                'vCenterAnchor': 264.},
                     'SizePolicy': {'horizontalPolicy': 'FixedSize', 'horizontalValue': 360.,
                                    'verticalPolicy': 'FixedSize', 'verticalValue': 56.},
                     'UIInputEventComponent': {'onTouchUpInside': 'INFO_PRESSED'}},
-                'children': [{'path': 'Caption', 'components': {
-                    'UITextComponent': {'text': 'Local/BattleSettings/Settings'}}}]})
+                'children': [{'path': 'Caption', 'bindings': [['UITextComponent.text',
+                    f'when {client_bot_mode.SELECTED_POLYGON_MODE} -> '
+                    'localize("Local/BattleSettings/PolygonSettings"), localize("Local/BattleSettings/Settings")']]}]})
         else:
             info, = [x for x in walk_dicts(document) if x.get('name') == 'ButtonInfo']
             info['visible'] = False
@@ -534,6 +592,8 @@ action SolbreakerSettingsSaved(int arg1)
         client_battle_settings.patch_room(document)
     elif relative == client_battle_settings.BATTLE_MENU:
         client_battle_settings.patch_boss_menu(document)
+    elif relative in SETTINGS_CASE_RESOURCES:
+        _settings_label_bindings(document)
     return dvpl.encode(yaml.safe_dump(document, sort_keys=False, allow_unicode=True).encode())
 
 
@@ -655,12 +715,17 @@ def install_sandbox_bindings(lab, manifest):
         KEYBOARD_OPTIONS: patched_resource(data/KEYBOARD_OPTIONS, KEYBOARD_OPTIONS),
         INVENTORY_PANEL: patched_resource(source/'Data'/INVENTORY_PANEL, INVENTORY_PANEL),
     }
+    for relative in SETTINGS_CASE_RESOURCES:
+        original = source/'Data'/relative
+        if original.is_file():
+            patches[relative] = patched_resource(original, relative)
     for relative in SANDBOX_BINDING_STRINGS:
         strings = yaml.load(dvpl.read(data/relative), Loader=_StringsLoader)
         strings.update(CONSUMABLE_STRINGS[relative])
         _fill_vehicle_names(strings, relative)
         _fill_uprising_provisions(strings, relative)
         strings.update(_sandbox_binding_strings(relative))
+        _settings_parameter_case(strings)
         _weather_map_strings(strings, relative)
         patches[relative] = dvpl.encode(yaml.safe_dump(strings, sort_keys=False, allow_unicode=True,
                                                        width=1 << 30).encode())

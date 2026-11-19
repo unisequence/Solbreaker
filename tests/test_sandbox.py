@@ -4,6 +4,9 @@ import struct
 from types import SimpleNamespace
 from unittest import TestCase
 from unittest.mock import Mock, patch
+from uuid import UUID
+
+import numpy as np
 
 from solbreaker import sandbox
 from solbreaker.battle_settings import decode, packed_recipe
@@ -12,11 +15,14 @@ from solbreaker.arena import Arena, GRAVITY_JUMP_SPEC
 from solbreaker.consumables import ACTIVE, COOLDOWN, READY, ConsumableSpec, ConsumableState
 from solbreaker.arena_owner import Command
 from solbreaker.arena_owner_game import GameArenaHandler
-from solbreaker.battle import (VOICE_ENEMY_KILLED, VOICE_TRACK_DESTROYED, arena_update, avatar_method,
+from solbreaker.battle import (VOICE_ENEMY_KILLED, VOICE_TRACK_DESTROYED, aim_time_message, arena_update, avatar_method,
                                crew_voice_message, event_messages, health_changed, pb_blob, pb_int,
                                present_vehicles, reconnect_message_parts, team_kill_score,
                                vehicle_info, vehicle_property)
-from solbreaker.collision import Pose
+from solbreaker.collision import CollisionWorld, GroundMotion, Motion, Pose
+from solbreaker.practice_catalog import Module, Modules
+from solbreaker.recon_snapshot import build_team_spotting_snapshot, encode_arena_recon_snapshot
+from solbreaker.recon_wire import decode as decode_recon
 from solbreaker.training_config import RoomBattleSettings, TrainingConfig
 
 
@@ -25,6 +31,136 @@ def report(token, sequence=1, flags=0, shot=0, direction=(0., 0., 0.)):
 
 
 class SandboxTests(TestCase):
+    def test_tank_stats_sliders_apply_and_restore_the_live_vehicle(self):
+        terrain = SimpleNamespace(height=lambda x, z: 0.)
+        arena = Arena([dict(id=1, nickname='Pilot')], b'', terrain, now=1., sandbox_enabled=True)
+        self.addCleanup(arena.close)
+        arena.ready(1, 1.)
+        vehicle = arena.vehicle_for(1)
+        for sequence, (kind, percent) in enumerate(((0, 50), (1, 50), (1, 100)), 1):
+            payload = sandbox.INPUT.pack(sandbox.token(arena), sequence, sandbox.TANK_STATS,
+                                         kind*256+percent, 0.,0.,0.)
+            arena.sandbox_control(1, sandbox.Control.decode(payload))
+        self.assertAlmostEqual(sandbox.boost_factor(vehicle, sandbox.BOOST_POWER), 1.7)
+        self.assertAlmostEqual(sandbox.reload_limit(vehicle), .5)
+        arena.sandbox_control(1, sandbox.Control(sandbox.token(arena), 4, 0, 0, 0.,0.,0.))
+        self.assertAlmostEqual(sandbox.reload_limit(vehicle), .5)
+        for kind in range(2):
+            arena.sandbox_control(1, sandbox.Control(sandbox.token(arena), 5+kind,
+                sandbox.TANK_STATS, kind*256, 0.,0.,0.))
+        self.assertEqual(sandbox.boost_factor(vehicle, sandbox.BOOST_POWER), 1.)
+        self.assertIsNone(sandbox.reload_limit(vehicle))
+
+    def test_extended_tank_sliders_affect_live_vehicle_and_keep_damage_fraction(self):
+        arena = Arena([dict(id=1, nickname='Pilot')], b'',
+                      SimpleNamespace(height=lambda x, z: 0.), now=1., sandbox_enabled=True)
+        self.addCleanup(arena.close)
+        arena.ready(1, 1.)
+        vehicle = arena.vehicle_for(1)
+        base_health, base_yaw = vehicle.max_health, vehicle.gun.yaw_rate
+        vehicle.health = base_health // 2
+        starting_health = vehicle.health
+        stats = (sandbox.STAT_AIM, sandbox.STAT_ACCURACY, sandbox.STAT_TURRET,
+                 sandbox.STAT_HULL, sandbox.STAT_DAMAGE, sandbox.STAT_HEALTH)
+
+        def update_stat(stat, percent, sequence):
+            payload = sandbox.INPUT.pack(sandbox.token(arena), sequence, sandbox.TANK_STATS,
+                                         stat*256+percent, 0., 0., 0.)
+            arena.sandbox_control(1, sandbox.Control.decode(payload))
+
+        for sequence, stat in enumerate(stats, 1):
+            update_stat(stat, 100, sequence)
+        self.assertEqual(vehicle.effective_aiming_time_factor, .5)
+        self.assertEqual(vehicle.effective_dispersion_factor, .5)
+        self.assertEqual(vehicle.gun.yaw_rate, base_yaw * 2)
+        self.assertEqual(vehicle.effective_hull_rotation_factor, 2.)
+        from solbreaker.vehicle_data import Shell
+        stock_shell = Shell(1, 76., 200., (100., 80.), None, None, 500., 0., 500.)
+        _, _, shot = arena._launch(vehicle, stock_shell, 1.)
+        self.assertEqual(shot.damage, stock_shell.damage * 2)
+        self.assertEqual(vehicle.health, starting_health * 2)
+        self.assertEqual(vehicle.max_health, base_health * 2)
+        for sequence, stat in enumerate(stats, 7):
+            update_stat(stat, 0, sequence)
+        self.assertFalse(vehicle.sandbox_stats)
+        self.assertEqual(vehicle.gun.yaw_rate, base_yaw)
+        self.assertEqual(vehicle.health, starting_health)
+        self.assertEqual(vehicle.max_health, base_health)
+
+    def test_instant_braking_stops_before_reversing_and_zero_restores_stock(self):
+        arena = Arena([dict(id=1, nickname='Pilot')], b'',
+                      SimpleNamespace(height=lambda x, z: 0.), now=1., sandbox_enabled=True)
+        self.addCleanup(arena.close)
+        arena.ready(1, 1.)
+        vehicle = arena.vehicle_for(1)
+
+        def brake_setting(percent, sequence):
+            report = sandbox.INPUT.pack(sandbox.token(arena), sequence, sandbox.TANK_STATS,
+                                        sandbox.STAT_BRAKE*256+percent, 0., 0., 0.)
+            arena.sandbox_control(1, sandbox.Control.decode(report))
+
+        vehicle.last_input = 1.
+        vehicle.speed = 15.
+        brake_setting(50, 1)
+        arena._drive(vehicle, arena.STEP, 1.)
+        self.assertGreater(vehicle.speed, 0.)
+        self.assertLess(vehicle.speed, 10.)
+        brake_setting(100, 2)
+        start = vehicle.pose.position
+        arena._drive(vehicle, arena.STEP, 1.)
+        self.assertEqual(vehicle.speed, 0.)
+        self.assertEqual(vehicle.pose.position, start)
+
+        vehicle.flags = 2
+        vehicle.speed = 15.
+        arena._drive(vehicle, arena.STEP, 1.)
+        self.assertEqual(vehicle.speed, 0.)
+        arena._drive(vehicle, arena.STEP, 1.)
+        self.assertLess(vehicle.speed, 0.)
+
+        brake_setting(0, 3)
+        vehicle.flags = 0
+        vehicle.speed = 15.
+        arena._drive(vehicle, arena.STEP, 1.)
+        self.assertGreater(vehicle.speed, 14.)
+
+    def test_aim_hud_reports_remaining_settle_time_with_calibration(self):
+        aiming = SimpleNamespace(aiming_time=2., dispersion_radius=.35)
+        for progress, tenths in ((0., 48), (.5, 24), (1., 0)):
+            message = aim_time_message(aiming, .8, progress)
+            self.assertEqual(message[-14:], b'\x03TFS1AIMT'+struct.pack('<I',tenths)+b'\0')
+
+    def test_map_border_toggle_stays_inside_the_last_terrain_sample(self):
+        world = CollisionWorld.__new__(CollisionWorld)
+        world.assets = SimpleNamespace(
+            bounds=(-10., -10., 10., 10.), turret_node='turret',
+            tank_shapes=[('hull', np.array([(-1., -1., -1.), (1., 1., 1.)]))])
+        world.terrain = SimpleNamespace(MIN=-20., MIN_Z=-20., MAX_X=20., MAX_Z=20.,
+                                        WIDTH=40., DEPTH=40., size=40)
+        world.vehicle_assets = {}
+        world._chassis_bounds = {}
+        world.primary_id = 1
+        original = Pose((8., 0., 0.), 0.)
+        outside = Pose((12., 0., 0.), 0.)
+        inside_terrain = Pose((17., 0., 0.), 0.)
+        off_terrain = Pose((18.8, 0., 0.), 0.)
+        vehicle = SimpleNamespace(entity_id=1, pose=original)
+        arena = SimpleNamespace(world=world, emit=Mock())
+        self.assertFalse(world._inside(outside, 1))
+        Arena._toggle_map_border(arena, vehicle)
+        self.assertTrue(world._inside(outside, 1))
+        self.assertTrue(world._inside(inside_terrain, 1))
+        self.assertFalse(world._inside(off_terrain, 1))
+        self.assertFalse(world._inside(outside, 2))
+        self.assertLess(world._border_pose(off_terrain, 1).position[0], 18.)
+        vehicle.pose = outside
+        Arena._toggle_map_border(arena, vehicle)
+        arena.emit.assert_called_with('sandbox_map_border', 1, notice=sandbox.MAP_BORDER_OUTSIDE)
+        self.assertIn(1, world.open_map_borders)
+        vehicle.pose = original
+        Arena._toggle_map_border(arena, vehicle)
+        self.assertFalse(world._inside(outside, 1))
+
     def test_solo_battle_recipe_carries_the_room_rules(self):
         catalog = {101: 'rudniki_evening'}
         config = decode(TITLE, 'SolbreakerBots/2/1/2/1/0/1/0/1', 101, catalog)
@@ -43,6 +179,265 @@ class SandboxTests(TestCase):
         self.assertTrue(arena.unlimited_ammo)
         self.assertFalse(arena._combat_can_finish())
 
+    def test_solo_bot_skirmish_finishes_after_the_last_enemy(self):
+        terrain = SimpleNamespace(height=lambda x, z: 0.)
+        for minutes in (None, 0):
+            with self.subTest(minutes=minutes):
+                config = TrainingConfig(mode='bots', battle_mode='elimination', enemies=2,
+                                        minutes=minutes)
+                arena = Arena([dict(id=1, nickname='Pilot')], b'', terrain, now=1., training=config)
+                try:
+                    arena.ready(1, 1.)
+                    player = arena.vehicle_for(1)
+                    first, last = (v for v in arena.vehicles.values() if v.team != player.team)
+                    arena._damage_health(first, first.health, player.entity_id, 2., shell_hit=False)
+                    arena._fixed_step(2.)
+                    self.assertFalse(arena.finished_at)
+                    arena.drain_events()
+
+                    arena._damage_health(last, last.health, player.entity_id, 3., shell_hit=False)
+                    arena._fixed_step(3.)
+                    periods = [event.data['period'] for event in arena.drain_events()
+                               if event.kind == 'period']
+                    if minutes is None:
+                        self.assertEqual((arena.finished_at, arena.winner, arena.finish_reason),
+                                         (3., player.team, 'elimination'))
+                        self.assertEqual(periods, [4])
+                    else:
+                        self.assertFalse(arena.finished_at)
+                        self.assertEqual(periods, [])
+                finally:
+                    arena.close()
+
+    def test_target_menu_buttons_have_client_actions(self):
+        from solbreaker import client_practice_picker
+        root = {'components': {'UIDataLocalVarsComponent': {'data': []}}, 'children': []}
+        client_practice_picker.patch_menu({'ImportedPackages': []}, root, [])
+        menu, = (panel for panel in root['children'] if panel.get('name') == 'SolTargetMenu')
+        actions = client_practice_picker.actions()
+        for control in menu['children'][1]['children']:
+            event = control.get('components', {}).get('UIInputEventComponent', {})
+            if command := event.get('onTouchUpInside'):
+                self.assertIn(f'action {command}()', actions)
+
+    def test_practice_menu_actions_manage_only_the_selected_dummy(self):
+        arena = Arena([dict(id=1, nickname='Pilot')], b'',
+                      SimpleNamespace(height=lambda x, z: 0.), now=1., sandbox_enabled=True)
+        self.addCleanup(arena.close)
+        arena.ready(1, 1.)
+        player = arena.vehicle_for(1)
+        first, second = sorted(arena.practice_slots)[:2]
+        target, other = arena.vehicles[first], arena.vehicles[second]
+        for vehicle in (target, other):
+            vehicle.health = 50
+        arena.practice_active.update((first, second))
+        arena.practice_spawned.update((first, second))
+        arena.world = Mock(assets=SimpleNamespace(bounds=(0., 0., 100., 100.)))
+
+        def menu(action, entity, sequence):
+            wire = sandbox.INPUT.pack(sandbox.token(arena), sequence, sandbox.PRACTICE_MENU,
+                                      action, 0., 0., 0.)
+            with patch.object(arena, '_ability_ray'), patch.object(
+                    arena, 'aim_hit', return_value=(entity, target.pose.position)):
+                arena.sandbox_control(1, sandbox.Control.decode(wire))
+
+        menu(sandbox.MENU_HEAL, first, 1)
+        self.assertEqual(target.health, target.max_health)
+        self.assertEqual(other.health, 50)
+        menu(sandbox.MENU_DESTROY, first, 2)
+        self.assertFalse(target.alive)
+        self.assertIn(first, arena.practice_active)
+        self.assertEqual(player.kills, 0)
+        menu(sandbox.MENU_REMOVE, first, 3)
+        self.assertEqual(arena.practice_active, {second})
+        self.assertEqual(arena.practice_reuse_slot, first)
+        menu(sandbox.MENU_DESTROY, player.entity_id, 4)
+        self.assertTrue(player.alive)
+        arena.practice = False
+        menu(sandbox.MENU_DESTROY, second, 5)
+        self.assertEqual(other.health, 50)
+        self.assertEqual([event.data['notice'] for event in arena.drain_events()
+                          if event.kind == 'practice_feedback'],
+                         [sandbox.MENU_HEALED, sandbox.MENU_DESTROYED,
+                          sandbox.MENU_REMOVED, sandbox.MENU_MISS])
+
+    def test_remove_only_the_aimed_practice_target_and_reuse_its_slot(self):
+        terrain = SimpleNamespace(height=lambda x, z: 0.)
+        arena = Arena([dict(id=1, nickname='Pilot')], b'', terrain, now=1., sandbox_enabled=True)
+        self.addCleanup(arena.close)
+        arena.ready(1, 1.)
+        arena.drain_events()
+        player = arena.vehicle_for(1)
+        first, second = sorted(arena.practice_slots)[:2]
+        arena.practice_active.update((first, second))
+        arena.practice_spawned.update((first, second))
+        for entity in (first, second):
+            arena.vehicles[entity].health = 100
+        arena.practice_gunners.update({first: object(), second: object()})
+        arena.respawn_at[first] = 3.
+        arena.practice_next_spawn = 4.
+        world = Mock(assets=SimpleNamespace(bounds=(0., 0., 100., 100.)))
+        arena.world = world
+        control = sandbox.Control.decode(sandbox.INPUT.pack(
+            sandbox.token(arena), 1, sandbox.REMOVE_TARGET, 0, 0., 0., 0.))
+
+        with patch.object(arena, 'aim_hit', return_value=(player.entity_id, player.pose.position)):
+            arena.sandbox_control(1, control)
+        world.relocate_training_body.assert_not_called()
+
+        with patch.object(arena, 'aim_hit', return_value=(first, arena.vehicles[first].pose.position)):
+            arena.sandbox_control(1, control)
+        self.assertEqual(arena.practice_active, {second})
+        self.assertEqual(arena.practice_gunners.keys(), {second})
+        self.assertNotIn(first, arena.respawn_at)
+        self.assertEqual(arena.practice_next_spawn, 0.)
+        self.assertFalse(arena.vehicles[first].alive)
+        self.assertTrue(arena.vehicles[second].alive)
+        world.relocate_training_body.assert_called_once_with(first, arena.vehicles[first].pose)
+        events = arena.drain_events()
+        self.assertEqual([(event.actor, event.kind) for event in events if event.kind == 'practice_clear'],
+                         [(first, 'practice_clear')])
+        self.assertIn(vehicle_property(first, 1, b'\0'), event_messages(arena, arena.players[1], events))
+
+        arena.practice_types = {0: [first, second]}
+        pose = Pose((30., 1., 35.), 0.)
+        world.training_placement.return_value = pose
+        with patch.object(arena, 'aim_hit', return_value=(None, pose.position)), \
+             patch.object(arena, '_restore_vehicle') as restore:
+            arena._spawn_practice_target(player)
+        restore.assert_called_once_with(first, pose)
+
+    def test_practice_replacement_reuses_removed_slot_with_a_new_client_entity(self):
+        terrain = SimpleNamespace(height=lambda x, z: 0.)
+        arena = Arena([dict(id=1, nickname='Pilot')], b'', terrain, now=1., sandbox_enabled=True)
+        self.addCleanup(arena.close)
+        arena.ready(1, 1.)
+        arena.drain_events()
+        player = arena.vehicle_for(1)
+        other, slot = sorted(arena.practice_slots)[:2]
+        target = arena.vehicles[slot]
+        target.nickname = 'dummy 2'
+        target.health = 100
+        arena.practice_numbers.update({other: 1, slot: 2})
+        arena.practice_spawned.update((other, slot))
+        arena.practice_active.add(slot)
+
+        pose = Pose((30., 1., 35.), 0.)
+        old_model = SimpleNamespace(descriptor=target.descriptor)
+        new_model = SimpleNamespace(descriptor=b'other model', optional_devices=())
+        old_scene = SimpleNamespace(definition=old_model)
+        new_scene = Mock(definition=new_model)
+        scenes = {slot: old_scene}
+        world = arena.world = Mock(assets=SimpleNamespace(bounds=(0., 0., 100., 100.)))
+        world.assets_for.side_effect = scenes.__getitem__
+
+        def place(entity, scene, points):
+            scenes[entity] = scene
+            return pose
+
+        def restore(entity, placement, *, replacement):
+            vehicle = arena.vehicles[entity]
+            vehicle.pose = placement
+            vehicle.descriptor = replacement[0]
+            vehicle.definition = new_model
+            vehicle.health = 280
+
+        world.replace_training_body.side_effect = place
+        with patch.object(arena, 'aim_hit', return_value=(slot, target.pose.position)):
+            arena.sandbox_control(1, sandbox.Control(sandbox.token(arena), 1,
+                                  sandbox.REMOVE_TARGET, 0, 0., 0., 0.))
+        arena.practice_target = new_model
+        with patch.object(arena, 'aim_hit', return_value=(None, pose.position)), \
+             patch.object(arena, '_make_practice_scene', return_value=new_scene), \
+             patch.object(arena, '_restore_vehicle', side_effect=restore):
+            arena._spawn_practice_target(player)
+
+        self.assertEqual(arena.practice_active, {slot})
+        self.assertEqual(arena.vehicles[slot].nickname, 'dummy 2')
+        self.assertEqual(arena.vehicles[slot].descriptor, new_model.descriptor)
+        new_id = sandbox.vehicle_wire_id(arena, slot)
+        self.assertNotEqual(new_id, slot)
+        self.assertEqual(sandbox.vehicle_arena_id(arena, new_id), slot)
+        self.assertEqual(sandbox.vehicle_arena_id(arena, slot), -1)
+        events = arena.drain_events()
+        self.assertEqual([e.kind for e in events], ['practice_clear', 'practice_retire', 'practice_spawn'])
+        self.assertEqual(events[-1].client_actor, new_id)
+        wire = event_messages(arena, arena.players[1], events)
+        cleared = vehicle_property(slot, 1, b'\0')
+        added = health_changed(new_id, 280, 0)
+        self.assertLess(wire.index(cleared), wire.index(added))
+
+    def test_enemy_ai_menu_can_change_one_target_or_all(self):
+        terrain = SimpleNamespace(height=lambda x, z: 0.)
+        arena = Arena([dict(id=1, nickname='Pilot')], b'', terrain, now=1., sandbox_enabled=True)
+        self.addCleanup(arena.close)
+        arena.ready(1, 1.)
+        arena.world = Mock()
+        player = arena.vehicle_for(1)
+        first, second = sorted(arena.practice_slots)[:2]
+        arena.practice_active.update((first, second))
+        for entity in (first, second):
+            arena.vehicles[entity].health = 100
+
+        def select(value):
+            request = sandbox.INPUT.pack(sandbox.token(arena), 1, sandbox.TARGET_AI, value, 0., 0., 0.)
+            arena.sandbox_control(1, sandbox.Control.decode(request))
+
+        with patch.object(arena, 'aim_hit', return_value=(first, player.pose.position)):
+            select(3)
+            self.assertEqual({eid: ai.difficulty for eid, ai in arena.practice_gunners.items()}, {first: 'hard'})
+            select(5)
+            self.assertEqual({eid: ai.difficulty for eid, ai in arena.practice_gunners.items()},
+                             {first: 'easy', second: 'easy'})
+            with patch.object(arena, '_update_mad_spotting') as spotting:
+                arena._update_team_spotting(1.)
+            self.assertEqual(spotting.call_args.args[0], (player, arena.vehicles[first], arena.vehicles[second]))
+            select(0)
+            self.assertEqual(set(arena.practice_gunners), {second})
+        with patch.object(arena, 'aim_hit', return_value=(player.entity_id, player.pose.position)):
+            select(3)
+        self.assertEqual(arena.events[-1].data['count'], 0)
+        select(4)
+        self.assertFalse(arena.practice_gunners)
+        self.assertNotIn(1, arena._sandbox_inputs)
+
+    def test_practice_target_is_spotted_under_its_current_client_id(self):
+        terrain = SimpleNamespace(height=lambda x, z: 0.)
+        arena = Arena([dict(id=1, nickname='Pilot')], b'', terrain, now=1., sandbox_enabled=True)
+        self.addCleanup(arena.close)
+        observer = arena.vehicle_for(1)
+        target = arena.vehicles[min(arena.practice_slots)]
+        target.health = 100
+        arena.practice_active.add(target.entity_id)
+        client_id = sandbox.PRACTICE_ENTITY_BASE
+        arena.practice_client_ids[target.entity_id] = client_id
+        self.assertFalse(arena._player_attached(target))
+
+        def markers():
+            view = build_team_spotting_snapshot(
+                arena, observer.entity_id, battle_id=UUID(arena.result_id), sequence=1)
+            return decode_recon(encode_arena_recon_snapshot(arena, view, observer.entity_id)).markers
+
+        self.assertEqual(markers(), (client_id,))
+        arena.practice_active.clear()
+        self.assertEqual(markers(), ())
+
+    def test_practice_pick_decodes_modules_and_obeys_turret_compatibility(self):
+        track = Module('standard_track', 'Standard tracks')
+        engine = Module('stock_engine', 'Stock engine')
+        basic = Module('small_turret', 'Small turret')
+        large = Module('large_turret', 'Large turret')
+        standard = Module('stock_gun', 'Stock gun')
+        heavy = Module('heavy_gun', 'Heavy gun')
+        choices = Modules((track,), (basic, large), ((standard,), (standard, heavy)), (engine,))
+        selection = (0x0110 << 16) | 0x0101
+        report = sandbox.Control.decode(sandbox.INPUT.pack(1, 1, sandbox.PICK_TARGET, selection, 0., 0., 0.))
+        self.assertEqual(report.shot & 0xffff, 0x0101)
+        configuration = choices.configuration(report.shot >> 16)
+        self.assertEqual((configuration.turret, configuration.gun), ('large_turret', 'heavy_gun'))
+        with self.assertRaisesRegex(ValueError, 'Incompatible'):
+            choices.configuration(0x0100)
+
     def test_teleport_requires_sandbox_and_a_clear_destination(self):
         terrain = SimpleNamespace(height=lambda x, z: 0.)
         arena = Arena([dict(id=1, nickname='Pilot')], b'', terrain, now=1., sandbox_enabled=True)
@@ -52,10 +447,15 @@ class SandboxTests(TestCase):
         vehicle = arena.vehicle_for(1)
         world = Mock()
         arena.world = world
+        world.motion = {vehicle.entity_id: Motion((2., 0., -7.))}
+        world.ground_motion = {}
+        world._dynamic_rotation.return_value = None
+        vehicle.pose = Pose(vehicle.pose.position, 0.)
+        vehicle.gun.set_angles(math.pi/2, 0.)
         pose = Pose((20., 1., 30.), vehicle.pose.yaw, 0., 0.)
         world.training_placement.side_effect = (None, pose)
         control = sandbox.Control(sandbox.token(arena), 1, sandbox.TELEPORT, 0, 0., 0., 0.)
-        with patch.object(arena, 'aim_hit', return_value=(None, (20., 0., 30.))):
+        with patch.object(arena, 'aim_hit', return_value=(None, (20., 0., 30.))) as aim_hit:
             arena.practice = False
             arena.sandbox_enabled = False
             arena.sandbox_control(1, control)
@@ -64,9 +464,14 @@ class SandboxTests(TestCase):
             arena.sandbox_control(1, control)
             world.relocate_training_body.assert_not_called()
             arena.sandbox_control(1, control)
+        self.assertGreater(aim_hit.call_args.kwargs['ray'][1][0], .99)
+        self.assertGreater(arena.shot_ray(vehicle)[1][2], .99)
         world.training_placement.assert_called_with(
             vehicle.entity_id, 20., 30., pose.yaw, stationary=True)
-        world.relocate_training_body.assert_called_once_with(vehicle.entity_id, pose)
+        world.relocate_training_body.assert_called_once_with(
+            vehicle.entity_id, pose, motion=Motion((2.,0.,-7.)))
+        self.assertEqual(world.ground_motion[vehicle.entity_id], GroundMotion((2.,-7.), active=True))
+        self.assertEqual(vehicle.speed, -7.)
         self.assertEqual(vehicle.pose, pose)
         self.assertIn(sandbox.advertisement(arena, notice=sandbox.TELEPORTED),
                       event_messages(arena, arena.players[1], arena.drain_events()))
@@ -178,6 +583,8 @@ class SandboxTests(TestCase):
             self.assertEqual(set(arena.practice_gunners), {alternate})
             self.assertTrue(arena.vehicles[alternate].alive)
             self.assertFalse(arena.vehicles[entity].alive)
+            self.assertEqual(arena.vehicles[alternate].nickname, 'dummy 1')
+            self.assertFalse(arena.vehicles[alternate].mad_unspotted)
             self.assertTrue(next(e for e in arena.drain_events() if e.kind == 'practice_spawn').data['first'])
 
             action(sandbox.CLEAR_TARGETS)
@@ -451,6 +858,32 @@ class SandboxTests(TestCase):
                 velocity, _ = sandbox.flight_velocity(flight, pose, (0.,0.,speed), (0.,0.,0.),
                     0., drive, sandbox.FLIGHT, 9.81, 1/60, bounds=(-100.,-100.,100.,100.))
                 self.assertLess(velocity[2], speed)
+
+    def test_toggling_flight_off_releases_gravity_without_spin(self):
+        terrain = SimpleNamespace(height=lambda x, z: 0.)
+        arena = Arena([dict(id=1, nickname='Pilot')], b'', terrain, now=1., sandbox_enabled=True)
+        self.addCleanup(arena.close)
+        arena.ready(1, 1.)
+        vehicle = arena.vehicle_for(1)
+        entity = vehicle.entity_id
+        vehicle.pose = Pose((0., 20., 0.), 0.)
+        arena.world = Mock(supports_flight=True, motion={
+            entity: SimpleNamespace(grounded=False, velocity=(1., 5., 2.))})
+        arena.world.GRAVITY = 9.81
+        arena.world.flight_spin.return_value = (0.,0.,0.)
+        arena.world.movement_bounds.return_value = (-100.,-100.,100.,100.)
+        arena._sandbox_flights[entity] = sandbox.Flight(20.)
+        arena._sandbox_inputs[1] = (1., sandbox.Control(
+            sandbox.token(arena), 1, sandbox.FLIGHT | sandbox.ASCEND, 0, 0., 0., 0.))
+        self.assertEqual(arena._sandbox_frame(3., 1/60), ({entity}, {entity}))
+        self.assertEqual(arena._sandbox_flights[entity].height, 20.)
+        arena.world.set_flight_velocity.reset_mock()
+        arena._sandbox_inputs[1] = (3.01, sandbox.Control(
+            sandbox.token(arena), 2, 0, 0, 0., 0., 0.))
+        self.assertEqual(arena._sandbox_frame(3.01, 1/60), (set(), set()))
+        self.assertEqual(arena._sandbox_frame(3.03, 1/60), (set(), set()))
+        arena.world.set_flight_velocity.assert_called_once_with(
+            entity, (1.,-4.,2.), (0.,0.,0.))
 
     def test_big_boss_mode_decodes_in_both_battle_forms(self):
         from solbreaker.native_rooms import room_options

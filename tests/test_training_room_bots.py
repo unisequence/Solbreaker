@@ -1,3 +1,4 @@
+from collections import Counter
 import hashlib
 import json
 from pathlib import Path
@@ -10,7 +11,8 @@ from unittest.mock import Mock, patch
 import yaml
 
 from solbreaker import dvpl
-from solbreaker.bot_roster import BotVehicle, select_room_bot_roster
+from solbreaker import battle_setup, bot_roster
+from solbreaker.bot_roster import select_room_bot_roster
 from solbreaker.client_battle_settings import ACTIONS, FORM, upgrade_form
 from solbreaker.client_ui import STRINGS_EN, STRINGS_RU
 from solbreaker.mercury import packed_blob
@@ -69,6 +71,26 @@ class TrainingRoomBotsTests(unittest.TestCase):
         self.assertEqual((room.map_id, room.bot_counts, room.description), (7, (2, 3), 'New notes'))
         self.edit(b'Human players only')
         self.assertEqual((room.bot_counts, room.description), ((0, 0), 'Human players only'))
+
+    def test_custom_room_lineup_survives_edit_and_humans_claim_capacity(self):
+        custom = battle_setup.RoomLineup(True, (2,)*14)
+        room = self.create(custom.tag().encode() + b'[room-form] [bots 2:3] [notes] Room')
+        self.assertEqual(room.lineup, custom)
+        self.assertEqual(room.bot_counts, (2, 3))
+        self.assertEqual(room.active_bot_counts, (6, 7))
+        self.endpoint.rooms.join(2, room.id, 1)
+        self.assertEqual(room.active_bot_counts, (5, 7))
+        self.assertEqual(battle_setup.split_room_lineup(self.native.settings(room)['comment']),
+                         ('[bots 2:3] [notes] Room', custom))
+        self.assertEqual(self.native.listing(room)[1][9], '[bots 5:7] Room')
+        self.edit(b'[room-options] [time 12]', map_selector=0xffffffff)
+        self.assertEqual(room.lineup, custom)
+        self.endpoint.rooms.ready(1, True)
+        self.endpoint.rooms.ready(2, True)
+        self.endpoint.rooms.start(1)
+        self.endpoint.start_shared.assert_called_once_with(
+            [1, 2], [1, 1], map_id=6, bot_counts=(5, 7), room_lineup=custom,
+            room_settings=RoomBattleSettings(False, 12))
 
     def test_map_change_accepts_the_native_tagged_selector(self):
         self.endpoint.map_catalog[101] = 'rudniki_evening'
@@ -139,16 +161,99 @@ class TrainingRoomBotsTests(unittest.TestCase):
         self.assertEqual(room.active_bot_counts, (4, 5))
         self.assertEqual(self.native.settings(room)['limits'][1]['maxCount'], (5, 5, 5))
 
+    @staticmethod
+    def _tank(name, tier):
+        shell = SimpleNamespace(damage=250, penetration=(220, 180))
+        weapon = SimpleNamespace(clip=1, burst_count=1, reload=7., pump_reload_times=(),
+                                 interval=0., burst_interval=0., shells=(shell,))
+        return SimpleNamespace(nation='test', name=name, tier=tier, health=1000, weapon=weapon)
+
     def test_bot_recipe_uses_free_slots_after_humans(self):
-        definitions = ('first', 'second')
-        choices = tuple(BotVehicle(2, slot, definition, None) for slot, definition in enumerate(definitions))
-        with patch('solbreaker.bot_roster.select_bot_roster', return_value=choices) as select:
-            rows = select_room_bot_roster('/unused', 'player', teams=(1, 1, 2), bot_counts=(1, 2), seed='game')
-            select.assert_called_once_with('/unused', 'player', enemies=2, allies=0, seed='game')
-        self.assertEqual([(row.team, row.slot, row.definition) for row in rows],
-                         [(2, 1, 'first'), (2, 2, 'second'), (1, 2, 'first')])
+        first, second, third = (self._tank('first', 8), self._tank('second', 9),
+                                self._tank('third', 9))
+        with patch.object(bot_roster, '_catalog', return_value=()):
+            rows = select_room_bot_roster('/unused', first, teams=(1, 1, 2), bot_counts=(1, 2),
+                                          seed='game', human_definitions=(first, second, third))
+        self.assertEqual([(row.team, row.slot) for row in rows], [(2, 1), (2, 2), (1, 2)])
+        self.assertIs(rows[0].definition, second)
         with self.assertRaises(ValueError):
-            select_room_bot_roster('/unused', 'player', teams=(1, 2), bot_counts=(0, 7), seed='game')
+            select_room_bot_roster('/unused', first, teams=(1, 2), bot_counts=(0, 7), seed='game')
+
+    def test_bot_roster_pairs_roles_without_repeating_models(self):
+        player = self._tank('player', 8)
+        classes = ('heavyTank', 'mediumTank', 'AT-SPG', 'lightTank')
+        candidates = [bot_roster._Candidate('test', 'player', 8, classes[0])]
+        candidates += [bot_roster._Candidate('test', f'{kind}{i}', 8, kind)
+                       for kind in classes for i in range(7)]
+
+        def load(_game, _nation, name, grade):
+            definition = self._tank(name, 8)
+            definition.grade = grade
+            return definition
+
+        with patch.object(bot_roster, '_catalog', return_value=candidates), patch.object(
+                bot_roster, '_bot_vehicle', side_effect=load):
+            def choose(seed):
+                return bot_roster.select_bot_roster('/unused', player, enemies=7, allies=6, seed=seed)
+
+            for seed in range(12):
+                one = choose(seed)
+                self.assertEqual(one, choose(seed))
+                self.assertEqual(len({row.definition.name for row in one}), 13)
+                self.assertNotIn('player', {row.definition.name for row in one})
+                roles = [Counter(bot_roster._role(row.vehicle_class) for row in one if row.team == side)
+                         for side in (1, 2)]
+                roles[0]['heavyTank'] += 1
+                self.assertEqual(roles[0], roles[1])
+                grades = [Counter(row.definition.grade for row in one if row.team == side)
+                          for side in (1, 2)]
+                self.assertIn(bot_roster.TOP, grades[0])
+                self.assertIn(bot_roster.TOP, grades[1])
+                self.assertGreater(len(grades[0] | grades[1]), 1)
+                self.assertTrue(all(abs(grades[0][i]-grades[1][i]) <= 1 for i in range(3)))
+
+    def test_custom_lineup_and_preset_round_trip_together(self):
+        from solbreaker.storage import AccountStore
+        from solbreaker.training_config import TrainingConfig
+
+        values = (10, 25, 50, 75, 100, 0, 0, 100, 0, 0, 0)
+        presets = (battle_setup.Preset(values, True),) + (battle_setup.Preset(),)*3
+        slots = (battle_setup.EMPTY, 0x492, 0x43211) + (0,)*10
+        setup = battle_setup.BattleSetup(True, 1, slots, presets)
+        encoded = setup.encode()
+        self.assertEqual(battle_setup.split_description('settings/custom1/' + encoded.hex()),
+                         ('settings', setup))
+        self.assertEqual(battle_setup.random_filter(slots[1]), (9, 4))
+        with self.assertRaises(ValueError):
+            battle_setup.BattleSetup(True, 1, (0x5b2,)*13, presets).decode(
+                battle_setup.BattleSetup(True, 1, (0x5b2,)*13, presets).encode())
+        with tempfile.TemporaryDirectory() as directory:
+            store = AccountStore(Path(directory))
+            self.addCleanup(store.close)
+            config = TrainingConfig(mode='bots')
+            account_id = store.db.execute('SELECT id FROM accounts LIMIT 1').fetchone()['id']
+            store.save_training_config(account_id, config, setup=setup)
+            store.save_training_config(account_id, config)
+            self.assertEqual(store.battle_setup(account_id), setup)
+
+    def test_custom_lineup_leaves_empty_slots_unfilled(self):
+        player = self._tank('player', 8)
+        stock = self._tank('random', 9)
+        exact = self._tank('custom', 8)
+        exact.armor_states_controller = None
+        target = SimpleNamespace(installed=True, nation='test', model='custom', vehicle_class='heavyTank')
+        setup = battle_setup.BattleSetup(True, 0, (battle_setup.EMPTY,)*6
+                                         + (0x492, 0x43211) + (battle_setup.EMPTY,)*5)
+        candidate = bot_roster._Candidate('test', 'random', 9, 'lightTank')
+        with patch.object(bot_roster, '_catalog', return_value=(candidate,)), patch.object(
+                bot_roster, '_bot_vehicle', return_value=stock), patch(
+                'solbreaker.practice_catalog.catalog', return_value={0x3211: target}), patch(
+                'solbreaker.practice_catalog.definition', return_value=exact) as load, patch.object(
+                bot_roster, '_geometry_supported', return_value=True):
+            roster = bot_roster.custom_bot_roster('/unused', player, setup, capacity=5, seed=8)
+            load.assert_called_once_with(Path('/unused'), target, 4)
+        self.assertEqual([(row.team, row.slot, row.definition.name) for row in roster],
+                         [(2, 0, 'random'), (2, 1, 'custom')])
 
     def test_upgrade_adds_hint_and_preserves_existing_locale_entries(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -11,7 +11,8 @@ import struct
 import time
 
 from .account import account_method, command_response, pickle_document, resource_response
-from .battle_settings_wire import GET_TITLE, GET_TITLE_V2, ROOM_FORM_PREFIX, ROOM_OPTIONS_PREFIX
+from .battle_settings_wire import GET_TITLE, GET_TITLE_V2, GET_TITLE_V3, SETUP_RESPONSE, ROOM_FORM_PREFIX, ROOM_OPTIONS_PREFIX
+from .battle_setup import ROOM_MARKER, ROOM_HEADER, RoomLineup, split_room_lineup
 from .mercury import packed_blob
 from .map_catalog import map_team_capacity
 from .roster import TEAMS
@@ -60,7 +61,8 @@ def read_blob(body,offset):
 
 def room_text(title,description):
     title=title.decode('utf-8').strip();description=description.decode('utf-8')
-    if not 1<=len(title)<=64 or len(description)>512 or '\0' in title+description:
+    allowance = len(ROOM_MARKER) + 2 * ROOM_HEADER.size + 2 if description.startswith(ROOM_MARKER) else 0
+    if not 1<=len(title)<=64 or len(description)>512+allowance or '\0' in title+description:
         raise ValueError('Invalid room text length or NUL character')
     return title,description
 
@@ -77,7 +79,7 @@ def room_bot_options(description):
 
 
 def room_comment(room, *, include_rules=True):
-    first, second = room.bot_counts
+    first, second = room.active_bot_counts if room.lineup.custom and not include_rules else room.bot_counts
     options = []
     if include_rules and room.battle_mode != 'encounter':
         options.append(f'[mode {room.battle_mode}]')
@@ -92,7 +94,8 @@ def room_comment(room, *, include_rules=True):
         options.append(f'[bots {first}:{second}]')
     if include_rules:
         options.append('[notes]')
-    return ' '.join(filter(None, (*options, room.description)))
+    comment = ' '.join(filter(None, (*options, room.description)))
+    return room.lineup.tag() + comment if include_rules and room.lineup != RoomLineup() else comment
 
 
 def room_options(description, previous=None):
@@ -175,7 +178,7 @@ def create_request(body,*,with_vehicle=False,with_map=False,with_mode=False,conf
     if map_id != 0 and map_id not in allowed:
         raise ValueError('Room map is not available in this lab')
     from .battle_settings_wire import TITLE
-    settings_get = title in (GET_TITLE.encode(), GET_TITLE_V2.encode())
+    settings_get = title in (GET_TITLE.encode(), GET_TITLE_V2.encode(), GET_TITLE_V3.encode())
     bot_setup = title == TITLE.encode()
     invalid_options = ((battle_type not in (0, 1) or teamkill not in (0, 1)) if bot_setup
                        else (battle_type not in (0, 1, 2) or bool(teamkill)))
@@ -358,20 +361,29 @@ class NativeRooms:
                     available_map_ids=self.map_ids)
                 self.manager.hangar(account)
                 if self.manager.current(account):raise ValueError('Already in a room')
-                if title not in (GET_TITLE, GET_TITLE_V2) and not any(v['id']==vehicle for v in self.progression.prepare(account)['vehicles']):
+                if title not in (GET_TITLE, GET_TITLE_V2, GET_TITLE_V3) and not any(v['id']==vehicle for v in self.progression.prepare(account)['vehicles']):
                     raise ValueError('Vehicle is not in the garage')
             from .battle_settings import decode, packed_recipe
             from .battle_settings_wire import TITLE, SAVED_RESULT, LEGACY_PREFIX, LOADED_RESULT
-            if title in (GET_TITLE, GET_TITLE_V2):
+            if title in (GET_TITLE, GET_TITLE_V2, GET_TITLE_V3):
                 from .training_config import TrainingConfig
                 fallback = getattr(self.endpoint.server, 'training_config', None) or TrainingConfig()
                 config = self.endpoint.server.accounts.store.training_config(account, fallback).for_game_mode(7)
-                self.send(client, account_method(19, struct.pack('<IB',
-                    packed_recipe(config, self.endpoint.map_catalog, include_rules=title == GET_TITLE_V2), LOADED_RESULT)))
+                messages = []
+                if title == GET_TITLE_V3:
+                    setup = self.endpoint.server.accounts.store.battle_setup(account).encode()
+                    for index, offset in enumerate(range(0, len(setup), 4)):
+                        word = setup[offset:offset+4].ljust(4, b'\0')
+                        messages.append(account_method(19, word + bytes([SETUP_RESPONSE + index])))
+                messages.append(account_method(19, struct.pack('<IB',
+                    packed_recipe(config, self.endpoint.map_catalog, include_rules=title != GET_TITLE), LOADED_RESULT)))
+                self.send(client, b'\x13'.join(messages))
                 self.endpoint.server.event('native_bot_settings_loaded', account_id=account,
                                            settings=config.to_dict())
                 return
             if title == TITLE:
+                from .battle_setup import split_description
+                description, setup = split_description(description)
                 config = decode(title, description, map_id, self.endpoint.map_catalog)
                 legacy = description.startswith(LEGACY_PREFIX)
                 if legacy:
@@ -383,19 +395,33 @@ class NativeRooms:
                         and not self.endpoint.resolve_map_spec(map_id).strategic_points):
                     raise ValueError('This map has no Supremacy capture points')
                 try:
-                    self.endpoint.server.accounts.store.save_training_config(account, config)
+                    store = self.endpoint.server.accounts.store
+                    if setup is None:
+                        store.save_training_config(account, config)
+                    else:
+                        store.save_training_config(account, config, setup=setup)
                 except sqlite3.Error as exc:
                     raise ValueError('Cannot save bot battle settings') from exc
-                self.send(client, account_method(19, struct.pack('<IB',
-                    packed_recipe(config, self.endpoint.map_catalog, include_rules=not legacy), SAVED_RESULT)))
+                from .account import account_update
+                from .profile import game_mode_descriptions
+                payload = account_method(19, struct.pack('<IB',
+                    packed_recipe(config, self.endpoint.map_catalog, include_rules=not legacy), SAVED_RESULT))
+                revision = getattr(client, 'account_revision', None)
+                if type(revision) is int:
+                    payload += b'\x13' + account_update({
+                        'prevRev': revision, 'rev': revision,
+                        'cache': {'gameModes': game_mode_descriptions(False, config.battle_mode)},
+                    })
+                self.send(client, payload)
                 self.endpoint.server.event('native_bot_settings_saved', account_id=account,
                                            settings=config.to_dict())
                 return
+            description,lineup=split_room_lineup(description)
             description,bot_counts,override,settings=room_options(description)
             room=self.manager.create(account,map_id=self.map_id if map_id==0 else map_id,
                                      bot_counts=bot_counts,
                                      battle_mode=override or ('supremacy' if mode==1 else 'encounter'),
-                                     battle_settings=settings)
+                                     battle_settings=settings,lineup=lineup)
             room.title,room.description=title,description
             if vehicle is not None:
                 try:self.refresh_vehicle(account,vehicle)
@@ -453,11 +479,12 @@ class NativeRooms:
                     raise ValueError('Leave the training room before starting a bot battle')
                 title,description=room_text(*strings)
                 room = self.manager.owned(client.account_id)
+                description,lineup=split_room_lineup(description)
                 description,bot_counts,mode,settings=room_options(description, room)
                 changed=self.manager.rename(client.account_id,title,description,
                     map_id=map_id or None,bot_counts=bot_counts,
                     battle_mode=mode or ('supremacy' if numbers[1]==1 else 'encounter'),
-                    battle_settings=settings)
+                    battle_settings=settings,lineup=lineup)
                 if map_id:
                     self.endpoint.server.event('native_room_map_changed',account_id=client.account_id,
                         room_id=changed.id,map_id=changed.map_id,

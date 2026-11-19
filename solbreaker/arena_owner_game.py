@@ -69,6 +69,7 @@ def snapshot(arena: Arena, events=(), *, account_id=None, training_error=None) -
             state['training_error'] = training_error
         if getattr(arena, 'practice', False):
             state['practice_spawned'] = tuple(sorted(arena.practice_spawned))
+            state['practice_client_ids'] = dict(arena.practice_client_ids)
         capture = getattr(arena, 'base_capture', None)
         state['base_capture'] = capture.view() if capture is not None else None
         supremacy = getattr(arena, 'supremacy', None)
@@ -212,27 +213,24 @@ class GameArenaHandler:
             return HandlerOutput(self.arena.result_id, self._observation(command), ())
         if command.op == 'recon_snapshot':
             import uuid
-            from .recon_snapshot import RosterVehicle, build_recon_snapshot, build_team_spotting_snapshot
-            from .recon_wire import encode
+            from .recon_snapshot import (RosterVehicle, build_recon_snapshot, build_team_spotting_snapshot,
+                                         encode_arena_recon_snapshot)
             sequence = struct.unpack('<I', command.payload)[0]
             player = self.arena.players[command.account_id]
             timeline = getattr(self.arena, 'time_stop', None)
             battle_id = uuid.UUID(self.arena.result_id)
-            if timeline is not None:
-                private = timeline.recon_snapshot(player.vehicle_id, battle_id, sequence)
-                if private is not None:
-                    return HandlerOutput(self.arena.result_id, snapshot(self.arena), (), recon=encode(private))
-            if self.arena.team_spotting:
-                payload = encode(build_team_spotting_snapshot(
-                    self.arena, player.vehicle_id, battle_id=battle_id, sequence=sequence))
-                return HandlerOutput(self.arena.result_id, snapshot(self.arena), (), recon=payload)
-            roster = tuple(RosterVehicle(vehicle.entity_id, vehicle.team, vehicle.alive)
-                           for _, vehicle in present_vehicles(self.arena, player)
-                           if not mad_games.concealed(vehicle, player.team))
-            payload = encode(build_recon_snapshot(
-                self.arena.recon, roster, player.vehicle_id,
-                battle_id=battle_id, sequence=sequence,
-                now=self.arena.simulation_time))
+            view = timeline.recon_snapshot(player.vehicle_id, battle_id, sequence) if timeline else None
+            if view is None and self.arena.team_spotting:
+                view = build_team_spotting_snapshot(
+                    self.arena, player.vehicle_id, battle_id=battle_id, sequence=sequence)
+            if view is None:
+                roster = tuple(RosterVehicle(vehicle.entity_id, vehicle.team, vehicle.alive)
+                               for _, vehicle in present_vehicles(self.arena, player)
+                               if not mad_games.concealed(vehicle, player.team))
+                view = build_recon_snapshot(
+                    self.arena.recon, roster, player.vehicle_id,
+                    battle_id=battle_id, sequence=sequence, now=self.arena.simulation_time)
+            payload = encode_arena_recon_snapshot(self.arena, view, player.vehicle_id)
             return HandlerOutput(self.arena.result_id, snapshot(self.arena), (), recon=payload)
         if command.op == 'step':
             self.arena.step(command.at, deadline=command.deadline)
@@ -365,6 +363,7 @@ class GameArenaFactory:
     compact_inputs: bool = False
     bot_roster: tuple | None = None
     bot_scene_settings: tuple = ()
+    custom_bot_slots: bool = False
     prebattle_seconds: float = 0.
     map_cache: MapCache | None = None
     sandbox_enabled: bool = False
@@ -425,7 +424,7 @@ class GameArenaFactory:
                           recon_enabled=self.recon_enabled, incremental=True,
                           recon_game=self.game if self.recon_enabled else None,
                           bot_roster=self.bot_roster, bot_game=self.game,
-                          bot_scene_settings=self.bot_scene_settings,
+                          bot_scene_settings=self.bot_scene_settings, custom_bot_slots=self.custom_bot_slots,
                           prebattle_seconds=self.prebattle_seconds, parallel_native_build=True,
                           sandbox_enabled=self.sandbox_enabled, room_mode=self.room_mode,
                           room_settings=self.room_settings)

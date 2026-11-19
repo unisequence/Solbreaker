@@ -2,7 +2,7 @@
 from pathlib import Path
 import struct
 
-from . import big_boss, dvpl
+from . import big_boss, client_battle_setup, client_practice_picker, dvpl
 from .battle_settings_wire import PREFIX, RULES_SHIFT
 from .roster import TEAM_SIZE
 from .training_config import MAX_ROOM_MINUTES
@@ -232,7 +232,7 @@ def _room_duration_settings(root):
     rows = container['children']
     rows[:] = [row for row in rows if row.get('name') not in
                ('LocalRoomLives', 'LocalRoomAmmo', 'LocalRoomDuration', 'LocalRoomOptions',
-                'LocalRoomBots1', 'LocalRoomBots2')]
+                'LocalRoomBots1', 'LocalRoomBots2', 'LocalSoloBotHeading')]
     room_rules, = [row for row in rows if row.get('name') == 'LocalRoomRules']
     components = root['components']
     local_vars = components['UIDataLocalVarsComponent']['data']
@@ -322,7 +322,21 @@ def _room_duration_settings(root):
     options = dict(name='LocalRoomOptions', visible=False, input=False, bindings=[['text', tags]])
     options['class'] = 'UITextField'
     index = rows.index(room_rules) + 1
-    rows[index:index] = [lives, duration, *bots, ammo, options]
+    rows[index:index] = [lives, *bots, ammo, options]
+    bot_names = ('LocalAllies', 'LocalEnemies', 'LocalDifficulty', 'LocalRules')
+    bot_controls = [row for row in rows if row.get('name') in bot_names]
+    rows[:] = [row for row in rows if row.get('name') not in bot_names]
+    heading = {'class': 'UIStaticText', 'name': 'LocalSoloBotHeading', 'input': False,
+               'classes': 'header4 text-color-white',
+               'bindings': [['visible', 'localBotSetup']],
+               'components': {
+                   'SizePolicy': {'horizontalPolicy': 'PercentOfParent', 'verticalPolicy': 'FixedSize',
+                                  'verticalValue': 50.},
+                   'UITextComponent': {'text': 'Local/BotsTitle', 'align': ['HCENTER', 'VCENTER']},
+               }}
+    map_row, = [row for row in rows if row.get('name') == 'Map']
+    index = rows.index(map_row) + 1
+    rows[index:index] = [duration, heading, *bot_controls]
     return True
 
 
@@ -399,6 +413,7 @@ def patch_form(document):
     _room_rules(root)
     _room_duration_settings(root)
     _mode_picker(root)
+    client_battle_setup.patch_form(document, root)
 
 
 MODE_KEYS = ('Elimination', 'Encounter', 'Supremacy', 'Gravity', 'BigBoss', 'MadGames', 'Uprising')
@@ -609,6 +624,7 @@ action LocalRoomBots{team}More() {{ ChangeData(roomBots{team}Override, min({TEAM
                             for i in range(1, big_boss.ROLE_LEVEL_COUNT + 1))
     boss_actions += 'action SolRespawn() { ChangeData(solRespawn, solRespawn + 1); }\n'
     boss_actions += 'action SolChangeTank() { ChangeData(solChangeTank, solChangeTank + 1); }\n'
+    boss_actions += client_practice_picker.actions()
     return {ACTIONS: dvpl.encode(actions.replace('@MAX_ROOM_MINUTES@', str(MAX_ROOM_MINUTES)).encode()),
             BOSS_ACTIONS: dvpl.encode(boss_actions.encode())}
 
@@ -642,7 +658,16 @@ STRINGS = {
            'RoomHeaderBots': 'Боты', 'RoomHeaderTime': 'Время'}}
 
 
-STRINGS['en'].update(ModeCancel='Cancel', ModeSelect='Select', ModeTabMadGames='Mad Games',
+BATTLE_PARAMETER_LABELS = (
+    'Kind', 'Allies', 'Enemies', 'Difficulty', 'Rules', 'Lives', 'Duration',
+    'UnlimitedAmmo', 'RoomBotsCaption', 'RoomBots1', 'RoomBots2',
+)
+for translations in STRINGS.values():
+    for parameter in BATTLE_PARAMETER_LABELS:
+        translations[parameter] = translations[parameter].upper()
+
+
+STRINGS['en'].update(PolygonSettings='Polygon settings', ModeCancel='Cancel', ModeSelect='Select', ModeTabMadGames='Mad Games',
                      ModeDescriptionElimination='Destroy the enemy team.',
                      ModeDescriptionEncounter='Capture the base or destroy the enemy team.',
                      ModeDescriptionSupremacy='Capture control points to earn team points.',
@@ -650,7 +675,7 @@ STRINGS['en'].update(ModeCancel='Cancel', ModeSelect='Select', ModeTabMadGames='
                      ModeDescriptionBigBoss='Five roles with special abilities and respawns.',
                      ModeDescriptionMadGames='Speed boosts, dashes and reinforced ramming.',
                      ModeDescriptionUprising='Three lives and abilities that grow stronger between respawns.')
-STRINGS['ru'].update(ModeCancel='Отмена', ModeSelect='Выбрать', ModeTabMadGames='Безумие',
+STRINGS['ru'].update(PolygonSettings='Настройки Полигона', ModeCancel='Отмена', ModeSelect='Выбрать', ModeTabMadGames='Безумие',
                      ModeDescriptionElimination='Уничтожь команду противника.',
                      ModeDescriptionEncounter='Захвати базу или уничтожь противников.',
                      ModeDescriptionSupremacy='Захватывай точки и набирай очки команды.',
@@ -860,6 +885,7 @@ def patch_boss_menu(document):
     change_tank['children'][0]['components']['UITextComponent']['text'] = 'Local/BattleSettings/ChangeTank'
     buttons.insert(buttons.index(respawn) + 1, change_tank)
     root['children'].append(_boss_value('SolChangeTankValue', 'solChangeTank'))
+    client_practice_picker.patch_menu(document, root, buttons)
 
 
 def _room_header(document):
@@ -896,13 +922,15 @@ def patch_room(document):
 
 def upgrade_form(lab, manifest):
     """Refresh the installed native battle settings form in an idle client."""
-    if manifest.get('battle_settings_ui_version') == 37:
+    if manifest.get('battle_settings_ui_version') == 59:
         return manifest
     from hashlib import sha256
     import json
     import yaml
-    from .client_ui import BATTLE_BUTTON, HANGAR, HANGAR_ACTIONS, STRINGS_EN, STRINGS_RU, _StringsLoader, patched_resource
+    from .client_ui import (BATTLE_BUTTON, GAME_TYPES, HANGAR, HANGAR_ACTIONS, STRINGS_EN,
+                            STRINGS_RU, _StringsLoader, patched_resource)
     from .connection import atomic_write
+    from . import client_practice_picker
 
     overrides = dict(manifest.get('ui_overrides', {}))
     if not all(relative in overrides for relative in (FORM, ACTIONS, STRINGS_EN, STRINGS_RU)):
@@ -946,6 +974,7 @@ def upgrade_form(lab, manifest):
                     room_caption['bindings'] = room_binding
                     changed = True
                 _mode_picker(root)
+                client_battle_setup.patch_form(document, root)
                 changed = True
         else:
             document = yaml.load(raw, Loader=_StringsLoader)
@@ -956,7 +985,14 @@ def upgrade_form(lab, manifest):
                                    'RoomHeaderBots', 'RoomHeaderTime', 'UnlimitedAmmo', 'AmmoOn', 'AmmoOff')}
             strings.update({f'Local/BattleSettings/{key}': value for key, value in STRINGS[locale].items()
                             if key in ('Respawn', 'ChangeTank', 'ReturnToBattle') or key.startswith(('BossRole', 'ModeDescription'))
-                            or key in ('ModeCancel', 'ModeSelect', 'ModeTabMadGames')})
+                            or key in ('ModeCancel', 'ModeSelect', 'ModeTabMadGames', 'PolygonSettings')
+                            or key in BATTLE_PARAMETER_LABELS})
+            locale_index = 0 if locale == 'en' else 1
+            strings.update({f'Local/Sb{key}': values[locale_index]
+                            for key, values in client_practice_picker.STRINGS.items()
+                            if key.startswith(('Stats', 'Target', 'Tm'))})
+            strings.update({f'Local/SbSetup{key}': values[locale_index]
+                            for key, values in client_battle_setup.STRINGS.items()})
             changed = any(document.get(key) != value for key, value in strings.items())
             document.update(strings)
         content = (dvpl.encode(yaml.safe_dump(document, sort_keys=False, allow_unicode=True,
@@ -999,6 +1035,18 @@ def upgrade_form(lab, manifest):
                     raise ValueError('Training return requires a private hangar overlay')
                 staged[target] = patched_resource(game/'Data'/relative, relative)
                 overrides[relative] = sha256(staged[target]).hexdigest()
+        if GAME_TYPES in overrides:
+            target = data/GAME_TYPES
+            executable = lab/'client/wotblitz.exe'
+            if executable.is_file():
+                with executable.open('rb') as handle:
+                    handle.seek(NAVIGATION_OFFSET)
+                    navigation = handle.read(len(NAVIGATION_BEFORE))
+                if navigation == NAVIGATION_AFTER.ljust(len(NAVIGATION_BEFORE), b'\x90'):
+                    if target.resolve(strict=True) != target or not target.is_file():
+                        raise ValueError('Battle settings require a private game type picker')
+                    staged[target] = patched_resource(game/'Data'/GAME_TYPES, GAME_TYPES)
+                    overrides[GAME_TYPES] = sha256(staged[target]).hexdigest()
         menu_source = game/'Data'/BATTLE_MENU
         if menu_source.is_file():
             document = yaml.safe_load(dvpl.read(menu_source))
@@ -1015,7 +1063,7 @@ def upgrade_form(lab, manifest):
     for target, content in staged.items():
         atomic_write(target, content, replace_symlink=target in (data/ROOM, data/BATTLE_MENU))
     updated = dict(manifest, ui_overrides=overrides, room_bot_hint_version=1,
-                   battle_settings_ui_version=37)
+                   battle_settings_ui_version=59)
     atomic_write(lab/'manifest.json', (json.dumps(updated, indent=2)+'\n').encode())
     return updated
 

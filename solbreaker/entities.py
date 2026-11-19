@@ -1,6 +1,7 @@
 """Battle state independent of connections and client wire messages."""
 from dataclasses import dataclass, field
 
+from .sandbox import STAT_ACCURACY, STAT_AIM, STAT_HULL, stat_bonus
 from .battle_rewards import BattleReward, calculate_rewards
 from .aiming import GunAim
 from .collision import Pose
@@ -38,6 +39,11 @@ class Vehicle:
     reload_total: float = 6.  # Current full-cycle duration, not elapsed history.
     reload_kind: str = 'reload'  # What reload_at/total time: 'reload' (magazine) or 'interval'.
     sandbox_fast_reload: bool = False
+    sandbox_reload_override: float | None = None
+    sandbox_boost_strength: int | None = None
+    sandbox_preset: tuple[int, ...] = ()
+    sandbox_stats: dict[int, int] = field(default_factory=dict)
+    sandbox_base_health: int | None = None
     sandbox_god_mode: bool = False
     # Pump autoreloader refill of raw index clip, separate from the reload_at
     # fire gate. pump_at 0 is idle; pump_waiting resumes it after an intershot.
@@ -98,7 +104,6 @@ class Vehicle:
     mad_observation_warning: bool = False
     spotting_moving: bool = False
     spotting_last_motion_at: float | None = None
-    mad_dash_direction: int = 0
     engine_factor: float = 1.0
     rotation_factor: float = 1.0  # timed hull turn multiplier; also bounds the aim hull omega
     forward_speed_bias: float = 0.  # timed m/s added once to the forward/reverse caps
@@ -123,11 +128,15 @@ class Vehicle:
 
     @property
     def effective_aiming_time_factor(self):
-        return self.aiming_time_factor * self.consumable_aiming_time_factor
+        return self.aiming_time_factor * self.consumable_aiming_time_factor / stat_bonus(self, STAT_AIM)
 
     @property
     def effective_dispersion_factor(self):
-        return self.shot_dispersion_factor * self.consumable_dispersion_factor
+        return self.shot_dispersion_factor * self.consumable_dispersion_factor / stat_bonus(self, STAT_ACCURACY)
+
+    @property
+    def effective_hull_rotation_factor(self):
+        return self.rotation_factor * stat_bonus(self, STAT_HULL)
 
     @property
     def shell_id(self):
@@ -177,6 +186,8 @@ class BattleEvent:
     actor: int = 0
     target: int = 0
     data: dict = field(default_factory=dict)
+    client_actor: int | None = None
+    client_target: int | None = None
 
 
 @dataclass(frozen=True)

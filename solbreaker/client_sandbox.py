@@ -10,14 +10,16 @@ import zlib
 from . import client_patch, client_recon
 
 INPUT_SHA256 = '2dc4ab995f04313d93b998b366067538b035d45a696b4ced046de356ca7b5a3d'
-OUTPUT_SHA256 = 'd60c490960c7d3249b5795714374dc90d111abac91d8f60fdb43b566fc422335'
+OUTPUT_SHA256 = '20de03c44cc3cfc62c7a499f68e61e4601f98571e23ba6cc204f49a96b63ca5e'
 VA = 0x4B1EA00
 RAW = 0x466E600
 SECTION_USED = 0x2A00
-SECTION_LIMIT = 0xA000
+# The sandbox occupies the final PE section, whose size is updated on patch.
+SECTION_LIMIT = 0x10000
 MAPS_OFFSET = 0x3000
 BOSS_EXIT_OFFSET = 0x3900
 CALLS = (
+    (0xB7E690, 0xB84750, 'sandbox_zoom_changed'),
     (0xB00531, 0x7B70B0, 'sandbox_particle_update_queue'),
     (0x1323FBB, 0x132AD50, 'sandbox_tracer_update'),
     (0x1BC4C5A, 0x1314F10, 'sandbox_tracer_position'),
@@ -74,8 +76,10 @@ SLOTS = (
     (0x3801FC4 + 0xF0, 0x1845DD0, 'sandbox_stop'),
 )
 INLINE_JUMPS = (
+    (0x1237308, bytes.fromhex('807da300c745e800000000'), 'sandbox_zoom_migration'),
     (0xAF5450, bytes.fromhex('8b338b8e94000000'), 'sandbox_particle_lifetime'),
     (0x1BCA078, bytes.fromhex('0f54c80f54d0f30f58d1'), 'sandbox_spread_ring'),
+    (0x4B1DE64, bytes.fromhex('837d0c7f7418'), 'sandbox_setup_reply'),
 )
 PREVIOUS_ENTRIES = {
     'b7970803a7eecc465735bc4e7ae68323dc0d109e95ae40151261679dafab5c81': {
@@ -1837,6 +1841,1181 @@ PREVIOUS_ENTRIES = {
         'sandbox_particle_lifetime': 0x4b22f45,
         'sandbox_spread_ring': 0x4b22f7b,
     },
+    'd60c490960c7d3249b5795714374dc90d111abac91d8f60fdb43b566fc422335': {
+        'sandbox_particle_update_queue': 0x4b244c2,
+        'sandbox_tracer_update': 0x4b2411b,
+        'sandbox_tracer_position': 0x4b24190,
+        'sandbox_scene_shader_clock': 0x4b24540,
+        'sandbox_load_keyboard': 0x4b23d22,
+        'sandbox_save_keyboard': 0x4b23d67,
+        'boss_stock_panel': 0x4b22d6a,
+        'boss_screen_root': 0x4b22d10,
+        'sandbox_boss_menu_open': 0x4b22300,
+        'sandbox_keep_replay_markers': 0x4b203c8,
+        'sandbox_graphics_page': 0x4b20b74,
+        'sandbox_blur_material': 0x4b251ba,
+        'sandbox_scene_graded_blit': 0x4b253f9,
+        'sandbox_scene_blit': 0x4b2538d,
+        'sandbox_refresh_score': 0x4b1ff2f,
+        'sandbox_message': 0x4b245cf,
+        'sandbox_reset': 0x4b24c36,
+        'sandbox_frame': 0x4b20033,
+        'sandbox_compute_marker': 0x4b25022,
+        'sandbox_draw': 0x4b2042a,
+        'sandbox_mouse_hook': 0x4b1ea0c,
+        'sandbox_binding_menu': 0x4b23e4a,
+        'sandbox_binding_caption': 0x4b1fd7e,
+        'sandbox_binding_name': 0x4b1fd43,
+        'sandbox_set_binding': 0x4b1fe0f,
+        'sandbox_reset_bindings': 0x4b1fdb9,
+        'sandbox_controls_version': 0x4b23de5,
+        'sandbox_migrate_controls': 0x4b23d96,
+        'sandbox_scene_particles': 0x4b242d9,
+        'sandbox_open_replay_folder': 0x4b23f89,
+        'sandbox_scene_animation': 0x4b24279,
+        'sandbox_scene_wind': 0x4b24291,
+        'sandbox_scene_wave': 0x4b242a9,
+        'sandbox_scene_trees': 0x4b242c1,
+        'sandbox_notice_attach': 0x4b1ffae,
+        'sandbox_notice_detach': 0x4b1ffed,
+        'sandbox_project_markers': 0x4b2025f,
+        'sandbox_gun_marker': 0x4b24ddc,
+        'sandbox_blur_slider': 0x4b20c57,
+        'room_header_description': 0x4b20959,
+        'room_load_description': 0x4b20898,
+        'room_get_description': 0x4b209f8,
+        'sandbox_move': 0x4b200e0,
+        'sandbox_stop': 0x4b201e9,
+        'sandbox_particle_lifetime': 0x4b22f45,
+        'sandbox_spread_ring': 0x4b22f7b,
+    },
+    'bc2ee600217ba0d9117ca6c2d56c736bb68c45b3d0f3d800aa992a89a39cded8': {
+        'sandbox_particle_update_queue': 0x4b24882,
+        'sandbox_tracer_update': 0x4b244db,
+        'sandbox_tracer_position': 0x4b24550,
+        'sandbox_scene_shader_clock': 0x4b24900,
+        'sandbox_load_keyboard': 0x4b240e2,
+        'sandbox_save_keyboard': 0x4b24127,
+        'boss_stock_panel': 0x4b22d6a,
+        'boss_screen_root': 0x4b22d10,
+        'sandbox_boss_menu_open': 0x4b22300,
+        'sandbox_keep_replay_markers': 0x4b20407,
+        'sandbox_graphics_page': 0x4b20bb3,
+        'sandbox_blur_material': 0x4b25587,
+        'sandbox_scene_graded_blit': 0x4b257c6,
+        'sandbox_scene_blit': 0x4b2575a,
+        'sandbox_refresh_score': 0x4b1ff6e,
+        'sandbox_message': 0x4b2498f,
+        'sandbox_reset': 0x4b25003,
+        'sandbox_frame': 0x4b20072,
+        'sandbox_compute_marker': 0x4b253ef,
+        'sandbox_draw': 0x4b20469,
+        'sandbox_mouse_hook': 0x4b1ea0c,
+        'sandbox_binding_menu': 0x4b2420a,
+        'sandbox_binding_caption': 0x4b1fdbd,
+        'sandbox_binding_name': 0x4b1fd82,
+        'sandbox_set_binding': 0x4b1fe4e,
+        'sandbox_reset_bindings': 0x4b1fdf8,
+        'sandbox_controls_version': 0x4b241a5,
+        'sandbox_migrate_controls': 0x4b24156,
+        'sandbox_scene_particles': 0x4b24699,
+        'sandbox_open_replay_folder': 0x4b24349,
+        'sandbox_scene_animation': 0x4b24639,
+        'sandbox_scene_wind': 0x4b24651,
+        'sandbox_scene_wave': 0x4b24669,
+        'sandbox_scene_trees': 0x4b24681,
+        'sandbox_notice_attach': 0x4b1ffed,
+        'sandbox_notice_detach': 0x4b2002c,
+        'sandbox_project_markers': 0x4b2029e,
+        'sandbox_gun_marker': 0x4b251a9,
+        'sandbox_blur_slider': 0x4b20c96,
+        'room_header_description': 0x4b20998,
+        'room_load_description': 0x4b208d7,
+        'room_get_description': 0x4b20a37,
+        'sandbox_move': 0x4b2011f,
+        'sandbox_stop': 0x4b20228,
+        'sandbox_particle_lifetime': 0x4b23305,
+        'sandbox_spread_ring': 0x4b2333b,
+    },
+    '522e741af622f4dd23670dc7300fd2169d79a61cf202147c9072b73feccf2980': {
+        'sandbox_particle_update_queue': 0x4b2590c,
+        'sandbox_tracer_update': 0x4b25565,
+        'sandbox_tracer_position': 0x4b255da,
+        'sandbox_scene_shader_clock': 0x4b2598a,
+        'sandbox_load_keyboard': 0x4b2516c,
+        'sandbox_save_keyboard': 0x4b251b1,
+        'boss_stock_panel': 0x4b23930,
+        'boss_screen_root': 0x4b238d6,
+        'sandbox_boss_menu_open': 0x4b22300,
+        'sandbox_keep_replay_markers': 0x4b2039e,
+        'sandbox_graphics_page': 0x4b20b61,
+        'sandbox_blur_material': 0x4b2664a,
+        'sandbox_scene_graded_blit': 0x4b26889,
+        'sandbox_scene_blit': 0x4b2681d,
+        'sandbox_refresh_score': 0x4b1ff05,
+        'sandbox_message': 0x4b25a19,
+        'sandbox_reset': 0x4b260b4,
+        'sandbox_frame': 0x4b20009,
+        'sandbox_compute_marker': 0x4b264b2,
+        'sandbox_draw': 0x4b20400,
+        'sandbox_mouse_hook': 0x4b1ea0c,
+        'sandbox_binding_menu': 0x4b25294,
+        'sandbox_binding_caption': 0x4b1fd54,
+        'sandbox_binding_name': 0x4b1fd19,
+        'sandbox_set_binding': 0x4b1fde5,
+        'sandbox_reset_bindings': 0x4b1fd8f,
+        'sandbox_controls_version': 0x4b2522f,
+        'sandbox_migrate_controls': 0x4b251e0,
+        'sandbox_scene_particles': 0x4b25723,
+        'sandbox_open_replay_folder': 0x4b253d3,
+        'sandbox_scene_animation': 0x4b256c3,
+        'sandbox_scene_wind': 0x4b256db,
+        'sandbox_scene_wave': 0x4b256f3,
+        'sandbox_scene_trees': 0x4b2570b,
+        'sandbox_notice_attach': 0x4b1ff84,
+        'sandbox_notice_detach': 0x4b1ffc3,
+        'sandbox_project_markers': 0x4b20235,
+        'sandbox_gun_marker': 0x4b2626c,
+        'sandbox_blur_slider': 0x4b20c44,
+        'room_header_description': 0x4b20946,
+        'room_load_description': 0x4b20885,
+        'room_get_description': 0x4b209e5,
+        'sandbox_move': 0x4b200b6,
+        'sandbox_stop': 0x4b201bf,
+        'sandbox_particle_lifetime': 0x4b24165,
+        'sandbox_spread_ring': 0x4b2419b,
+    },
+    '79671c0237466c225ef4d550c7c5059bcc7fc715c7ce52d8eca3911c9fcbaaab': {
+        'sandbox_particle_update_queue': 0x4b25a34,
+        'sandbox_tracer_update': 0x4b2568d,
+        'sandbox_tracer_position': 0x4b25702,
+        'sandbox_scene_shader_clock': 0x4b25ab2,
+        'sandbox_load_keyboard': 0x4b25294,
+        'sandbox_save_keyboard': 0x4b252d9,
+        'boss_stock_panel': 0x4b23a13,
+        'boss_screen_root': 0x4b239b9,
+        'sandbox_boss_menu_open': 0x4b22300,
+        'sandbox_keep_replay_markers': 0x4b2039e,
+        'sandbox_graphics_page': 0x4b20b61,
+        'sandbox_blur_material': 0x4b26778,
+        'sandbox_scene_graded_blit': 0x4b269b7,
+        'sandbox_scene_blit': 0x4b2694b,
+        'sandbox_refresh_score': 0x4b1ff05,
+        'sandbox_message': 0x4b25b41,
+        'sandbox_reset': 0x4b261e2,
+        'sandbox_frame': 0x4b20009,
+        'sandbox_compute_marker': 0x4b265e0,
+        'sandbox_draw': 0x4b20400,
+        'sandbox_mouse_hook': 0x4b1ea0c,
+        'sandbox_binding_menu': 0x4b253bc,
+        'sandbox_binding_caption': 0x4b1fd54,
+        'sandbox_binding_name': 0x4b1fd19,
+        'sandbox_set_binding': 0x4b1fde5,
+        'sandbox_reset_bindings': 0x4b1fd8f,
+        'sandbox_controls_version': 0x4b25357,
+        'sandbox_migrate_controls': 0x4b25308,
+        'sandbox_scene_particles': 0x4b2584b,
+        'sandbox_open_replay_folder': 0x4b254fb,
+        'sandbox_scene_animation': 0x4b257eb,
+        'sandbox_scene_wind': 0x4b25803,
+        'sandbox_scene_wave': 0x4b2581b,
+        'sandbox_scene_trees': 0x4b25833,
+        'sandbox_notice_attach': 0x4b1ff84,
+        'sandbox_notice_detach': 0x4b1ffc3,
+        'sandbox_project_markers': 0x4b20235,
+        'sandbox_gun_marker': 0x4b2639a,
+        'sandbox_blur_slider': 0x4b20c44,
+        'room_header_description': 0x4b20946,
+        'room_load_description': 0x4b20885,
+        'room_get_description': 0x4b209e5,
+        'sandbox_move': 0x4b200b6,
+        'sandbox_stop': 0x4b201bf,
+        'sandbox_particle_lifetime': 0x4b24245,
+        'sandbox_spread_ring': 0x4b2427b,
+    },
+    '5553bc8b38ec63670848b1cde9c9e8c933c114b1f18f9d5ba882f124712b4604': {
+        'sandbox_particle_update_queue': 0x4b25b42,
+        'sandbox_tracer_update': 0x4b2579b,
+        'sandbox_tracer_position': 0x4b25810,
+        'sandbox_scene_shader_clock': 0x4b25bc0,
+        'sandbox_load_keyboard': 0x4b253a2,
+        'sandbox_save_keyboard': 0x4b253e7,
+        'boss_stock_panel': 0x4b23d8c,
+        'boss_screen_root': 0x4b23d32,
+        'sandbox_boss_menu_open': 0x4b22300,
+        'sandbox_keep_replay_markers': 0x4b20392,
+        'sandbox_graphics_page': 0x4b20b47,
+        'sandbox_blur_material': 0x4b268e0,
+        'sandbox_scene_graded_blit': 0x4b26b1f,
+        'sandbox_scene_blit': 0x4b26ab3,
+        'sandbox_refresh_score': 0x4b1fef9,
+        'sandbox_message': 0x4b25c4f,
+        'sandbox_reset': 0x4b26356,
+        'sandbox_frame': 0x4b1fffd,
+        'sandbox_compute_marker': 0x4b26748,
+        'sandbox_draw': 0x4b203f4,
+        'sandbox_mouse_hook': 0x4b1ea0c,
+        'sandbox_binding_menu': 0x4b254ca,
+        'sandbox_binding_caption': 0x4b1fd48,
+        'sandbox_binding_name': 0x4b1fd0d,
+        'sandbox_set_binding': 0x4b1fdd9,
+        'sandbox_reset_bindings': 0x4b1fd83,
+        'sandbox_controls_version': 0x4b25465,
+        'sandbox_migrate_controls': 0x4b25416,
+        'sandbox_scene_particles': 0x4b25959,
+        'sandbox_open_replay_folder': 0x4b25609,
+        'sandbox_scene_animation': 0x4b258f9,
+        'sandbox_scene_wind': 0x4b25911,
+        'sandbox_scene_wave': 0x4b25929,
+        'sandbox_scene_trees': 0x4b25941,
+        'sandbox_notice_attach': 0x4b1ff78,
+        'sandbox_notice_detach': 0x4b1ffb7,
+        'sandbox_project_markers': 0x4b20229,
+        'sandbox_gun_marker': 0x4b26502,
+        'sandbox_blur_slider': 0x4b20c2a,
+        'room_header_description': 0x4b2092c,
+        'room_load_description': 0x4b2086b,
+        'room_get_description': 0x4b209cb,
+        'sandbox_move': 0x4b200aa,
+        'sandbox_stop': 0x4b201b3,
+        'sandbox_particle_lifetime': 0x4b245c5,
+        'sandbox_spread_ring': 0x4b245fb,
+    },
+    '5c3a758bf4e191c63205ab3ffda6e28808db6de75bc49883048091b6b76e7a01': {
+        'sandbox_particle_update_queue': 0x4b25bc2,
+        'sandbox_tracer_update': 0x4b2581b,
+        'sandbox_tracer_position': 0x4b25890,
+        'sandbox_scene_shader_clock': 0x4b25c40,
+        'sandbox_load_keyboard': 0x4b25422,
+        'sandbox_save_keyboard': 0x4b25467,
+        'boss_stock_panel': 0x4b23e22,
+        'boss_screen_root': 0x4b23dc8,
+        'sandbox_boss_menu_open': 0x4b22300,
+        'sandbox_keep_replay_markers': 0x4b20392,
+        'sandbox_graphics_page': 0x4b20b47,
+        'sandbox_blur_material': 0x4b26960,
+        'sandbox_scene_graded_blit': 0x4b26b9f,
+        'sandbox_scene_blit': 0x4b26b33,
+        'sandbox_refresh_score': 0x4b1fef9,
+        'sandbox_message': 0x4b25ccf,
+        'sandbox_reset': 0x4b263d6,
+        'sandbox_frame': 0x4b1fffd,
+        'sandbox_compute_marker': 0x4b267c8,
+        'sandbox_draw': 0x4b203f4,
+        'sandbox_mouse_hook': 0x4b1ea0c,
+        'sandbox_binding_menu': 0x4b2554a,
+        'sandbox_binding_caption': 0x4b1fd48,
+        'sandbox_binding_name': 0x4b1fd0d,
+        'sandbox_set_binding': 0x4b1fdd9,
+        'sandbox_reset_bindings': 0x4b1fd83,
+        'sandbox_controls_version': 0x4b254e5,
+        'sandbox_migrate_controls': 0x4b25496,
+        'sandbox_scene_particles': 0x4b259d9,
+        'sandbox_open_replay_folder': 0x4b25689,
+        'sandbox_scene_animation': 0x4b25979,
+        'sandbox_scene_wind': 0x4b25991,
+        'sandbox_scene_wave': 0x4b259a9,
+        'sandbox_scene_trees': 0x4b259c1,
+        'sandbox_notice_attach': 0x4b1ff78,
+        'sandbox_notice_detach': 0x4b1ffb7,
+        'sandbox_project_markers': 0x4b20229,
+        'sandbox_gun_marker': 0x4b26582,
+        'sandbox_blur_slider': 0x4b20c2a,
+        'room_header_description': 0x4b2092c,
+        'room_load_description': 0x4b2086b,
+        'room_get_description': 0x4b209cb,
+        'sandbox_move': 0x4b200aa,
+        'sandbox_stop': 0x4b201b3,
+        'sandbox_particle_lifetime': 0x4b24645,
+        'sandbox_spread_ring': 0x4b2467b,
+    },
+    'ceb3eb7fbfdde837df4e054c3cb8d905f15dd33c7967ff8d18bee23f855a9732': {
+        'sandbox_particle_update_queue': 0x4b25d42,
+        'sandbox_tracer_update': 0x4b2599b,
+        'sandbox_tracer_position': 0x4b25a10,
+        'sandbox_scene_shader_clock': 0x4b25dc0,
+        'sandbox_load_keyboard': 0x4b255a2,
+        'sandbox_save_keyboard': 0x4b255e7,
+        'boss_stock_panel': 0x4b23f61,
+        'boss_screen_root': 0x4b23f07,
+        'sandbox_boss_menu_open': 0x4b22300,
+        'sandbox_keep_replay_markers': 0x4b20392,
+        'sandbox_graphics_page': 0x4b20b47,
+        'sandbox_blur_material': 0x4b26b06,
+        'sandbox_scene_graded_blit': 0x4b26d45,
+        'sandbox_scene_blit': 0x4b26cd9,
+        'sandbox_refresh_score': 0x4b1fef9,
+        'sandbox_message': 0x4b25e4f,
+        'sandbox_reset': 0x4b2657c,
+        'sandbox_frame': 0x4b1fffd,
+        'sandbox_compute_marker': 0x4b2696e,
+        'sandbox_draw': 0x4b203f4,
+        'sandbox_mouse_hook': 0x4b1ea0c,
+        'sandbox_binding_menu': 0x4b256ca,
+        'sandbox_binding_caption': 0x4b1fd48,
+        'sandbox_binding_name': 0x4b1fd0d,
+        'sandbox_set_binding': 0x4b1fdd9,
+        'sandbox_reset_bindings': 0x4b1fd83,
+        'sandbox_controls_version': 0x4b25665,
+        'sandbox_migrate_controls': 0x4b25616,
+        'sandbox_scene_particles': 0x4b25b59,
+        'sandbox_open_replay_folder': 0x4b25809,
+        'sandbox_scene_animation': 0x4b25af9,
+        'sandbox_scene_wind': 0x4b25b11,
+        'sandbox_scene_wave': 0x4b25b29,
+        'sandbox_scene_trees': 0x4b25b41,
+        'sandbox_notice_attach': 0x4b1ff78,
+        'sandbox_notice_detach': 0x4b1ffb7,
+        'sandbox_project_markers': 0x4b20229,
+        'sandbox_gun_marker': 0x4b26728,
+        'sandbox_blur_slider': 0x4b20c2a,
+        'room_header_description': 0x4b2092c,
+        'room_load_description': 0x4b2086b,
+        'room_get_description': 0x4b209cb,
+        'sandbox_move': 0x4b200aa,
+        'sandbox_stop': 0x4b201b3,
+        'sandbox_particle_lifetime': 0x4b247c5,
+        'sandbox_spread_ring': 0x4b247fb,
+    },
+    'c1a1db9502f56394adcc6e96fea88e5df035862862f338203808c3c9b39c4995': {
+        'sandbox_particle_update_queue': 0x4b25dc2,
+        'sandbox_tracer_update': 0x4b25a1b,
+        'sandbox_tracer_position': 0x4b25a90,
+        'sandbox_scene_shader_clock': 0x4b25e40,
+        'sandbox_load_keyboard': 0x4b25622,
+        'sandbox_save_keyboard': 0x4b25667,
+        'boss_stock_panel': 0x4b23f9b,
+        'boss_screen_root': 0x4b23f41,
+        'sandbox_boss_menu_open': 0x4b22300,
+        'sandbox_keep_replay_markers': 0x4b20392,
+        'sandbox_graphics_page': 0x4b20b47,
+        'sandbox_blur_material': 0x4b26bb7,
+        'sandbox_scene_graded_blit': 0x4b26df6,
+        'sandbox_scene_blit': 0x4b26d8a,
+        'sandbox_refresh_score': 0x4b1fef9,
+        'sandbox_message': 0x4b25ecf,
+        'sandbox_reset': 0x4b2662d,
+        'sandbox_frame': 0x4b1fffd,
+        'sandbox_compute_marker': 0x4b26a1f,
+        'sandbox_draw': 0x4b203f4,
+        'sandbox_mouse_hook': 0x4b1ea0c,
+        'sandbox_binding_menu': 0x4b2574a,
+        'sandbox_binding_caption': 0x4b1fd48,
+        'sandbox_binding_name': 0x4b1fd0d,
+        'sandbox_set_binding': 0x4b1fdd9,
+        'sandbox_reset_bindings': 0x4b1fd83,
+        'sandbox_controls_version': 0x4b256e5,
+        'sandbox_migrate_controls': 0x4b25696,
+        'sandbox_scene_particles': 0x4b25bd9,
+        'sandbox_open_replay_folder': 0x4b25889,
+        'sandbox_scene_animation': 0x4b25b79,
+        'sandbox_scene_wind': 0x4b25b91,
+        'sandbox_scene_wave': 0x4b25ba9,
+        'sandbox_scene_trees': 0x4b25bc1,
+        'sandbox_notice_attach': 0x4b1ff78,
+        'sandbox_notice_detach': 0x4b1ffb7,
+        'sandbox_project_markers': 0x4b20229,
+        'sandbox_gun_marker': 0x4b267d9,
+        'sandbox_blur_slider': 0x4b20c2a,
+        'room_header_description': 0x4b2092c,
+        'room_load_description': 0x4b2086b,
+        'room_get_description': 0x4b209cb,
+        'sandbox_move': 0x4b200aa,
+        'sandbox_stop': 0x4b201b3,
+        'sandbox_particle_lifetime': 0x4b24845,
+        'sandbox_spread_ring': 0x4b2487b,
+    },
+    '305a19dd34bd8240800240d158de6db19e5da933f74d4195bf04a87ab03bee5a': {
+        'sandbox_particle_update_queue': 0x4b25de2,
+        'sandbox_tracer_update': 0x4b25a3b,
+        'sandbox_tracer_position': 0x4b25ab0,
+        'sandbox_scene_shader_clock': 0x4b25e60,
+        'sandbox_load_keyboard': 0x4b25642,
+        'sandbox_save_keyboard': 0x4b25687,
+        'boss_stock_panel': 0x4b23fba,
+        'boss_screen_root': 0x4b23f60,
+        'sandbox_boss_menu_open': 0x4b22300,
+        'sandbox_keep_replay_markers': 0x4b20392,
+        'sandbox_graphics_page': 0x4b20b47,
+        'sandbox_blur_material': 0x4b26d33,
+        'sandbox_scene_graded_blit': 0x4b26f72,
+        'sandbox_scene_blit': 0x4b26f06,
+        'sandbox_refresh_score': 0x4b1fef9,
+        'sandbox_message': 0x4b25eef,
+        'sandbox_reset': 0x4b267a3,
+        'sandbox_frame': 0x4b1fffd,
+        'sandbox_compute_marker': 0x4b26b9b,
+        'sandbox_draw': 0x4b203f4,
+        'sandbox_mouse_hook': 0x4b1ea0c,
+        'sandbox_binding_menu': 0x4b2576a,
+        'sandbox_binding_caption': 0x4b1fd48,
+        'sandbox_binding_name': 0x4b1fd0d,
+        'sandbox_set_binding': 0x4b1fdd9,
+        'sandbox_reset_bindings': 0x4b1fd83,
+        'sandbox_controls_version': 0x4b25705,
+        'sandbox_migrate_controls': 0x4b256b6,
+        'sandbox_scene_particles': 0x4b25bf9,
+        'sandbox_open_replay_folder': 0x4b258a9,
+        'sandbox_scene_animation': 0x4b25b99,
+        'sandbox_scene_wind': 0x4b25bb1,
+        'sandbox_scene_wave': 0x4b25bc9,
+        'sandbox_scene_trees': 0x4b25be1,
+        'sandbox_notice_attach': 0x4b1ff78,
+        'sandbox_notice_detach': 0x4b1ffb7,
+        'sandbox_project_markers': 0x4b20229,
+        'sandbox_gun_marker': 0x4b26955,
+        'sandbox_blur_slider': 0x4b20c2a,
+        'room_header_description': 0x4b2092c,
+        'room_load_description': 0x4b2086b,
+        'room_get_description': 0x4b209cb,
+        'sandbox_move': 0x4b200aa,
+        'sandbox_stop': 0x4b201b3,
+        'sandbox_particle_lifetime': 0x4b24865,
+        'sandbox_spread_ring': 0x4b2489b,
+    },
+    'd492d70d207bf5324b62929d5a9168f9ad6345157203959b4df8733b494e9cca': {
+        'sandbox_particle_update_queue': 0x4b25f10,
+        'sandbox_tracer_update': 0x4b25b69,
+        'sandbox_tracer_position': 0x4b25bde,
+        'sandbox_scene_shader_clock': 0x4b25f8e,
+        'sandbox_load_keyboard': 0x4b25770,
+        'sandbox_save_keyboard': 0x4b257b5,
+        'boss_stock_panel': 0x4b23fe8,
+        'boss_screen_root': 0x4b23f8e,
+        'sandbox_boss_menu_open': 0x4b22300,
+        'sandbox_keep_replay_markers': 0x4b20589,
+        'sandbox_graphics_page': 0x4b20d3e,
+        'sandbox_blur_material': 0x4b26e50,
+        'sandbox_scene_graded_blit': 0x4b2708f,
+        'sandbox_scene_blit': 0x4b27023,
+        'sandbox_refresh_score': 0x4b200f0,
+        'sandbox_message': 0x4b2601d,
+        'sandbox_reset': 0x4b268b5,
+        'sandbox_frame': 0x4b201f4,
+        'sandbox_compute_marker': 0x4b26cb8,
+        'sandbox_draw': 0x4b205eb,
+        'sandbox_mouse_hook': 0x4b1ea0c,
+        'sandbox_binding_menu': 0x4b25898,
+        'sandbox_binding_caption': 0x4b1ff3f,
+        'sandbox_binding_name': 0x4b1ff04,
+        'sandbox_set_binding': 0x4b1ffd0,
+        'sandbox_reset_bindings': 0x4b1ff7a,
+        'sandbox_controls_version': 0x4b25833,
+        'sandbox_migrate_controls': 0x4b257e4,
+        'sandbox_scene_particles': 0x4b25d27,
+        'sandbox_open_replay_folder': 0x4b259d7,
+        'sandbox_scene_animation': 0x4b25cc7,
+        'sandbox_scene_wind': 0x4b25cdf,
+        'sandbox_scene_wave': 0x4b25cf7,
+        'sandbox_scene_trees': 0x4b25d0f,
+        'sandbox_notice_attach': 0x4b2016f,
+        'sandbox_notice_detach': 0x4b201ae,
+        'sandbox_project_markers': 0x4b20420,
+        'sandbox_gun_marker': 0x4b26a72,
+        'sandbox_blur_slider': 0x4b20e21,
+        'room_header_description': 0x4b20b23,
+        'room_load_description': 0x4b20a62,
+        'room_get_description': 0x4b20bc2,
+        'sandbox_move': 0x4b202a1,
+        'sandbox_stop': 0x4b203aa,
+        'sandbox_particle_lifetime': 0x4b24885,
+        'sandbox_spread_ring': 0x4b248bb,
+    },
+    'e5a1dec215f16e5192a5d4644513d4b17feaf0052e04362e0065cea1388d5eb0': {
+        'sandbox_particle_update_queue': 0x4b25f34,
+        'sandbox_tracer_update': 0x4b25b8d,
+        'sandbox_tracer_position': 0x4b25c02,
+        'sandbox_scene_shader_clock': 0x4b25fb2,
+        'sandbox_load_keyboard': 0x4b25794,
+        'sandbox_save_keyboard': 0x4b257d9,
+        'boss_stock_panel': 0x4b23fe8,
+        'boss_screen_root': 0x4b23f8e,
+        'sandbox_boss_menu_open': 0x4b22300,
+        'sandbox_keep_replay_markers': 0x4b20588,
+        'sandbox_graphics_page': 0x4b20d3d,
+        'sandbox_blur_material': 0x4b26e74,
+        'sandbox_scene_graded_blit': 0x4b270b3,
+        'sandbox_scene_blit': 0x4b27047,
+        'sandbox_refresh_score': 0x4b200ef,
+        'sandbox_message': 0x4b26041,
+        'sandbox_reset': 0x4b268d9,
+        'sandbox_frame': 0x4b201f3,
+        'sandbox_compute_marker': 0x4b26cdc,
+        'sandbox_draw': 0x4b205ea,
+        'sandbox_mouse_hook': 0x4b1ea0c,
+        'sandbox_binding_menu': 0x4b258bc,
+        'sandbox_binding_caption': 0x4b1ff3e,
+        'sandbox_binding_name': 0x4b1ff03,
+        'sandbox_set_binding': 0x4b1ffcf,
+        'sandbox_reset_bindings': 0x4b1ff79,
+        'sandbox_controls_version': 0x4b25857,
+        'sandbox_migrate_controls': 0x4b25808,
+        'sandbox_scene_particles': 0x4b25d4b,
+        'sandbox_open_replay_folder': 0x4b259fb,
+        'sandbox_scene_animation': 0x4b25ceb,
+        'sandbox_scene_wind': 0x4b25d03,
+        'sandbox_scene_wave': 0x4b25d1b,
+        'sandbox_scene_trees': 0x4b25d33,
+        'sandbox_notice_attach': 0x4b2016e,
+        'sandbox_notice_detach': 0x4b201ad,
+        'sandbox_project_markers': 0x4b2041f,
+        'sandbox_gun_marker': 0x4b26a96,
+        'sandbox_blur_slider': 0x4b20e20,
+        'room_header_description': 0x4b20b22,
+        'room_load_description': 0x4b20a61,
+        'room_get_description': 0x4b20bc1,
+        'sandbox_move': 0x4b202a0,
+        'sandbox_stop': 0x4b203a9,
+        'sandbox_particle_lifetime': 0x4b24885,
+        'sandbox_spread_ring': 0x4b248bb,
+    },
+    '6bd237342afab27d8e8858c11050bcfe6a1b28efa53f49727c927c0c199cf40d': {
+        'sandbox_particle_update_queue': 0x4b26194,
+        'sandbox_tracer_update': 0x4b25ded,
+        'sandbox_tracer_position': 0x4b25e62,
+        'sandbox_scene_shader_clock': 0x4b26212,
+        'sandbox_load_keyboard': 0x4b259f4,
+        'sandbox_save_keyboard': 0x4b25a39,
+        'boss_stock_panel': 0x4b23fe8,
+        'boss_screen_root': 0x4b23f8e,
+        'sandbox_boss_menu_open': 0x4b22300,
+        'sandbox_keep_replay_markers': 0x4b2059c,
+        'sandbox_graphics_page': 0x4b20d51,
+        'sandbox_blur_material': 0x4b26fea,
+        'sandbox_scene_graded_blit': 0x4b27229,
+        'sandbox_scene_blit': 0x4b271bd,
+        'sandbox_refresh_score': 0x4b20103,
+        'sandbox_message': 0x4b262a1,
+        'sandbox_reset': 0x4b26b39,
+        'sandbox_frame': 0x4b20207,
+        'sandbox_compute_marker': 0x4b26e52,
+        'sandbox_draw': 0x4b205fe,
+        'sandbox_mouse_hook': 0x4b1ea0c,
+        'sandbox_binding_menu': 0x4b25b1c,
+        'sandbox_binding_caption': 0x4b1ff52,
+        'sandbox_binding_name': 0x4b1ff17,
+        'sandbox_set_binding': 0x4b1ffe3,
+        'sandbox_reset_bindings': 0x4b1ff8d,
+        'sandbox_controls_version': 0x4b25ab7,
+        'sandbox_migrate_controls': 0x4b25a68,
+        'sandbox_scene_particles': 0x4b25fab,
+        'sandbox_open_replay_folder': 0x4b25c5b,
+        'sandbox_scene_animation': 0x4b25f4b,
+        'sandbox_scene_wind': 0x4b25f63,
+        'sandbox_scene_wave': 0x4b25f7b,
+        'sandbox_scene_trees': 0x4b25f93,
+        'sandbox_notice_attach': 0x4b20182,
+        'sandbox_notice_detach': 0x4b201c1,
+        'sandbox_project_markers': 0x4b20433,
+        'sandbox_gun_marker': 0x4b26c0c,
+        'sandbox_blur_slider': 0x4b20e34,
+        'room_header_description': 0x4b20b36,
+        'room_load_description': 0x4b20a75,
+        'room_get_description': 0x4b20bd5,
+        'sandbox_move': 0x4b202b4,
+        'sandbox_stop': 0x4b203bd,
+        'sandbox_particle_lifetime': 0x4b24b05,
+        'sandbox_spread_ring': 0x4b24b3b,
+    },
+    'f868af37ff7d0a0ad675734075b3b73407ef4225ee86cc8e5934f394a6259b4d': {
+        'sandbox_particle_update_queue': 0x4b26294,
+        'sandbox_tracer_update': 0x4b25eed,
+        'sandbox_tracer_position': 0x4b25f62,
+        'sandbox_scene_shader_clock': 0x4b26312,
+        'sandbox_load_keyboard': 0x4b25af4,
+        'sandbox_save_keyboard': 0x4b25b39,
+        'boss_stock_panel': 0x4b23fe8,
+        'boss_screen_root': 0x4b23f8e,
+        'sandbox_boss_menu_open': 0x4b22300,
+        'sandbox_keep_replay_markers': 0x4b205a2,
+        'sandbox_graphics_page': 0x4b20d57,
+        'sandbox_blur_material': 0x4b270ea,
+        'sandbox_scene_graded_blit': 0x4b27329,
+        'sandbox_scene_blit': 0x4b272bd,
+        'sandbox_refresh_score': 0x4b20109,
+        'sandbox_message': 0x4b263a1,
+        'sandbox_reset': 0x4b26c39,
+        'sandbox_frame': 0x4b2020d,
+        'sandbox_compute_marker': 0x4b26f52,
+        'sandbox_draw': 0x4b20604,
+        'sandbox_mouse_hook': 0x4b1ea0c,
+        'sandbox_binding_menu': 0x4b25c1c,
+        'sandbox_binding_caption': 0x4b1ff58,
+        'sandbox_binding_name': 0x4b1ff1d,
+        'sandbox_set_binding': 0x4b1ffe9,
+        'sandbox_reset_bindings': 0x4b1ff93,
+        'sandbox_controls_version': 0x4b25bb7,
+        'sandbox_migrate_controls': 0x4b25b68,
+        'sandbox_scene_particles': 0x4b260ab,
+        'sandbox_open_replay_folder': 0x4b25d5b,
+        'sandbox_scene_animation': 0x4b2604b,
+        'sandbox_scene_wind': 0x4b26063,
+        'sandbox_scene_wave': 0x4b2607b,
+        'sandbox_scene_trees': 0x4b26093,
+        'sandbox_notice_attach': 0x4b20188,
+        'sandbox_notice_detach': 0x4b201c7,
+        'sandbox_project_markers': 0x4b20439,
+        'sandbox_gun_marker': 0x4b26d0c,
+        'sandbox_blur_slider': 0x4b20e3a,
+        'room_header_description': 0x4b20b3c,
+        'room_load_description': 0x4b20a7b,
+        'room_get_description': 0x4b20bdb,
+        'sandbox_move': 0x4b202ba,
+        'sandbox_stop': 0x4b203c3,
+        'sandbox_particle_lifetime': 0x4b24c05,
+        'sandbox_spread_ring': 0x4b24c3b,
+    },
+    'dd52c40dfbca478a590e0096c91ad15dc06ac99b1bb8dd4d2b5daa89dd6462d8': {
+        'sandbox_particle_update_queue': 0x4b2643a,
+        'sandbox_tracer_update': 0x4b26093,
+        'sandbox_tracer_position': 0x4b26108,
+        'sandbox_scene_shader_clock': 0x4b264b8,
+        'sandbox_load_keyboard': 0x4b25c94,
+        'sandbox_save_keyboard': 0x4b25cd9,
+        'boss_stock_panel': 0x4b240fb,
+        'boss_screen_root': 0x4b240a1,
+        'sandbox_boss_menu_open': 0x4b22300,
+        'sandbox_keep_replay_markers': 0x4b20544,
+        'sandbox_graphics_page': 0x4b20cf9,
+        'sandbox_blur_material': 0x4b272aa,
+        'sandbox_scene_graded_blit': 0x4b274e9,
+        'sandbox_scene_blit': 0x4b2747d,
+        'sandbox_refresh_score': 0x4b200ab,
+        'sandbox_message': 0x4b26547,
+        'sandbox_reset': 0x4b26df9,
+        'sandbox_frame': 0x4b201af,
+        'sandbox_compute_marker': 0x4b27112,
+        'sandbox_draw': 0x4b205a6,
+        'sandbox_mouse_hook': 0x4b1ea0c,
+        'sandbox_binding_menu': 0x4b25dbc,
+        'sandbox_binding_caption': 0x4b1fefa,
+        'sandbox_binding_name': 0x4b1febf,
+        'sandbox_set_binding': 0x4b1ff8b,
+        'sandbox_reset_bindings': 0x4b1ff35,
+        'sandbox_controls_version': 0x4b25d57,
+        'sandbox_migrate_controls': 0x4b25d08,
+        'sandbox_scene_particles': 0x4b26251,
+        'sandbox_open_replay_folder': 0x4b25f01,
+        'sandbox_scene_animation': 0x4b261f1,
+        'sandbox_scene_wind': 0x4b26209,
+        'sandbox_scene_wave': 0x4b26221,
+        'sandbox_scene_trees': 0x4b26239,
+        'sandbox_notice_attach': 0x4b2012a,
+        'sandbox_notice_detach': 0x4b20169,
+        'sandbox_project_markers': 0x4b203db,
+        'sandbox_gun_marker': 0x4b26ecc,
+        'sandbox_blur_slider': 0x4b20ddc,
+        'room_header_description': 0x4b20ade,
+        'room_load_description': 0x4b20a1d,
+        'room_get_description': 0x4b20b7d,
+        'sandbox_move': 0x4b2025c,
+        'sandbox_stop': 0x4b20365,
+        'sandbox_particle_lifetime': 0x4b24da5,
+        'sandbox_spread_ring': 0x4b24ddb,
+    },
+    'b2a64a575e8269018c302880b4acc6d060116451edbada1e858dee7eb47e5db5': {
+        'sandbox_particle_update_queue': 0x4b27324,
+        'sandbox_tracer_update': 0x4b26f7d,
+        'sandbox_tracer_position': 0x4b26ff2,
+        'sandbox_scene_shader_clock': 0x4b273a2,
+        'sandbox_load_keyboard': 0x4b26b7e,
+        'sandbox_save_keyboard': 0x4b26bc3,
+        'boss_stock_panel': 0x4b240e6,
+        'boss_screen_root': 0x4b2408c,
+        'sandbox_boss_menu_open': 0x4b22300,
+        'sandbox_keep_replay_markers': 0x4b20544,
+        'sandbox_graphics_page': 0x4b20d12,
+        'sandbox_blur_material': 0x4b281f0,
+        'sandbox_scene_graded_blit': 0x4b2842f,
+        'sandbox_scene_blit': 0x4b283c3,
+        'sandbox_refresh_score': 0x4b200ab,
+        'sandbox_message': 0x4b27431,
+        'sandbox_reset': 0x4b27d3f,
+        'sandbox_frame': 0x4b201af,
+        'sandbox_compute_marker': 0x4b28058,
+        'sandbox_draw': 0x4b205a6,
+        'sandbox_mouse_hook': 0x4b1ea0c,
+        'sandbox_binding_menu': 0x4b26ca6,
+        'sandbox_binding_caption': 0x4b1fefa,
+        'sandbox_binding_name': 0x4b1febf,
+        'sandbox_set_binding': 0x4b1ff8b,
+        'sandbox_reset_bindings': 0x4b1ff35,
+        'sandbox_controls_version': 0x4b26c41,
+        'sandbox_migrate_controls': 0x4b26bf2,
+        'sandbox_scene_particles': 0x4b2713b,
+        'sandbox_open_replay_folder': 0x4b26deb,
+        'sandbox_scene_animation': 0x4b270db,
+        'sandbox_scene_wind': 0x4b270f3,
+        'sandbox_scene_wave': 0x4b2710b,
+        'sandbox_scene_trees': 0x4b27123,
+        'sandbox_notice_attach': 0x4b2012a,
+        'sandbox_notice_detach': 0x4b20169,
+        'sandbox_project_markers': 0x4b203db,
+        'sandbox_gun_marker': 0x4b27e12,
+        'sandbox_blur_slider': 0x4b20df5,
+        'room_header_description': 0x4b20ade,
+        'room_load_description': 0x4b20a1d,
+        'room_get_description': 0x4b20b7d,
+        'sandbox_move': 0x4b2025c,
+        'sandbox_stop': 0x4b20365,
+        'sandbox_particle_lifetime': 0x4b24e85,
+        'sandbox_spread_ring': 0x4b24ebb,
+    },
+    'e224fb878864e50b7f0e4dd9b6cc76c5a4b2383d4ba7bd3896ab72af798a88fc': {
+        'sandbox_particle_update_queue': 0x4b2722f,
+        'sandbox_tracer_update': 0x4b26e88,
+        'sandbox_tracer_position': 0x4b26efd,
+        'sandbox_scene_shader_clock': 0x4b272ad,
+        'sandbox_load_keyboard': 0x4b26a89,
+        'sandbox_save_keyboard': 0x4b26ace,
+        'boss_stock_panel': 0x4b240e6,
+        'boss_screen_root': 0x4b2408c,
+        'sandbox_boss_menu_open': 0x4b22300,
+        'sandbox_keep_replay_markers': 0x4b20544,
+        'sandbox_graphics_page': 0x4b20d12,
+        'sandbox_blur_material': 0x4b280fb,
+        'sandbox_scene_graded_blit': 0x4b2833a,
+        'sandbox_scene_blit': 0x4b282ce,
+        'sandbox_refresh_score': 0x4b200ab,
+        'sandbox_message': 0x4b2733c,
+        'sandbox_reset': 0x4b27c4a,
+        'sandbox_frame': 0x4b201af,
+        'sandbox_compute_marker': 0x4b27f63,
+        'sandbox_draw': 0x4b205a6,
+        'sandbox_mouse_hook': 0x4b1ea0c,
+        'sandbox_binding_menu': 0x4b26bb1,
+        'sandbox_binding_caption': 0x4b1fefa,
+        'sandbox_binding_name': 0x4b1febf,
+        'sandbox_set_binding': 0x4b1ff8b,
+        'sandbox_reset_bindings': 0x4b1ff35,
+        'sandbox_controls_version': 0x4b26b4c,
+        'sandbox_migrate_controls': 0x4b26afd,
+        'sandbox_scene_particles': 0x4b27046,
+        'sandbox_open_replay_folder': 0x4b26cf6,
+        'sandbox_scene_animation': 0x4b26fe6,
+        'sandbox_scene_wind': 0x4b26ffe,
+        'sandbox_scene_wave': 0x4b27016,
+        'sandbox_scene_trees': 0x4b2702e,
+        'sandbox_notice_attach': 0x4b2012a,
+        'sandbox_notice_detach': 0x4b20169,
+        'sandbox_project_markers': 0x4b203db,
+        'sandbox_gun_marker': 0x4b27d1d,
+        'sandbox_blur_slider': 0x4b20df5,
+        'room_header_description': 0x4b20ade,
+        'room_load_description': 0x4b20a1d,
+        'room_get_description': 0x4b20b7d,
+        'sandbox_move': 0x4b2025c,
+        'sandbox_stop': 0x4b20365,
+        'sandbox_particle_lifetime': 0x4b24e85,
+        'sandbox_spread_ring': 0x4b24ebb,
+        'sandbox_setup_reply': 0x4b24ed7,
+    },
+    'bbbc1a4ca47976c2d39761908ae0134e42c4a6e40975137c60855de26b4dd3e2': {
+        'sandbox_particle_update_queue': 0x4b2722f,
+        'sandbox_tracer_update': 0x4b26e88,
+        'sandbox_tracer_position': 0x4b26efd,
+        'sandbox_scene_shader_clock': 0x4b272ad,
+        'sandbox_load_keyboard': 0x4b26a89,
+        'sandbox_save_keyboard': 0x4b26ace,
+        'boss_stock_panel': 0x4b240e6,
+        'boss_screen_root': 0x4b2408c,
+        'sandbox_boss_menu_open': 0x4b22300,
+        'sandbox_keep_replay_markers': 0x4b20544,
+        'sandbox_graphics_page': 0x4b20d12,
+        'sandbox_blur_material': 0x4b280fb,
+        'sandbox_scene_graded_blit': 0x4b2833a,
+        'sandbox_scene_blit': 0x4b282ce,
+        'sandbox_refresh_score': 0x4b200ab,
+        'sandbox_message': 0x4b2733c,
+        'sandbox_reset': 0x4b27c4a,
+        'sandbox_frame': 0x4b201af,
+        'sandbox_compute_marker': 0x4b27f63,
+        'sandbox_draw': 0x4b205a6,
+        'sandbox_mouse_hook': 0x4b1ea0c,
+        'sandbox_binding_menu': 0x4b26bb1,
+        'sandbox_binding_caption': 0x4b1fefa,
+        'sandbox_binding_name': 0x4b1febf,
+        'sandbox_set_binding': 0x4b1ff8b,
+        'sandbox_reset_bindings': 0x4b1ff35,
+        'sandbox_controls_version': 0x4b26b4c,
+        'sandbox_migrate_controls': 0x4b26afd,
+        'sandbox_scene_particles': 0x4b27046,
+        'sandbox_open_replay_folder': 0x4b26cf6,
+        'sandbox_scene_animation': 0x4b26fe6,
+        'sandbox_scene_wind': 0x4b26ffe,
+        'sandbox_scene_wave': 0x4b27016,
+        'sandbox_scene_trees': 0x4b2702e,
+        'sandbox_notice_attach': 0x4b2012a,
+        'sandbox_notice_detach': 0x4b20169,
+        'sandbox_project_markers': 0x4b203db,
+        'sandbox_gun_marker': 0x4b27d1d,
+        'sandbox_blur_slider': 0x4b20df5,
+        'room_header_description': 0x4b20ade,
+        'room_load_description': 0x4b20a1d,
+        'room_get_description': 0x4b20b7d,
+        'sandbox_move': 0x4b2025c,
+        'sandbox_stop': 0x4b20365,
+        'sandbox_particle_lifetime': 0x4b24e85,
+        'sandbox_spread_ring': 0x4b24ebb,
+        'sandbox_setup_reply': 0x4b24ed7,
+    },
+    '04d8fd455820b9f8cc7da89710570b436f74daa34fd254962d94c7830f3e22ce': {
+        'sandbox_particle_update_queue': 0x4b27441,
+        'sandbox_tracer_update': 0x4b2709a,
+        'sandbox_tracer_position': 0x4b2710f,
+        'sandbox_scene_shader_clock': 0x4b274bf,
+        'sandbox_load_keyboard': 0x4b26c9b,
+        'sandbox_save_keyboard': 0x4b26ce0,
+        'boss_stock_panel': 0x4b240e6,
+        'boss_screen_root': 0x4b2408c,
+        'sandbox_boss_menu_open': 0x4b22300,
+        'sandbox_keep_replay_markers': 0x4b20544,
+        'sandbox_graphics_page': 0x4b20d1b,
+        'sandbox_blur_material': 0x4b2830d,
+        'sandbox_scene_graded_blit': 0x4b2854c,
+        'sandbox_scene_blit': 0x4b284e0,
+        'sandbox_refresh_score': 0x4b200ab,
+        'sandbox_message': 0x4b2754e,
+        'sandbox_reset': 0x4b27e5c,
+        'sandbox_frame': 0x4b201af,
+        'sandbox_compute_marker': 0x4b28175,
+        'sandbox_draw': 0x4b205a6,
+        'sandbox_mouse_hook': 0x4b1ea0c,
+        'sandbox_binding_menu': 0x4b26dc3,
+        'sandbox_binding_caption': 0x4b1fefa,
+        'sandbox_binding_name': 0x4b1febf,
+        'sandbox_set_binding': 0x4b1ff8b,
+        'sandbox_reset_bindings': 0x4b1ff35,
+        'sandbox_controls_version': 0x4b26d5e,
+        'sandbox_migrate_controls': 0x4b26d0f,
+        'sandbox_scene_particles': 0x4b27258,
+        'sandbox_open_replay_folder': 0x4b26f08,
+        'sandbox_scene_animation': 0x4b271f8,
+        'sandbox_scene_wind': 0x4b27210,
+        'sandbox_scene_wave': 0x4b27228,
+        'sandbox_scene_trees': 0x4b27240,
+        'sandbox_notice_attach': 0x4b2012a,
+        'sandbox_notice_detach': 0x4b20169,
+        'sandbox_project_markers': 0x4b203db,
+        'sandbox_gun_marker': 0x4b27f2f,
+        'sandbox_blur_slider': 0x4b20dfe,
+        'room_header_description': 0x4b20ade,
+        'room_load_description': 0x4b20a1d,
+        'room_get_description': 0x4b20b7d,
+        'sandbox_move': 0x4b2025c,
+        'sandbox_stop': 0x4b20365,
+        'sandbox_particle_lifetime': 0x4b24ea5,
+        'sandbox_spread_ring': 0x4b24edb,
+        'sandbox_setup_reply': 0x4b24ef7,
+    },
+    'e317b1c0030a9cd5b6df2036a6847bd8ab26214f4ae37339069132eef684abd9': {
+        'sandbox_zoom_changed': 0x4b28760,
+        'sandbox_particle_update_queue': 0x4b274df,
+        'sandbox_tracer_update': 0x4b27138,
+        'sandbox_tracer_position': 0x4b271ad,
+        'sandbox_scene_shader_clock': 0x4b2755d,
+        'sandbox_load_keyboard': 0x4b26d39,
+        'sandbox_save_keyboard': 0x4b26d7e,
+        'boss_stock_panel': 0x4b240e6,
+        'boss_screen_root': 0x4b2408c,
+        'sandbox_boss_menu_open': 0x4b22300,
+        'sandbox_keep_replay_markers': 0x4b20544,
+        'sandbox_graphics_page': 0x4b20d1b,
+        'sandbox_blur_material': 0x4b283ab,
+        'sandbox_scene_graded_blit': 0x4b285ea,
+        'sandbox_scene_blit': 0x4b2857e,
+        'sandbox_refresh_score': 0x4b200ab,
+        'sandbox_message': 0x4b275ec,
+        'sandbox_reset': 0x4b27efa,
+        'sandbox_frame': 0x4b201af,
+        'sandbox_compute_marker': 0x4b28213,
+        'sandbox_draw': 0x4b205a6,
+        'sandbox_mouse_hook': 0x4b1ea0c,
+        'sandbox_binding_menu': 0x4b26e61,
+        'sandbox_binding_caption': 0x4b1fefa,
+        'sandbox_binding_name': 0x4b1febf,
+        'sandbox_set_binding': 0x4b1ff8b,
+        'sandbox_reset_bindings': 0x4b1ff35,
+        'sandbox_controls_version': 0x4b26dfc,
+        'sandbox_migrate_controls': 0x4b26dad,
+        'sandbox_scene_particles': 0x4b272f6,
+        'sandbox_open_replay_folder': 0x4b26fa6,
+        'sandbox_scene_animation': 0x4b27296,
+        'sandbox_scene_wind': 0x4b272ae,
+        'sandbox_scene_wave': 0x4b272c6,
+        'sandbox_scene_trees': 0x4b272de,
+        'sandbox_notice_attach': 0x4b2012a,
+        'sandbox_notice_detach': 0x4b20169,
+        'sandbox_project_markers': 0x4b203db,
+        'sandbox_gun_marker': 0x4b27fcd,
+        'sandbox_blur_slider': 0x4b20dfe,
+        'room_header_description': 0x4b20ade,
+        'room_load_description': 0x4b20a1d,
+        'room_get_description': 0x4b20b7d,
+        'sandbox_move': 0x4b2025c,
+        'sandbox_stop': 0x4b20365,
+        'sandbox_zoom_migration': 0x4b24f99,
+        'sandbox_zoom_cache': 0x4b24fbc,
+        'sandbox_particle_lifetime': 0x4b24f05,
+        'sandbox_spread_ring': 0x4b24f3b,
+        'sandbox_setup_reply': 0x4b24f57,
+    },
+    'd2ee85023ae0aef18f10c14789cfecad94a9f93f5b27f7acf351b5cb777cb7e7': {
+        'sandbox_zoom_changed': 0x4b28760,
+        'sandbox_particle_update_queue': 0x4b274df,
+        'sandbox_tracer_update': 0x4b27138,
+        'sandbox_tracer_position': 0x4b271ad,
+        'sandbox_scene_shader_clock': 0x4b2755d,
+        'sandbox_load_keyboard': 0x4b26d39,
+        'sandbox_save_keyboard': 0x4b26d7e,
+        'boss_stock_panel': 0x4b240e6,
+        'boss_screen_root': 0x4b2408c,
+        'sandbox_boss_menu_open': 0x4b22300,
+        'sandbox_keep_replay_markers': 0x4b20544,
+        'sandbox_graphics_page': 0x4b20d1b,
+        'sandbox_blur_material': 0x4b283ab,
+        'sandbox_scene_graded_blit': 0x4b285ea,
+        'sandbox_scene_blit': 0x4b2857e,
+        'sandbox_refresh_score': 0x4b200ab,
+        'sandbox_message': 0x4b275ec,
+        'sandbox_reset': 0x4b27efa,
+        'sandbox_frame': 0x4b201af,
+        'sandbox_compute_marker': 0x4b28213,
+        'sandbox_draw': 0x4b205a6,
+        'sandbox_mouse_hook': 0x4b1ea0c,
+        'sandbox_binding_menu': 0x4b26e61,
+        'sandbox_binding_caption': 0x4b1fefa,
+        'sandbox_binding_name': 0x4b1febf,
+        'sandbox_set_binding': 0x4b1ff8b,
+        'sandbox_reset_bindings': 0x4b1ff35,
+        'sandbox_controls_version': 0x4b26dfc,
+        'sandbox_migrate_controls': 0x4b26dad,
+        'sandbox_scene_particles': 0x4b272f6,
+        'sandbox_open_replay_folder': 0x4b26fa6,
+        'sandbox_scene_animation': 0x4b27296,
+        'sandbox_scene_wind': 0x4b272ae,
+        'sandbox_scene_wave': 0x4b272c6,
+        'sandbox_scene_trees': 0x4b272de,
+        'sandbox_notice_attach': 0x4b2012a,
+        'sandbox_notice_detach': 0x4b20169,
+        'sandbox_project_markers': 0x4b203db,
+        'sandbox_gun_marker': 0x4b27fcd,
+        'sandbox_blur_slider': 0x4b20dfe,
+        'room_header_description': 0x4b20ade,
+        'room_load_description': 0x4b20a1d,
+        'room_get_description': 0x4b20b7d,
+        'sandbox_move': 0x4b2025c,
+        'sandbox_stop': 0x4b20365,
+        'sandbox_zoom_migration': 0x4b24f99,
+        'sandbox_zoom_cache': 0x4b24fbc,
+        'sandbox_particle_lifetime': 0x4b24f05,
+        'sandbox_spread_ring': 0x4b24f3b,
+        'sandbox_setup_reply': 0x4b24f57,
+    },
+    '07d42dee84a66a933850831a531689976f2b05206ff04c858da369697db6b9ff': {
+        'sandbox_zoom_changed': 0x4b28760,
+        'sandbox_particle_update_queue': 0x4b274df,
+        'sandbox_tracer_update': 0x4b27138,
+        'sandbox_tracer_position': 0x4b271ad,
+        'sandbox_scene_shader_clock': 0x4b2755d,
+        'sandbox_load_keyboard': 0x4b26d39,
+        'sandbox_save_keyboard': 0x4b26d7e,
+        'boss_stock_panel': 0x4b240e6,
+        'boss_screen_root': 0x4b2408c,
+        'sandbox_boss_menu_open': 0x4b22300,
+        'sandbox_keep_replay_markers': 0x4b20544,
+        'sandbox_graphics_page': 0x4b20d1b,
+        'sandbox_blur_material': 0x4b283ab,
+        'sandbox_scene_graded_blit': 0x4b285ea,
+        'sandbox_scene_blit': 0x4b2857e,
+        'sandbox_refresh_score': 0x4b200ab,
+        'sandbox_message': 0x4b275ec,
+        'sandbox_reset': 0x4b27efa,
+        'sandbox_frame': 0x4b201af,
+        'sandbox_compute_marker': 0x4b28213,
+        'sandbox_draw': 0x4b205a6,
+        'sandbox_mouse_hook': 0x4b1ea0c,
+        'sandbox_binding_menu': 0x4b26e61,
+        'sandbox_binding_caption': 0x4b1fefa,
+        'sandbox_binding_name': 0x4b1febf,
+        'sandbox_set_binding': 0x4b1ff8b,
+        'sandbox_reset_bindings': 0x4b1ff35,
+        'sandbox_controls_version': 0x4b26dfc,
+        'sandbox_migrate_controls': 0x4b26dad,
+        'sandbox_scene_particles': 0x4b272f6,
+        'sandbox_open_replay_folder': 0x4b26fa6,
+        'sandbox_scene_animation': 0x4b27296,
+        'sandbox_scene_wind': 0x4b272ae,
+        'sandbox_scene_wave': 0x4b272c6,
+        'sandbox_scene_trees': 0x4b272de,
+        'sandbox_notice_attach': 0x4b2012a,
+        'sandbox_notice_detach': 0x4b20169,
+        'sandbox_project_markers': 0x4b203db,
+        'sandbox_gun_marker': 0x4b27fcd,
+        'sandbox_blur_slider': 0x4b20dfe,
+        'room_header_description': 0x4b20ade,
+        'room_load_description': 0x4b20a1d,
+        'room_get_description': 0x4b20b7d,
+        'sandbox_move': 0x4b2025c,
+        'sandbox_stop': 0x4b20365,
+        'sandbox_zoom_migration': 0x4b24f99,
+        'sandbox_particle_lifetime': 0x4b24f05,
+        'sandbox_spread_ring': 0x4b24f3b,
+        'sandbox_setup_reply': 0x4b24f57,
+    },
+    '8b2a7f1ba77e87fbc1285963ba1de255854e700faf4d8b29ab6727858683c9b1': {
+        'sandbox_zoom_changed': 0x4b28745,
+        'sandbox_particle_update_queue': 0x4b274c4,
+        'sandbox_tracer_update': 0x4b2711d,
+        'sandbox_tracer_position': 0x4b27192,
+        'sandbox_scene_shader_clock': 0x4b27542,
+        'sandbox_load_keyboard': 0x4b26d1e,
+        'sandbox_save_keyboard': 0x4b26d63,
+        'boss_stock_panel': 0x4b240e6,
+        'boss_screen_root': 0x4b2408c,
+        'sandbox_boss_menu_open': 0x4b22300,
+        'sandbox_keep_replay_markers': 0x4b20544,
+        'sandbox_graphics_page': 0x4b20d1b,
+        'sandbox_blur_material': 0x4b28390,
+        'sandbox_scene_graded_blit': 0x4b285cf,
+        'sandbox_scene_blit': 0x4b28563,
+        'sandbox_refresh_score': 0x4b200ab,
+        'sandbox_message': 0x4b275d1,
+        'sandbox_reset': 0x4b27edf,
+        'sandbox_frame': 0x4b201af,
+        'sandbox_compute_marker': 0x4b281f8,
+        'sandbox_draw': 0x4b205a6,
+        'sandbox_mouse_hook': 0x4b1ea0c,
+        'sandbox_binding_menu': 0x4b26e46,
+        'sandbox_binding_caption': 0x4b1fefa,
+        'sandbox_binding_name': 0x4b1febf,
+        'sandbox_set_binding': 0x4b1ff8b,
+        'sandbox_reset_bindings': 0x4b1ff35,
+        'sandbox_controls_version': 0x4b26de1,
+        'sandbox_migrate_controls': 0x4b26d92,
+        'sandbox_scene_particles': 0x4b272db,
+        'sandbox_open_replay_folder': 0x4b26f8b,
+        'sandbox_scene_animation': 0x4b2727b,
+        'sandbox_scene_wind': 0x4b27293,
+        'sandbox_scene_wave': 0x4b272ab,
+        'sandbox_scene_trees': 0x4b272c3,
+        'sandbox_notice_attach': 0x4b2012a,
+        'sandbox_notice_detach': 0x4b20169,
+        'sandbox_project_markers': 0x4b203db,
+        'sandbox_gun_marker': 0x4b27fb2,
+        'sandbox_blur_slider': 0x4b20dfe,
+        'room_header_description': 0x4b20ade,
+        'room_load_description': 0x4b20a1d,
+        'room_get_description': 0x4b20b7d,
+        'sandbox_move': 0x4b2025c,
+        'sandbox_stop': 0x4b20365,
+        'sandbox_zoom_migration': 0x4b24f99,
+        'sandbox_particle_lifetime': 0x4b24f05,
+        'sandbox_spread_ring': 0x4b24f3b,
+        'sandbox_setup_reply': 0x4b24f57,
+    },
+    'd160e901da3cfc189dff43bc26af2cf7f4251a6f332f602c262ed0e7d6f782f9': {
+        'sandbox_zoom_changed': 0x4b28ae7,
+        'sandbox_particle_update_queue': 0x4b27866,
+        'sandbox_tracer_update': 0x4b274bf,
+        'sandbox_tracer_position': 0x4b27534,
+        'sandbox_scene_shader_clock': 0x4b278e4,
+        'sandbox_load_keyboard': 0x4b270c0,
+        'sandbox_save_keyboard': 0x4b27105,
+        'boss_stock_panel': 0x4b240e6,
+        'boss_screen_root': 0x4b2408c,
+        'sandbox_boss_menu_open': 0x4b22300,
+        'sandbox_keep_replay_markers': 0x4b2054b,
+        'sandbox_graphics_page': 0x4b20dcc,
+        'sandbox_blur_material': 0x4b28732,
+        'sandbox_scene_graded_blit': 0x4b28971,
+        'sandbox_scene_blit': 0x4b28905,
+        'sandbox_refresh_score': 0x4b200b2,
+        'sandbox_message': 0x4b27973,
+        'sandbox_reset': 0x4b28281,
+        'sandbox_frame': 0x4b201b6,
+        'sandbox_compute_marker': 0x4b2859a,
+        'sandbox_draw': 0x4b205ad,
+        'sandbox_mouse_hook': 0x4b1ea0c,
+        'sandbox_binding_menu': 0x4b271e8,
+        'sandbox_binding_caption': 0x4b1ff01,
+        'sandbox_binding_name': 0x4b1fec6,
+        'sandbox_set_binding': 0x4b1ff92,
+        'sandbox_reset_bindings': 0x4b1ff3c,
+        'sandbox_controls_version': 0x4b27183,
+        'sandbox_migrate_controls': 0x4b27134,
+        'sandbox_scene_particles': 0x4b2767d,
+        'sandbox_open_replay_folder': 0x4b2732d,
+        'sandbox_scene_animation': 0x4b2761d,
+        'sandbox_scene_wind': 0x4b27635,
+        'sandbox_scene_wave': 0x4b2764d,
+        'sandbox_scene_trees': 0x4b27665,
+        'sandbox_notice_attach': 0x4b20131,
+        'sandbox_notice_detach': 0x4b20170,
+        'sandbox_project_markers': 0x4b203e2,
+        'sandbox_gun_marker': 0x4b28354,
+        'sandbox_blur_slider': 0x4b20eaf,
+        'room_header_description': 0x4b20b4f,
+        'room_load_description': 0x4b20a24,
+        'room_get_description': 0x4b20bee,
+        'sandbox_move': 0x4b20263,
+        'sandbox_stop': 0x4b2036c,
+        'sandbox_zoom_migration': 0x4b24f99,
+        'sandbox_particle_lifetime': 0x4b24f05,
+        'sandbox_spread_ring': 0x4b24f3b,
+        'sandbox_setup_reply': 0x4b24f57,
+    },
+    'dd4b446d7ded1c453f68e9e2953a4c4f1156ff0869304ec747524d2acfcbf28c': {
+        'sandbox_zoom_changed': 0x4b28ae7,
+        'sandbox_particle_update_queue': 0x4b27866,
+        'sandbox_tracer_update': 0x4b274bf,
+        'sandbox_tracer_position': 0x4b27534,
+        'sandbox_scene_shader_clock': 0x4b278e4,
+        'sandbox_load_keyboard': 0x4b270c0,
+        'sandbox_save_keyboard': 0x4b27105,
+        'boss_stock_panel': 0x4b240e6,
+        'boss_screen_root': 0x4b2408c,
+        'sandbox_boss_menu_open': 0x4b22300,
+        'sandbox_keep_replay_markers': 0x4b2054b,
+        'sandbox_graphics_page': 0x4b20e43,
+        'sandbox_blur_material': 0x4b28732,
+        'sandbox_scene_graded_blit': 0x4b28971,
+        'sandbox_scene_blit': 0x4b28905,
+        'sandbox_refresh_score': 0x4b200b2,
+        'sandbox_message': 0x4b27973,
+        'sandbox_reset': 0x4b28281,
+        'sandbox_frame': 0x4b201b6,
+        'sandbox_compute_marker': 0x4b2859a,
+        'sandbox_draw': 0x4b205ad,
+        'sandbox_mouse_hook': 0x4b1ea0c,
+        'sandbox_binding_menu': 0x4b271e8,
+        'sandbox_binding_caption': 0x4b1ff01,
+        'sandbox_binding_name': 0x4b1fec6,
+        'sandbox_set_binding': 0x4b1ff92,
+        'sandbox_reset_bindings': 0x4b1ff3c,
+        'sandbox_controls_version': 0x4b27183,
+        'sandbox_migrate_controls': 0x4b27134,
+        'sandbox_scene_particles': 0x4b2767d,
+        'sandbox_open_replay_folder': 0x4b2732d,
+        'sandbox_scene_animation': 0x4b2761d,
+        'sandbox_scene_wind': 0x4b27635,
+        'sandbox_scene_wave': 0x4b2764d,
+        'sandbox_scene_trees': 0x4b27665,
+        'sandbox_notice_attach': 0x4b20131,
+        'sandbox_notice_detach': 0x4b20170,
+        'sandbox_project_markers': 0x4b203e2,
+        'sandbox_gun_marker': 0x4b28354,
+        'sandbox_blur_slider': 0x4b20f26,
+        'room_header_description': 0x4b20b4f,
+        'room_load_description': 0x4b20a24,
+        'room_get_description': 0x4b20c65,
+        'sandbox_move': 0x4b20263,
+        'sandbox_stop': 0x4b2036c,
+        'sandbox_zoom_migration': 0x4b24f99,
+        'sandbox_particle_lifetime': 0x4b24f05,
+        'sandbox_spread_ring': 0x4b24f3b,
+        'sandbox_setup_reply': 0x4b24f57,
+    },
 }
 CFLAGS = ('-m32', '-Os', '-std=c11', '-ffreestanding', '-fno-builtin', '-fpie',
           '-fno-stack-protector', '-fno-asynchronous-unwind-tables', '-fno-unwind-tables',
@@ -1855,8 +3034,8 @@ def build_blob():
         absolute = [line.split() for line in listing.splitlines() if 'R_386_32 ' in line]
         if absolute != [['00000007', 'R_386_32', '.text']]:
             raise ValueError('Unexpected absolute sandbox relocation')
-        script.write_text(f'SECTIONS {{ . = {VA:#x}; .text : {{ *(.text*) *(.rodata*) *(.got*) '
-                          f'. = {BOSS_EXIT_OFFSET:#x}; *(.boss_exit) *(.boss_ui) *(.boss_rodata) *(.late_sandbox) }} = 0x00 '
+        script.write_text(f'SECTIONS {{ . = {VA:#x}; .text : {{ *(.text*) *(.got*) '
+                          f'. = {BOSS_EXIT_OFFSET:#x}; *(.boss_exit) *(.boss_ui) *(.boss_rodata) *(.late_sandbox) *(.rodata*) }} = 0x00 '
                           '/DISCARD/ : { *(.comment) *(.note*) *(.eh_frame*) } }\n')
         subprocess.run(['ld', '-m', 'elf_i386', '-nostdlib', '-static', '--build-id=none',
                         '-T', str(script), '-o', str(elf), str(obj)], check=True)
@@ -1889,6 +3068,15 @@ def patch(data, blob=None, entries=None):
         raise ValueError('Invalid sandbox code layout')
     image = bytearray(data[:RAW])
     sections = [struct.unpack_from('<8sIIIIIIHHI', data, 0x2D8+i*40) for i in range(7)]
+    # The pinned options migration overwrites SmartZoom=0 as if it were
+    # missing. Boolean 0 and 1 are both saved values; keep defaulting a missing
+    # or invalid value through the original setter.
+    zoom = client_recon._offset(sections, 0x12372DC-client_recon.BASE, 9)
+    before = bytes.fromhex('803801c645a3007404')
+    after = bytes.fromhex('803801c645a3007604')
+    if image[zoom:zoom+len(before)] not in (before, after):
+        raise ValueError('Unexpected SmartZoom migration')
+    image[zoom:zoom+len(after)] = after
     for address, target, name in CALLS:
         rva = address-client_recon.BASE
         offset = client_recon._offset(sections, rva, 5)
@@ -1896,13 +3084,30 @@ def patch(data, blob=None, entries=None):
         if image[offset:offset+5] != b'\xe8'+struct.pack('<i', target-address-5):
             raise ValueError('Sandbox call site differs from the pinned client')
         image[offset:offset+5] = b'\xe8'+struct.pack('<i', symbols[name]-address-5)
+    from .client_battle_settings import EXTENSION_VA, SHARED_RULES_EXTENSION, SHARED_RULES_MAPS
+    from .client_tls import THUNK_RAW
+    extension = RAW - (VA - EXTENSION_VA)
+    if extension + len(SHARED_RULES_EXTENSION) > THUNK_RAW:
+        raise ValueError('Battle settings overlap the pinned TLS code')
+    settings = SHARED_RULES_EXTENSION.replace(b'SolbreakerBotV2!', b'SolbreakerBotV3!')
+    image[extension:THUNK_RAW] = settings.ljust(THUNK_RAW-extension, b'\0')
+    # Restore the stock runtime assignment in experimental builds with the
+    # earlier SmartZoom cache hook.
+    cache_address = 0x12466CF
+    cache_original = bytes.fromhex('8886a4000000')
+    if 'sandbox_zoom_cache' in previous_entries:
+        cache = client_recon._offset(sections, cache_address-client_recon.BASE, len(cache_original))
+        cache_jump = b'\xe9'+struct.pack('<i', previous_entries['sandbox_zoom_cache']-cache_address-5)+b'\x90'
+        if image[cache:cache+len(cache_jump)] != cache_jump:
+            raise ValueError('Unexpected SmartZoom cache hook')
+        image[cache:cache+len(cache_original)] = cache_original
     for address, original, name in INLINE_JUMPS:
         rva = address-client_recon.BASE
         offset = client_recon._offset(sections, rva, len(original))
         def jump(target):
             return (b'\xe9'+struct.pack('<i', target-address-5)).ljust(len(original), b'\x90')
 
-        old = jump(previous_entries[name]) if name in previous_entries else original
+        old = jump(previous_entries[name]) if name in previous_entries and name != 'sandbox_setup_reply' else original
         if image[offset:offset+len(original)] != old:
             raise ValueError('Sandbox jump site differs from the pinned client')
         image[offset:offset+len(original)] = jump(symbols[name])
@@ -1914,12 +3119,6 @@ def patch(data, blob=None, entries=None):
                 or not client_recon._relocated(data, sections, [(rva, rva+4)])):
             raise ValueError('Sandbox vtable slot differs from the pinned client')
         struct.pack_into('<I', image, offset, symbols[name])
-    from .client_battle_settings import EXTENSION_VA, SHARED_RULES_EXTENSION, SHARED_RULES_MAPS
-    from .client_tls import THUNK_RAW
-    extension = RAW - (VA - EXTENSION_VA)
-    if extension + len(SHARED_RULES_EXTENSION) > THUNK_RAW:
-        raise ValueError('Battle settings overlap the pinned TLS code')
-    image[extension:THUNK_RAW] = SHARED_RULES_EXTENSION.ljust(THUNK_RAW-extension, b'\0')
     if len(SHARED_RULES_MAPS) > BOSS_EXIT_OFFSET-MAPS_OFFSET:
         raise ValueError('Battle map names overlap the sandbox extension')
     maps = SHARED_RULES_MAPS.ljust(BOSS_EXIT_OFFSET-MAPS_OFFSET, b'\0')
@@ -1956,284 +3155,419 @@ def upgrade(lab, manifest, current):
 
 # Generated from sandbox_client.c by build_blob() with GCC 14.2.0.
 ENTRIES = {
-    'sandbox_particle_update_queue': 0x4b244c2,
-    'sandbox_tracer_update': 0x4b2411b,
-    'sandbox_tracer_position': 0x4b24190,
-    'sandbox_scene_shader_clock': 0x4b24540,
-    'sandbox_load_keyboard': 0x4b23d22,
-    'sandbox_save_keyboard': 0x4b23d67,
-    'boss_stock_panel': 0x4b22d6a,
-    'boss_screen_root': 0x4b22d10,
+    'sandbox_zoom_changed': 0x4b28b55,
+    'sandbox_particle_update_queue': 0x4b27866,
+    'sandbox_tracer_update': 0x4b274bf,
+    'sandbox_tracer_position': 0x4b27534,
+    'sandbox_scene_shader_clock': 0x4b278e4,
+    'sandbox_load_keyboard': 0x4b270c0,
+    'sandbox_save_keyboard': 0x4b27105,
+    'boss_stock_panel': 0x4b240e6,
+    'boss_screen_root': 0x4b2408c,
     'sandbox_boss_menu_open': 0x4b22300,
-    'sandbox_keep_replay_markers': 0x4b203c8,
-    'sandbox_graphics_page': 0x4b20b74,
-    'sandbox_blur_material': 0x4b251ba,
-    'sandbox_scene_graded_blit': 0x4b253f9,
-    'sandbox_scene_blit': 0x4b2538d,
-    'sandbox_refresh_score': 0x4b1ff2f,
-    'sandbox_message': 0x4b245cf,
-    'sandbox_reset': 0x4b24c36,
-    'sandbox_frame': 0x4b20033,
-    'sandbox_compute_marker': 0x4b25022,
-    'sandbox_draw': 0x4b2042a,
+    'sandbox_keep_replay_markers': 0x4b2054b,
+    'sandbox_graphics_page': 0x4b20e43,
+    'sandbox_blur_material': 0x4b287a0,
+    'sandbox_scene_graded_blit': 0x4b289df,
+    'sandbox_scene_blit': 0x4b28973,
+    'sandbox_refresh_score': 0x4b200b2,
+    'sandbox_message': 0x4b27973,
+    'sandbox_reset': 0x4b282ef,
+    'sandbox_frame': 0x4b201b6,
+    'sandbox_compute_marker': 0x4b28608,
+    'sandbox_draw': 0x4b205ad,
     'sandbox_mouse_hook': 0x4b1ea0c,
-    'sandbox_binding_menu': 0x4b23e4a,
-    'sandbox_binding_caption': 0x4b1fd7e,
-    'sandbox_binding_name': 0x4b1fd43,
-    'sandbox_set_binding': 0x4b1fe0f,
-    'sandbox_reset_bindings': 0x4b1fdb9,
-    'sandbox_controls_version': 0x4b23de5,
-    'sandbox_migrate_controls': 0x4b23d96,
-    'sandbox_scene_particles': 0x4b242d9,
-    'sandbox_open_replay_folder': 0x4b23f89,
-    'sandbox_scene_animation': 0x4b24279,
-    'sandbox_scene_wind': 0x4b24291,
-    'sandbox_scene_wave': 0x4b242a9,
-    'sandbox_scene_trees': 0x4b242c1,
-    'sandbox_notice_attach': 0x4b1ffae,
-    'sandbox_notice_detach': 0x4b1ffed,
-    'sandbox_project_markers': 0x4b2025f,
-    'sandbox_gun_marker': 0x4b24ddc,
-    'sandbox_blur_slider': 0x4b20c57,
-    'room_header_description': 0x4b20959,
-    'room_load_description': 0x4b20898,
-    'room_get_description': 0x4b209f8,
-    'sandbox_move': 0x4b200e0,
-    'sandbox_stop': 0x4b201e9,
-    'sandbox_particle_lifetime': 0x4b22f45,
-    'sandbox_spread_ring': 0x4b22f7b,
+    'sandbox_binding_menu': 0x4b271e8,
+    'sandbox_binding_caption': 0x4b1ff01,
+    'sandbox_binding_name': 0x4b1fec6,
+    'sandbox_set_binding': 0x4b1ff92,
+    'sandbox_reset_bindings': 0x4b1ff3c,
+    'sandbox_controls_version': 0x4b27183,
+    'sandbox_migrate_controls': 0x4b27134,
+    'sandbox_scene_particles': 0x4b2767d,
+    'sandbox_open_replay_folder': 0x4b2732d,
+    'sandbox_scene_animation': 0x4b2761d,
+    'sandbox_scene_wind': 0x4b27635,
+    'sandbox_scene_wave': 0x4b2764d,
+    'sandbox_scene_trees': 0x4b27665,
+    'sandbox_notice_attach': 0x4b20131,
+    'sandbox_notice_detach': 0x4b20170,
+    'sandbox_project_markers': 0x4b203e2,
+    'sandbox_gun_marker': 0x4b283c2,
+    'sandbox_blur_slider': 0x4b20f26,
+    'room_header_description': 0x4b20b4f,
+    'room_load_description': 0x4b20a24,
+    'room_get_description': 0x4b20c65,
+    'sandbox_move': 0x4b20263,
+    'sandbox_stop': 0x4b2036c,
+    'sandbox_zoom_migration': 0x4b24f99,
+    'sandbox_particle_lifetime': 0x4b24f05,
+    'sandbox_spread_ring': 0x4b24f3b,
+    'sandbox_setup_reply': 0x4b24f57,
 }
+
 BLOB = zlib.decompress(base64.b64decode(
-    b'eNrtfX18VNXR8N1klywQuRuNNSpq1FgDoiSFPmULSELYEIWVhWWTIAGNJEggkDTZC1iMJtws4XC8mBJAnqotLVp5'
-    b'lD5SocqXkg9kg6KGEGWFqNFGvTHbdiFIAij7zszZzQelb9v3/df9/bJ775yvOefMmZkzZ85El+CTfbfpmz8ZG2YG'
-    b'leigYtb1YDDo0GfdLEnqoeg5HQWvn7/oYl86WYOpesmthmCTp9YdrdWkPPSSxOrmzgt+kVw7d16DS86qrai3rLjV'
-    b'wL7McmplZtag2XTVb5FjbHrwZ45gs2yx6cwnx0Rq+T1zH4ISkJF9kOmEihdLi8oBj8WRi6XFhkXwVD4rWJ1yelmk'
-    b'2hNUjMm1ncnscHItswU0W2Cx5AAkszKDNRshA/PCQ3zXskhP0H2C28xWW0DeWCu/Xqvln507P9RKpq7eJkkVh9++'
-    b'R5KcFf7noAHmWQS9NCU13m5gmx6GR+bJwe8/F+L3+54jcuVqyIaNHmA2+D7EbI3MdpTZmpithdl8zNbKbG3M1s6g'
-    b'VzY/4MY9WFbbkncBvst3XsI68xCyapD8eiTfRM/2as34thFqdnDCQD+H+Q5ne865Lcm1FWXVzsnTkqEH7HCnKc16'
-    b'UXlb1HrwfiiilTd9h5VmA0CAuYao801Yk/z6c1G3YdNpY0Lt2sqDf8YH/WFoQy0rl+bInl9DPerFIXvug1+vpxhS'
-    b'JSM+PQ5PgwEm27zJzWzTSnhVLw5VTHucNFhueAcUb+WzP9moTQ6qPWUrruVTPtmi9sgrotkmNw0gFlpyKk6jaqF/'
-    b'iKehgadZZEuk6o/jzlg2JcHCZifEyjHGhBDuNOwCz2DTVDXokj3xiHy/6dOPxMPseaPulqRMp+qP5lsCwV8YPadk'
-    b'D0dS+cIg5mqxkR1eJCVJ0qK4CHiTgtUJZ4BAGoBcF2pVh7sAp+DmpwLLIvn6WqSceq3qGAJnMZfO7P7gMe7Sud3P'
-    b'0sZpVV9QQvCY9kzxJZy1LpY2gQUWG/Sp3weDD0KNw+TXbV0T8lYMYmo1jtBvECVAmvkI7eDW76AhQD6TfQT0PTNY'
-    b'ffbcskgYWddZTy1R9K08c4Kn2f2tZj87ExYHVPlNsCYJCNlqOxum4J6583FhWSaPg4p4yXQnfzCDFcdyZTjLtvB5'
-    b'cXKMBIvKzB7MmMtKps9X12VAxw3z5JjJ4xpcyUdgza4bPqTylDsq9ec55qD7THJt5am586D20KpYeguuilfvglXB'
-    b'GlT/cHVlrMxcgeURPK58vHTQAB1TItUPgsm1yUe8NmQLQSB4bc0XZ/GhVVvTgQ92WAU+7mplPr0KyaRWrvxfpNa0'
-    b'QdrmKsrp15dRgjsiOchtfm3zRgDrDwqY6SAgLRH4twhOC4Mjw+DtCB4VBhvD4NcQfG0YbAqD30TwpUsh8CAAr4us'
-    b'BJywuQnz3JFpnX/H12nwmlY+Pt59oSMF6dDlA/y9otg1WlqUttmLFf35EvW5c7+2+TT2xadvQ4LY3HyWcj4EgA0I'
-    b'mDYI3q4WhVij/gQVa+usZI3a5o9plPx6AQCBwLqBd+jyWwbN0VR+YbBcNQ/XWpk+QX7aiQvIpQ9J1aZEAJvROz+G'
-    b'6scQTspmDhzG3g4kNI6XtbEMI7frzBHNHBZtcw82kGFmK2Mhf6ToQ6r8FkwANhG14qflq6J+roxeN82szSRAQvmq'
-    b'wfOUm3lZQNWT1IYhbGo0ZL8EL2yqBQZFgVHq0TYHRY//9D3VOAxqiXeb1Iaozki1waweGh4idmT9SE/sfSc7DmQE'
-    b'5IB80+8FXowsJcbWql7IU67y2vxIUodtrcmdUclH1AuDl98CU3ZwCDLaZi3DwHzd3cnN3d0AVOuT1s42tVIa8yU3'
-    b'H55y1Sd3dHdrqRFQsbZG6tgjUZarWjVXK7f7ZgWb+rMM5tUqml4qkDI1pdXJ3mWnAS3Iws5rann7e1JFQzwmAuA0'
-    b'IBs8zm2+AaVPZLLDTv3+4bA8GqoTgWP6zcwe0D/ogfE4zS5oWyQpRTKN+OxPRsAGJ0bxO9mp4EdQA1XiTRmFcjX5'
-    b'CExXRhJb24a9OFaVkVLlmCLWnnMmSAxPsxKVfK7jPgOSboAdNx26pTzSGqF08l8aQZ61A9CUXfxkpDVK8alPDpfc'
-    b'zQDZh2Oot19AsQGzcpBLQB3mvN8lYBuD8vhV+GCtU/5gfcKsDLbON8qVOq2NwN48zHJGv30SosYCbP0EqEufAVSX'
-    b'XOtds1sSH5Yey9ItLD2apSey9LEsPZ6lD2fpcSz9cZa+kq2pxTxrog34baZvC31L9P0dpR6i71aCkLhds4W+N5JM'
-    b'9a7ZGW5rzSjKk0Df8fQ9nL7H0ncSffvou4m+HfSdQd9r4du75jlDqK4nzGy+8UEWoCnQ194As1ff/GNJggHvki3z'
-    b'zPDlioYvu0VObJATv+iS5+BfQ5ecfUhO/BweP8fHLnlmrTx69UYYluXDuuT5Pvhrgr/GzmFy1ikovw4Zhpx4vEuO'
-    b'iZsHXw4jfGWYhay6CZv1zoVmgYZAAwoviXY+eTaflc2MCSAAjdyZAz9mbmvXcdGzxrvSEhA9XX6jqU63wOPc2fC1'
-    b'1N8lj6yFh5dQJoI2Bq/vcGcSoApoZjfC79OIJ+So2kK/8+rg+emx9DznGPwB9tlzM+ChA/7sgS455yTkcGbDG3Rq'
-    b'TloOpDunw1eaA9I+hIdnnqPSOXVAntBgzNyH4cuZ17mENY5oCuM3Etoe+Q1UcBSxS6ES2e8hPlsFHjCUlmlQMudj'
-    b'ALZC4scIyAPAsVCdc1oAegyhi7A1aiTUMezEkkL4WuD2HIGEmzFX8R6caHhLg/zZnfDXJk8BNGLSYfyz34GHTDMQ'
-    b'9TQYnZhliPhCwDPmgdgBmiCJY9WfyFdXIsnYWvjqtfTg2zMbl+Hmp3CtREd4jjD7UXeyVtYa3G0qRw5fUz63AvI1'
-    b'ZQWbuf2oVlN8U5MEz1oNshJ2PticzW1ND07EWpSoPdnw0/mnAVpMZBxSRmqC0GKGM7uPr936N1Bkmt0Pe464c9hH'
-    b'oDJXm2/2RFp/pDygPpEguTOWuHxxWnnSsWclbeN1Td2ARlnrrKxgk1rml9zxapnv2n0/gpbcg0F+VdTjCpylqTuv'
-    b'/9TATkMuweYAt+NhRLK0xxPMansguOI7oQIsvg5VgB23owoAhFrIbLuZfac+uZtY/hh11TjJfTe37TY9bHpFItX/'
-    b'Fl6Nq5e5tqsXIpSY8j0v4eJzm9VVFkn5ZefNsLzT4oLA+Fnayl6FSHu056GOr4Bn8bR4qCOGu3aOqK+48DkIc3nN'
-    b'WJDdatlOieZXttl2orbhoyWdFu+1teKT14Y8FLQ6TroGaIHhlQRK+JQEc+cCnjZO3Y+8AybpBffCxSuCTQs9tY/N'
-    b'U/cjWxGVKzNDFe+VpAhpYNVeFfMZ/m+NwDiwk/p9o3BjZOkoM9L+gIpBiu47gzJ/B3DjISj+tnZcJLa7Y7yKHNMd'
-    b'x+oh117i3o+CegkpjFJwdAOG0Oi+zTOKgRje4oagI57ZngPQa5Bhodd2FFoLmhw3bYD+bcEGquXXK39WCxPl0GxH'
-    b'Hdz+HLdtCTaVw4RFU2fZ+eNtg23VoFMblZbkICvbmhzsTWC2jbenPe527YvCDUFwqHuo/PrGnxXCDKn1Y2Zx+w4N'
-    b'h2C3fgd0qqLMh5uEOcqd3NbKXdVWV5syHBCL+4eGB3HXxsGurdBktLKRr4rjtq3QSvcJlhZ3q7fbi427b+DThvOa'
-    b'dtFx9bSBTRuufm7QP4atTbcXVUH3HTxtuBqIYGnDt0e4o7y27aQJiiL27TjUOygzaoLu2yCzSFMDFiiitlnUHgNk'
-    b'uv6IWmfSV1NOM+Y0qtNWxnd7Lfh8e2+pseVQ6A7cffYVi9KnQTF539dDS7FQSrc3HgtFVUxbiQQCCUNKE3prKD9L'
-    b'VUjl/auI1c3fIbUPr/s6suJrCfbSg1etZN6Kr1XIBt26eXE8t70gSBRUbOPimP6v5nNpwy1y5RJoTF2VKMmVuURj'
-    b'O0FKTJyHGFShGORpo4DYUrhzNp+WDcSq2faw2AQ2vVe86N09SGd7uOsAyA7mLAZ1JK2Qw3bWmcTS3N40FL5Aw1Vp'
-    b'KcBg/7BTSJLfbCfx1iCY/Jyj8uh3V8gA37yb4PVd8kN1WGYKZGiSE99FTi6PPk55frOb6njoJMEtzmLB7y3rd1DZ'
-    b'Dnn0Mcq3fo94h6zfIG93Y+ZC6sPR0LLk9lb1A5DUH4eE2EkhsWLmAV3Cew4yfNh6hDrsaqMOD+rBakEOxSwpJnE5'
-    b'B54ta1JCEg2F/1GU75CAfbOBCIqZVogyxd15HY2nOwo03gnnoJqsWjlRlxMbh65a2e0thq2SYvEElWvUVWNhQpBg'
-    b'OqP2/Ax/THteRnyd8cDJB3P7zhHHrHUljwzgaIgrIB2ztBVYGuuBJ1sbUKo7kqclOoDbsPMhfgPMhp0ErtPHcfSP'
-    b'7yR+gxp4xde/bUNlja0aK7hrmLcKCfO7GJQwn92Eusf7JOcssLfVqu47i3vfGtz74u5Mxd3ZM7dAH2cBlPbCNj9U'
-    b'vyxshokIm2FSMoM1KWRlUXuC7gcGmGDQVJQVrGkJ4FYauQG3RSc3W20BZRiAywO43YXWNtUzV3uWsNFwVzvoFEOh'
-    b'0kWU3HktpIGyv3hwUNFBG8f0WncbSo0mITf3xiG/AkGllW3U37KgrJKge071UDkjm0Vybdcrwv7gtZHtRPtNIRlB'
-    b'hgp7hPz6eK65hTVEywLOtglL6Q/8FdlaObK1bGUYt1WyKd9v5La18LOFU8E0a4NSr9mqF+dp6wPfkz0DS2qb0bCj'
-    b'a5cGmCgyuWJ26jcgfg0Pw65BS39P7Rm6/Gr9eT/IBMU819S25FbD/HnBtiW1cVplJNpxaG8fLvqZjEXv6F/0kXBR'
-    b'qTBcNAmKVl/oLUo7Lv0FKvrNjSBWRvtpf9Jg2jnydgNsbnz6FIBYA8rtzMvqQeX36X/FLBfg4XeXxAN2oeO5iZLU'
-    b'pyNpZWYnu6RPo4p/dSNuf+J5FH9yOG31W/XGThR0Pm0LWs9AJKj6GEB5hUntMSrpWbIl3aj648jEkx7LM+PCRh9u'
-    b'bwsqrcHjzAtk4fkDctyy1p/IVbg/gPULq0CPBTw6UAOrmIRTozzJpxoz0Ni0XH3SLK8o1kCNtrfhXt3WAnXpVYDJ'
-    b'v9NgNizccaE2ttNuVhkRVFr+ZUkyTSA59uDo1MdLZNGBQR89DMdGAV1f3/dNaNCrDZ/AoNP2DMY37a+kQd3H6sXW'
-    b'DLZ1E9W3HCQCzew17GSnxUq/ihkW1mp8UveVkzJ1jbrvKXoYghM0ryP12z56weZ3XoXNn7semh8fbj7l9U/7NX/I'
-    b'T80PVv9mZjtRSoWKO516KRXeC4WZvUe/2AGLqJk16Bv8aJ3oIfPHzB5rdbvArJnR04OamvTWp4a5QIeh/SufZ+Zl'
-    b'0Zr63kd/MmY5g03zYZDlStSqeZYFMLj2dGiH6oYXv59agU0ubQ15Fe48WWY0JE/Wanx/Xx1ptcAMOYA/gBIxKxqS'
-    b'eLlPWDJu5RnjQCW6gaeOI+Rqpmx4ErMPZmeg5pUjUVQEcJLOhKj5um8H2g8znfqT0djnt+MELdsAcwuz61yJw42Z'
-    b'LZp28bHMBgQCW7VWbotHk5YtAchMP6mHUNeLOwmfFawhNKWRyhJu08enGRXQPs3c3s5TEq0GJRPtF/txSytx0Bom'
-    b'AtuYtDzVmpZIsqXt7yiT/TzLyEG/TeRRzDmdpWXwqWaW5uCDeKaRpc1mzmyeDoAc2Lbrr+J6S0vgrhZu9zEljitt'
-    b'aC6ALrgSeJmfKbEgPEzFB1QDV9qZPZ6VRaNxSDEz13D1UDyOQ3jW9OVDcSAOXEc2Deg5cB9mD+Bw2Pz6378O0cKa'
-    b'b6inCXn8WuqoRbmeuwLjHUYlhg+zZiSChtvMHIl6LPQF8AAkNLVpXqUB2oS5gPYfnCtavXy/wS459a4hiIKVUIDd'
-    b'p0Vm9hdQPj6nF4n260zl9atBy93KGpl9i36+QxgVv0fKbgA1CUY5jNg1sucr+MXkT/E9DXq+RfY0kzwe5WmWK734'
-    b'uAd1dCTPvfgWpf1qwh9LI61N7mHar4pPAu01yZ7fYu2NmrJdT8EVdZLVsYA+MgASxGLbTkxCbSSdFbUpr4pbBlpq'
-    b'Ku4nNFsTq0GthV0gZsIRyJ8lyHRgKTkJsfpYqDaogK68ldtB04Nqm8K8B+jO1U68J4Dch13Qo77B7X5SPwlfb5TQ'
-    b'QPAcjNSPoAKopl9iaHqBNfAys75hMA6w71rgDjd9hY1GI4PIMkmxCp7eBJWRalm05E7gZEzhKeN4Rg4ssFhNffhv'
-    b'MBgGZchiA2wdHU1S78ax3ixdNpX6WGzFW3Itbmcr/MiumL2cXdRf/lKsl0pTccqHkpDCIGD1n+jEdwH5ciFhB+Cv'
-    b'7qH1whqUweqeccQlR/Wustuw/P/ooWk5jG/fjsK5qISOndR/dQ+qyWbJ/WNRYnykMlzd34MMFGrbH0u1DcHcJ/W3'
-    b'YKcbrlemgwpuKweykenIhPPtSChHwrk/jMdWykFyaij8+U6io3Ny5YEI5DqVfNCVSOn5CNLN8RzlcWGedqv7aY/p'
-    b'vkW2CDIisuGCZkDVc7WDRtjUGYtdq/1adBSISv+fvxIBIqWAdk/EAlLM3g5kYgF+Nz0hNvmIfvJrJJY4xtuk8FEO'
-    b'dlndjycToKvKETRW+qNfk37/QAZ8ZU4BbRNU4sxx8PXABIaqcfp0zbYDXtNTxIEPkJqridtQ6ba3APdBrdUX3hGD'
-    b'DEYDFmXUn/ZTzfk70M6206uGTYnwquzmNWj1A23cq4bNftZdaA6UPVNwOGGRkjRoHNGkOYLqhUfkKtyXkI3uqLDP'
-    b'oZUJrV0zj8ijn25HtW7NYANV/8p20Yz6AlaY+B3g+EeBu2WT+J3Tg9l2ULY5x6GeE3LiJXj8nh5HP6NTdfsofSTm'
-    b'fcYvykG7OX/rkuefANibobqg/hwvvB9so/f5dXLiBwCGPdGcqgBWNNpL+5uDZ8U+qAfSOZ0QQY4PIeFVLNhrRMN9'
-    b'SFU8ZR15QR6N1jcvgnpEa2jc4jupY+9Rta+Gqv2G9jhz0GZGYw00ymhIGd9ITOk5YSnb9oL4fVaMUswuHIbOiORz'
-    b'SA7ZXxKdnXYwL75GJYGU95xzX6fuz6AVMywrvMAaYbFl967bYJP6JtIYrDcgzT1EmmvZGSJOeyOfd7SX5aV+SYQ5'
-    b'YJ8Cq+JLEMD67e20Mq7lDmDT7mHcFR0wOFK4ywI/U8LHtkeNqPEPi0GN3z+W2WtZl37/58A6XIdQEpj1sV+i0nJI'
-    b'25wLuxnsR60+XkdQIzxqm38BUH0kAXwEWI2A6wlwlAAbEGAmQBMBXkRA99cIaCHA6wDQQNf8C8BAyqFBDW1r3F6r'
-    b'qVJ5h6HfWUIfuzRKogNDqQN2S/8OsLZ+HShtD3XA29uBX37dh95HiE3B133o6QjI7odeTwi9KVdAz/Iv0NPeHAsC'
-    b'3KnnRqLAeAn1ff9RwJVpSQDX2z7DE2Z8hK0eO2xK+b0O8kOrMaMdcg01dX4WNOXBLDzDmKWtwcMVPGZhBNPWkP3R'
-    b'k4hVNPFNCMPl/jciWXPFSotkQWMGim7tzelUIrDzDYkdQxPnmw8DQGZvjoKf5dHcg+nMM4rUJzMeVS43oSYnibYE'
-    b'FlrNHYCcHvyCZM0qvikHgXhg/cSKpcm12psL4T1l3VNxr0K2tdFRak+0EgC4VopVPI+VrxseuXa4IcVar/wdhKk2'
-    b'OZo/T/XPsIw4rm3C8oY69oHV6x6Ssm56ZNfa6IjOM9qmRwGexe1m6MADiyUaFey1pk0XfbeZB469/q0BxeeYYaEz'
-    b'bWb3g+xc9imdEIKyaaoe+74Eww6DiXtzufJ5Sei5z/wUME8+p/8IVy+ebVsIWoPdjkDY4d4zoto2PLSXN9XRNrzy'
-    b'mDvHc8qdHVKdWPVWrLGaTq9tOhSS33in7hvkSvVhrqRVW+bvQbZ4hH0srPIxag5UHWwGtReaDZUO6Bf+QjrtZV28'
-    b'mrrouEp00UKqpg69XPsJ9hK9Jkzxn7yBtIki9R1EJ30cbPci5Ko3qbeglOuhrt3ZLrQKNBfoX3+GJ6btoC3IlTUh'
-    b'9Q9dAUKCXcWeKWVQWM46AlyzHHGWR9eVLMazke+ITTeWzIMeVSXiscoT4yK75FG1a21dilWzdS02aE8nXcIdP/SI'
-    b'zv/13/wtGHxwDlDUYMHMISuWQh8AJeQBIL/u6iKM23X/F73KDQwFNyY08Fj4Gw5/Y+FvQkKDUppfMuYn9+QVFkpT'
-    b'892ppY8tWzAt/zGnO9edj4CsgmV5RStmLyrJz81zlBQtyC8tvS9PmpLrzs1xFhU+AuAl+SWzC5bmO91FxTn5y9z5'
-    b'JfesyF3+T3MszS95NJ9yrChYtnQptQvpy/ILQ0hML8rNm17wSEluyWOpkqMw9zFnkbIsL1Uq7asrf2lxUUlu4dTC'
-    b'AveCRVJ+YcHSgmW57oKiZfOkUqW4JH9p7oLH5kmPluQuL3DDwyMFjz70SFFp6TxpaW7eQ4/mLs2HR8hXUFqw7FF4'
-    b'WoYVuPPz5klzc5cuLYqX8vIX5iqFbnhfWpSXHy/NLSxYnl8Kv27oBfw8UuTGt2VFbqxpcq7bXZif4ZoyGv6m5z6W'
-    b'XyKlFhY+Njs/d6kjF/qVVrTMnVuwLL9k9ACwZFuWv/RKuQbCJfou7U2GBooUN8yEO3+Bu6hk9GXJo2cXFY/GN5iJ'
-    b'0QIznEqFcpQUFY52LigqyZ/8qFSYv9A9OhcQEq2UFDy6yD06H5sWAJg6nDPoUvgxM7dQyQ+/pBUWLVgiZeQuy5My'
-    b'ipQSyXXfjOLcBTDcaUUwOcugdcletDw/vaAw37YSJm9RfmF4gp0ZQFaOXPei9JKipfdNmV5Q6s7qN7tpMD8luZML'
-    b'odKSIsiwrMBdkFtoh4no/z4dZ6Q/IBVmbkCBgmWKe2CWyTBtyZcDfkKADKDu/JLeRkKv/aoQkL4a+t5/Ijnz3W6g'
-    b'pNLRI0eOnl60ILdwFmSYUYwEWSr1LQHMPFpyLoBZKMwsyF8xupQee6eud4Z6S9iLsA4cCpjKBUseLcGVMNqWV4AT'
-    b'369iyOAsLAB8pIFAR37JApyJ0GcuIn73wqKSpfPwDEEyRy1ZLPX7EO6jnY9MLioqdYMGNgxZyeXw5H+Epxc+loTl'
-    b'o/8RnnwlOMxw0j+BXzE/cgQscNUV4MlXgDuLc1csuwIcCTLvCvAZlFuShl4Gn/1T6xXh0zKTrwh3/PK+zCuOQ0FJ'
-    b'/pXwR/iV8E8rzM+9Ev7pCqyeK9QPtFiIHbt8XqYW5V1xnAF+xXGeXTo1P7ekr57LP05phjRdmizNkmxSqjQNvmdJ'
-    b'D9GbA+Cp0hx4S6c8Uyjt/6U8vs2UXPDtlGYjjkOHRA1CfypDRKRpUJR58JCh0j/7DKDTfuN3pc9AOkXm98/7fXl+'
-    b'e0FpKfA1gv07+Wfngsj7D+q/X1la3H9+/lX+WfmFsBL+/fpnOwRsyL+Z/4H8le7/BB+k6/8kP9J7yX8wX0jv/0n9'
-    b'QO8D1us/yw/MM0w69DH3wcMkQp/BffAwKQwYTxSRoSm/PH94aukT1QcPT+Hl+WfnF+aDruMegD/AcUpm5y5bcjlc'
-    b'tBuagKv64OEhvrxf4aG8HJ/wkNFnUAh+zz05eUULlKUgUkpz+gT23UvyH3sEtMTSe9z9OneFzz8rv5TE3N2PgMT6'
-    b'v1bx75QHRP7j8r34X1b4rsvKJyWVxj8en5SUFG8Lg8r7p4P+/uTAEuVTh5y4fQI8TJKk1WmStPUg/E167+iOg2PG'
-    b'1ACsfNKsPTffK0lPpUnlv5/y3tHpE8eMKQV4c9rChV/d+97R6EkO7bqJCxf+eJJ/5p6JDd8umrTnZtOkp+u/vfeU'
-    b'fCTl8KcLJm0YMmhS7YYKKBOfkvP05HuLrlZ/DukTc56uh/JHsW2oc8ykWzxLJo0t/9l4eD4IzweHnNg2EdAFfMsn'
-    b'Q7uAQzn81aa4XC74TUnxzxwHbY6bCHVMPLGtGOqvTgU4wt4sujry55LUOFn64fPD54fPD58fPj98fvj88Pnh8//1'
-    b'CZ2b8zKzU3/wm2CwomErnrB8eTgY5Ovz8FiywXPEPYkbgmQvZ3WeWncyl7QauqrRpNwRdBgBdPO68o8hecKNK2L3'
-    b'SYZys7ytvnSIpu5c+pmBnQ42sQA7qY8xQvkys6ZWH9oI0H5uGex9p5Pfb2YNh21dQZ6a5KlVopJrO94iBxJ2Qqtx'
-    b'fP48Ntap1ex8pjzC6khR2jRXl1r3uKZKreURsxYbFt8SbCov6wIElbcBnzpEcc/o32CpP1c0OL5aHWHNNiovL/5x'
-    b'8Dj1YatXmp3uvNubYpyeOvnuwylmZ8Ul9GhQzLwKD8w7r+k+LD2Mvkq86iweGkbyqRaWOphPjeWu6BQ2NZalXoU+'
-    b'M7+IYanXcpuZzbyJpV7PbZbDqXcYWOqt5PrY54VTp62mkx1yL2sVlyLIjz0gs57lkeRY7E8+p90fVM8bV8Rr0RZm'
-    b'98lvWbT7m8rPD14hLzk3JEVz/6iJu3zQpa8GeLaHbnygdxP07CrWMEurQO8F9nGwic/77kiDuL3KmjzN7pnsHW4e'
-    b'8XHF+d3rKyPdcsX5trcrIxXrXjzy7DTtXYQOEdHm5FqY9B/zVJzam6yN7ut5tsV6XDHxlNhO2XpSrmmQXz/Fjb7O'
-    b'z8TdVzrru0UH8jmcezYYpMs9fPULBnE0wcizK4/8G467n8Dzms1R3wKVzXoXz/ygjcUEuwFh976LhyPwNgnemLoD'
-    b'SbBHTwxDFxJ0t4BeHS4/ktLexPKX3gnlPEo5D4ic+jv4cghesgfccnqfzp4QWXR8YOvo2+aH3t+j7ttBx8A3qvt2'
-    b'08PV6r4D9DBY3XeIvOmHoBvSBf17dIaswus52m93UgW6VfG77+LjPUH3Hdz5HZ2LBHQF8lm9igzoCTe1Hj3jEh3r'
-    b'XJOMt0tlzAo1ntanoXOi1zrebUyuZXi1N/bc1OkR7mFQEnL36DGYPp7bdLXBbG1QfqUeiu7XLaqcbnC99bZwHdol'
-    b'XIdgNtxy2HWoSfbgKbn6ZHSEXLWBTpF6r1FF8qxooIFmN1C92aqeJVe48TXoUuIey+idcz9+T432qkZo7146du8h'
-    b'd2oYPfRNa9RN3+Oof0f+HjpdchNuKRHstLyxXp/2PXaeqwEsezqUNFfeVI9ObPd8jy5/4bsj3i+BtrymM8GgOC10'
-    b'4TjQ1TP95CHRx1ZxQIjHyn7tmUOxkqSfaURHTR1T3xLXI+mscHcs4opXt/SmRhp/NZpI1T2EuwL6DLxkXI/HezY/'
-    b'q0EvJ+2ZaqxuW2PIoy/sVEMXHVS8/dV5o8ivPVOMOR/DnJQQuu1qxorPXURonIHwhFYD6n4LOUhvqtcnfUdjgZXo'
-    b'YiQMMEShee249Tu6/dQ3Hm+043h8G8DxQF4SjyeDq+keWpkPffS4q11fA+2Np/bcj3ptOjmV2/S9yOa8Nj+9uvCS'
-    b'orhYMtD7OiC8r9v1uXglgryvb4fX5CDnOHCm2vs2ooftfroAtx+Hr+NT9NYXkyh7JpDDfjuw/e4GMT8jEaJis8nn'
-    b'mNIGFQ5FJD+/QDdFua0t+ZyVaMU9NHQjsrubfcSd45KPMHsr0OJP6UKuNjXJwVwtwWbuasHbAtf3u+vR6jmnDL6d'
-    b'6FGe0j1VDQ5SmtRLhuUTBflBkw/wMh+3t2vPnMVpaj5MPhhXIx5z0Gsa3W+MK0Z0mgT3NpYbAp03QaUwIK2M6kW/'
-    b'dMKyo5uOftVLJrnKL7zgDXSZRhf3a+KlfxxkB07ulYf5bE9omJWNHc9L4YE0yJ5qWj3RIVa6mupr1185j6RoVZE6'
-    b'3cX9JzdF+g8m94lwq+5R8Cqmlu2S+iYYqLSGbjrWYFKY2gfGFrjzC+T7BX8Dvk+E6GP2Fus6ZP5y5YvEVV8g9yZ0'
-    b'3jyubf4EuXT227gUUsSqA7bm0zbrCE95W6zHKbRIfKxmFFENZkxu1m84j8fsLZT9W2LvD+MiHoqFjjCV1BVeTN+F'
-    b'9L2onwSiUhGo3Jw6RA4xIITQ50QlmUeF9bpDdO9Bc7XCGF5NLA0r0tZEn0PnOMyDt3nJRdYHg4tZTEmm9yVyeUDv'
-    b'XKAv7Zn2m1eig+4gphb31g0NQg+ye9BHAwXLXrMIr3Ci65X+Xnc+WDEPnQ857LRom2PRi3HkIcRTkLDgOURxcdQJ'
-    b'I+YwUw6/1J/h+HRPd5j/ImvxhRanWAzAXULT2NHQ/Q/+wjPaUBXc5EcvAPKQ1Y8fILmKzpQNmabyz9DPRUgxL/Pp'
-    b'roOQOgy1D2L+9QD67HuqNeQ6bhYuEcHPkG9N9If4OFdCjh/KgV7HD+maw4ZM8vwQ1Qsuf/Yt6Eod+rvEQQv3ek65'
-    b'f64+ESszvKw/CEYcWbpd1wfV0oq+mdt1da8QNf+NS0CJFizXp6NHUT9XDfO/0I/Rjr0od9mj+Wj5FqfRAz5L85cp'
-    b'UwpyC4sexZPYAbknK2530bKwrb0UDwhFBf9QJpQaLpD6SEFhgTt0Jh4qX1SYPz1/+YD3XmzoDKG01FGwYEl+yX9g'
-    b'fy7KLcn7f7Wf95ZH+zUf45g5S/XjNWBjQmaWfsu16O9o9uDNXWOClpdgfHBOtuxZfsf3F/l6dNDr+CTh+4uq3wwF'
-    b'YhPga3qCMVO/91bykuxo+MWQ74lYmj9BYrF8I4hlFLM1ofPUcSSKpl7PbNlTj6x6ZpC9W3Hh0pPoTvUnXO3k9I9+'
-    b'NduIMzaZ6GLpINmDDjN4uVRwBc32kZxY1XYJ78/QbX1gJLZGWuS+kBhi9qPd3bysMRUv3APJnWQN6oXBKz7TbK3J'
-    b'zSlAjUPvWzf7qhNrLa8ZOgMkBCrRid92VK2NODzF1BqvOSLZaXj6JAO+PgUh0MRcfuAxi65FRou3VS+7vQ8L8P1W'
-    b'XICxHcCf/WZQd3g1Re7YibeVtP2TQMnOgkpQCvphxd+mqeKOE8bRmKTVZJ6lu00f4WYtixjTSK1mQR9wOOw7IrSa'
-    b'mwCyYpBWc7ErGFwUKUUINjbg0u4DiIf3KVDtM5PPwSyY1fN5sGRl22nra+imDKi581iDVu4Y+UgE3mAKwDKuRC51'
-    b'hK3DDJ3p8ht1dR0WyFjR0LT8kYgueWRdP7fPRofwrJpTlSBcbo0JizF4yXGoCqghA7goNTTwFvNh1uhU9yWEthR3'
-    b'3rUaL8rvxcO5iZHwtGLaktrsvUaSGt2n6d7/iLrO/+L7UC25azXdra8DtfqWidswd9yePJrpET3yq3V7UVp1n9ai'
-    b'x8F+iCIGnBQbrI5OoJJQ806+B/X95FPWi6XjWc8I3zHd4FvSGB25/iiArTHKjbwEdlHWXxiVm3mq2bqaXKQorEnn'
-    b'VaUmLdvQ+TbzdtbB9qn/tSP2kVNvOYkzfwP6NPvj1X0pdI1iErO1yJW0A3+Hrye34SNyJVa6ZwH5x6oBQG7/ENJA'
-    b'/Hg4Z60Ph59Ir9/3daQQXNYTcvqJg9QpF4ij7i61NgmpmuTZWtcnqHOBkl4LkC8A0t3FTmAu0LnWoudZiykcd8L1'
-    b'F6Bf9PIDabweUVxsMJHD/GV0zI7zDQnk5Oy+HyeN81FC1EUz74gPKoJ4O2F50oh6ppKg359IWoan+QlZW41I79Uj'
-    b'xRxmsTqcB70Zupnd24ap7X9fktgx9iWsmOc+xnH7Al1u0bPb4sJ4B0tFvAOuxKIztx9vIAbQnfssUFgTZvJjJgBZ'
-    b'UjBn9nDMfhao8RPh1ZzdgNBR8PKxeMlOmQCQZxPJia5BXrNNuF9vG0WANnnNBgGIh79iSyjCwrdQ7isEAHTOafGS'
-    b'/XBSlzy/TR69LQkDLcyH5F1jqZKzy2dCNgyqMGcRoD0nAzhk9ofiin92xliMxCCP5uOwVCKUqplApY4tvxHy/gX+'
-    b'3oVsfxGBB2J+DH/zjZ2RqNSEwukI/rLMh6O1ux1HaxSzN/J1pD0BiwW6OhuBG3bygmYfyZVfwivNLrMd5asdQmm7'
-    b'lZeZR3grgriAlsfilfGjoC4eYeuxWMdrEchaW/hmjAPg4GswKkC/6+Rr0CORlFBXI7BDivECeijeN82qle/Rfykr'
-    b'Vwnz02KpI5fc95s0VztOXyNfj0rfLJOl5z0xh3iJ1TLPL2cdAZTueiuDHOPnNFQErxMu8kvRjZwy2Xx45zVAfvzo'
-    b'M4/XYldcIydiLIcTMK41GeKe7Dt7E4fg9lxOPIa0F4ok8Y6c2BS6zssdgnnB5M7fNl0UauObHaLpoyGHfT5buLG/'
-    b'A9SfDqpLv+gRbQDeFuKAZwRBzN+WLSo6JCdiMv6pOSKwhPqwqAlrfjZPuPdvmyJc8D+RR/9lBRLvtkUi8gTSwCEa'
-    b'sBYxhkiwhYK52htNW89+gEjideIa4dWf/Wyx+K1ZKZppDV81bsVV00brvAnjzFB1s0wPd38AQ8/XF4u1fC3dkbDY'
-    b'G2eZkl6JMECZ6ARIXjMdWaG39OfyGyfq/o4xPWpCPfZiGI/esTgZWmp1oQvXSObv4t2CTnN4kngZtLaI3GmLWz7A'
-    b'Nu+gWYvBhudw9MafhQNeLnoJzeOlBRsUKhQoxuFgVmJYLhhgdW1Y0gRPhKjMQOQ7gHcBO9anf4hbm/Wfw9YGd9mx'
-    b'6r6nhE7ajrfnVlP8ldXh+CtcPoh3sRTTwd0hn9wDJHfUMh2UDbzGYD3P7G2y+iLpHX5eU06LQ3184OJQK3sXh46b'
-    b'tB9dxE3JEVgfHErfU/fLCPdCvEL+FPru7n9KBAWZ34gdRganbhRTTnSubhEva6p7o6OM/ADhzxEcJfF8+Mteg1FU'
-    b'3FFy1hpJjI269TKZq09pQU1gNWwMMtlHyc1O9i7FdWljjXrWLvRHboNefhLq+Yfojdynoh0WTLEaW6UV3vTLQUIz'
-    b'U/dUk01NwYs5Zljj0MeKhqR73sH85aIreM8je5CgjBhbO97UwZvt5aJv2Rj+JMaOXbfpWGgrgWPwmvZiw+LIWVp1'
-    b'NbE2kFfHYR/vLQ9PWOdPtIPLQqG81laLUi6fVpMUV4ORTVA8+PB6r0BR9sy5LC4b82I4Ff3248hKC2BnM5Oa1be/'
-    b'GrpGOOk1Wqm2AIb8CN3wcpv5jERrRrQ72mHoYucFGR7vf5da/6gZqS4OKnTeta6NbPCsST1/y/JbZcvq71BOlkcj'
-    b'T9xgicAQIRbmjJVjIjuOiUHeoPdOrWUf6HQ4gGteEDxjnZ/Sci7A82tGSrP82ix+X+4RpPL7dpHntLg6NAfIKBvz'
-    b'bwiI4T6N9ZwVeWDpxqzC4S8190UpsGyIphpFoJtowUso0M06i0jA+AROi7jgg0FzLC9/J+rDSZyGMu9tEYgoJpLu'
-    b'//5j2JZdx3CIvoUNgrPCnxOJIfpeQLPdpq3f4e32/w0GrR58VB5MPuXkGj5qnu2Y4zO+CXPWfW1M0zP+F2+XEVyO'
-    b'qZy4B37nqBfHKO9pHnxelAQVa5uLr6VohVhKW5+Eu+2nYbeb/eA/hB+4DZHyPvwJrpDDTu35Q9jexxV+B+JHrYoa'
-    b'n8Ea9e//SJH0hAe/tgbvkmtvxc9cjOYxQolHTsTpUwapq4ymzqET6Ua4GV6eWB7XmQ1a/2x4lpQH8OqfkqGuijYo'
-    b'kzP1ZbV46wIDhDiCJ6Bz+OQMX7T0HMB6N9UiYuGr3hoilsmpyWBTdrraYFEvjVEqBipyXDHrP29CQi+HHYH+Nsaz'
-    b'UCxkDTAFOm4yYPSCHzEvaOwg7PCa7zeX+m3/ey9ud3+AVUzEKlbvEBe3tfK2zni0JZ4Rd70tIS1bP455vTGtOJzv'
-    b'wzTj2LGL+v07BoyjptEwN+h/3EHjqQypaIgfebuh33Ufat2pr6K2606FbRpn9eAreEGE28+yBhjlx+IM7uRMTS3+'
-    b'BIMHeM65EzCa3I6Qzfc6MmrEAnIUwobuXm/dgX1EtareKOnXQP2m3FOhPQIgTEG9PO0Y9c5lQdPF8/jMtFaKgxeL'
-    b'xo9NTRQm00fwFrxqseQVnCEEcwIwr0ny1hoqLuD0Mw/uVJWr1fORoCDNN951c8XFFlSh7+SiDnssg6aoBQYNUnam'
-    b'RIcGItjGevTkV9C8jTFM94YOIT5+BeNIaJvOYqNvIo7y60+No1g4dWNY9OoUtWeo8hX7OLm27nyEtdEt83v5hCp2'
-    b'gAJVpnT+VZtywyi2Saee+HHabWeZB/cjmgeBiyMXIe6O4J991CvqPmHWK3HrLcI81PYeTvnNJ3HHD+M3CK9itaCp'
-    b'86LufBnvnwYw2kaD5mkF4CLc3zm0qqQLSOsfZUyMoMgwd6Lg8rRfDGWAwT2PIYKqAucpGxcBPw5rVXeh9W9T0/kB'
-    b'sUE6cDE+/bNzNAmQhLEpWb2WHgzVfgQFXLMoJlfuRw88xaypDxsjcPdLYBFuYVBybXJzZ6rm8WPwDBAnzIOJWcEa'
-    b'RxA28vSCAULcJzhhuJAbHQutlS7MrpgmW8+UfE22BOsZBda6e/ZCLtIWwssNkxeqPTlKSsUF7KF73EL1AKVJyt1i'
-    b'aPoHMomiQCbQxcfPUDxZ92CHiEbSGQvLl9P4VjSkmKEDirn/hefQTmHKUUxf5yNLBEozC6jZzO7nFBwNxN3e7SFx'
-    b'53glJO64HcOpXB2WeIMrnoynGADXIymqjj/+xMDK0PZjs8ydL+gy+0FqNDrc6AfvYqPXUqPR0J4wFOoPbA/HImh/'
-    b'mQyGOGW/wngZj1ELclUl6RQJQmCvp5exhMQyccmL/zfm0HNwlVG4U2ENEHaA+z2nUFEPmPQHPZHWSOXnybU8y8jS'
-    b'YjFIwXCWFkdBCuJDQQoSmXMUBSlI4lGUbTpzOijH7M7r0MgOOJeZ8djGZJmRbKB+hg5xaHQb96W01ksUm89m1l/p'
-    b'DgbFzbHGfcU37e+F1/SD197YB1/VDx7/yKu98AW9cBFdWK98B4fynY9wKBMpD478UT3iJTGWbfqW/0FuEcCxxM1T'
-    b'ePgqx6OqoQT41ERrerTswR269S0f2fXxHrg21QH7RT519l3w0FDXGcHm6exj629aIK00c2KWy+VaMWNJXfRiI0Wl'
-    b'deAesS0UlBY56hicjvKjYjsZswj9WhfjEQnkiYc8mOoKsJ1H6dRFZ6tbRJhIwAjQ3kMxEaubRKJ1DSbKq1koZLGf'
-    b'23Wr3e8uhp0Jd/m5xI3VS5qj8ZAsxUzW+3ZeLm7++fqwaHYnavef1cYCdbdwe/v4YaVxfBhwWRZtYTkWI19uZm4L'
-    b'aOUtnS2GJj6vnSut3OUL2vwsjhUbmcPcuRaPGOcFmNokdCm8xdpGSp4d7z+ads56Vern94BeF0DZ+ueNOEV3wmZD'
-    b'L3wRZ0U3bSc79vDwErrGSh1Whs5lZ9AUpfw1GJybXNtnEAPZ+izV8nkLyjfYu9z2ItoIKRpO8SqJjnJ8+h9fonon'
-    b'9YYbcI9V/+4IVT6C38vOWx8wum/iMcyHRv9hfyWjP0hVE7tO9RrVOmPnp+wJ48CLjk49nppe2NLLI6KJR9BO+6y+'
-    b'5YUQgxj9kmAQZ6lO98Rw78ZyB6oNd1fUY/w66wnldnWPmw5Yr/aWu0NR6aCu8pViWOmXXEl2zv8f0vUx4AYOq77e'
-    b'C0K49XhYCMMWhdujKbxHK0pgJZauUMYB2aOh44IJyDjVYu1R4iuss9OdyUpcxWPGWTOm2xQZTy/f0V+G/U4HeqNr'
-    b'M6OZy2e9IHucuA8VuX8CuZ1ZqQ4YOlu7OK6wt+kZfxAnnkdMeOzTxmeaWTWeF3fsMYVLyp6rkHJnGisuZNhSpys3'
-    b'49lqM59j1of+AZVGjJXXrp/ToXEVC13InHFfmvJLyKBevE3eWKtenCFvrDc3AT9Nu6T2GOSqHBMduALtHHlRNH+/'
-    b'acAebDxmSDFiShI+ru0JWRFvwzdD0DEbHWPkymtERYslp8nxynLQhDoMiAEOi3O27PmrkaIVWT+SPV8YKWdvvx0v'
-    b'Cs1CrvwAU7Dv/XwKIvL4TYRLg+x5FdPvoyPIkk+hj7+Fd2uP7GmI6BugN3CLk2pEE/4UeJw4+z67TfZY0bCUHm21'
-    b'tcmeTRGhLmPjx18Q94HlylnGvhAXuGP2pGJrj5lZj9p2ESZeDRqUbJxdu0+f/SIdtTGVAq3Wy2+kRi+pzTM0MRUp'
-    b'E16HMTUxdPJJkVpVN30T96FVjnLApw8FFtoRg8yzrC1CcYfqYep0cQyu+xE7NSNUE4UdISECMikdF4xdZy6KoW5D'
-    b'kwufHWIfaJgsPyCMM7S559lim0rXkNVghOzJA0244xk6GP8eCGHFg6HIO+4kbNf9Ap5bphC2Y+kskoz26oSQFZYm'
-    b'OmS5TT4SinzAONbgtmEFYwhxRLjzp2rQpFyHY4KnwmI0cGwoYJUajJI9vohwnMK91+Ipz60R/6Kfj/fv54RwPznu'
-    b'8WN4eairaA7RX9lG4brUtTSE2PNnYCCfCg2v9ysyQBhkj0vQhL5qmwgigs+/6IDJmYA0lD4rdaqS259mn/t9mGZv'
-    b'jOglmwgimyERaN0pDwW64anmUFAqRqFTeWo0o9CpcuXnISyeBZ2kAwWRlmq2emUyDIWpGU0IyCwmz8iWPaqhl3Bb'
-    b'9Rt+Hybc/zb0j83CDSKqi1xZgUyxzCd7VgoHBG5vtR52x+LKWIitpRtpOTxoICyxphn4WNZmvSRXUmi+/+o+nOJB'
-    b'VH+H4WHSgBvcjYcch1OQUK4/l/a42X1NOCZlO51M6/e9jBEgvzKXYnJ8/2S8KqSPFMlDSm9d2J32eK3BfT073Zul'
-    b'rmOo+nmUWjdEjxTZZFlFW9i5tLIIufK13miWe68W+fVWXD4Ymv8tWRImjQBIrjN1ekwd1NNmqPgcLxAxlUIjB47p'
-    b'aptlcB0LqG0y/tTpEWpb/OC6ii9wv+w27aulbHV/G1Snmyq+ws3HHZgyuHFwYHATS3sc1mBafOfdFBCtneI3tTOQ'
-    b'DK440+SjfzIyO+ptvVsma09H0UXay5I+PnBPDBp0prbmpvf/ZCQBG9Cnbw0GH6Jt/XIy3PTN50Ki3H6H/wxDYUrs'
-    b'BJCpSuGDhCMUneKL037hciLcqoTXFVNjCUIeFeQlIbwohKeB8FYQHg0hdwjykGDqdmq86xVxoBVIPqffLAIK+FgN'
-    b'BcG+H2X0kb7INWxaLJtmYdOi2TQjm2Zm0xLZtLFsWjybNpxNi2PTHmfTVjJOobA5OYgI3xFOLkicQmFzCoXNKRQ2'
-    b'p1DYnEJh875ALX0RcdguYii7aM+8iwJh76LZ3kWHdbuIP+8itruL2O4uCoS9iwJh7yJDrBq2610h2C/rEXajVQfR'
-    b'bvTmu2QTyeHZRtQH7Qf4JDavlnUx2x6981lUhg+ZqhdUGoLKnqBSm8XtB/Bk8wC3HdInbUPhymy75coPaTUeSj6l'
-    b'D/stWWi5azcynD3AzDDcgrxmA8qQ2Wsswvi2vhbjNZ6S72mUV4uVjOfjo+HvUWSNDxnxhAifxgHXU3bjm5HbDvAt'
-    b'aBzznJIrcSStv8aRlD17KFzXXavRPKj25MlVL9Ex4Idy4qEuOWdDyJ62GsmeQpHmrBPmvjnN8Idhd44Aqw1Z3S3r'
-    b'D4mYEMvzNVsjDAdz1SIKW+GrDEOTzdsOXxjcKGbpTn1OJ4VkauSuWhgYPF/ZKcesbqe9go+XtfbGQYJCFixuUbay'
-    b'19BgyPb1kBxBwyp0L+ZlYWmM+b2wWMb8WlgnY/YJS2PMBmFljHmtJwQ3E3PH8S2j8t+FygsrZ8yvRRdj9gn7Y8xr'
-    b'wtxokRhZUQGyOhZrWE0kSQOJznzs3REN6sW85Wac31MvDgjMFd6Ron49/k1UciuO0MFsWMmloyX99f8WeymfPv05'
-    b'oVA0aBW1MZ8bAAR7ysTeSF43W3dhs8qPWKPuew5dWu5SEbeJ2FU8wbNgWBsf8B92GncNfZYbrawVGEWPfhKEWXAX'
-    b'9oOdzoKsfTaU3h37hgOIqA908pma3az646DaVKQu0LisYuqRBCw1tULi1oUiwqp0qpnYKM/mgmRjbD75nmMyiTm9'
-    b'eYtQ3vHkrKZFkDRvRJP4TjwPMlnOfiDxg2SSRuFOwZvwyG4+Uhk/Kg6reFPoHKoNS/uw9G/LhXJv10MhVmx+DZQ0'
-    b'r9HBZ3wX/Eiz6Q70jobnJutnSruWH5jT31Hixf3Y2U5vuLPDQd3mBv6Ykbnw39ToN27BnX4LO2wK3L9dmpUVVHzE'
-    b'qmGQA/pvfk1+lWqZD2RjCZIoxuasXNQniKOEXMX/8BDAoLX6bcAf1IMUWcz9X/xp5GigSI0aPyNauRNm82mK9XV+'
-    b'wYobMCb9TtE1G/a2anfopV09KDS0x+6qSiIts7EvGpYaOiI7IgJ+ieMvHDg6YMYDyHnH6Ogr5x058VjoZBL+cjBo'
-    b'jbo9NG14DqKGDvPqQgcoamMo0d/p4k+PFQrgtBGNwvQxua8tPISbz7P7Qgbz7b3huGhWcaYsvPUyoF+zt2rPTsdw'
-    b'TGvwBMVZcRiPcWAvjdGYWmBOxXmMYyasj+BHIINF5FP81xMDp7R5L05p3GFcaGQ3VeLQ3lQWSyYccte2wYauXZ+0'
-    b'GVbQGdaAXDegZ2IsLDxA8rOyWF4WYEqcpiYd+IOEJlGXzspgA2dWD1kGxINcSG3tePtftnV8U/+2vmm/QluO3/2T'
-    b'tv4PYxY14Q=='
+    b'eNrsvX9clFX2OD4DMzrQ6DMYlZUVrbRpucmUlZNWKAxiOTU5DODPstT8Lck8YikJPIxwuT7mhj9qs11367Pbbu6u'
+    b'pSmK1QAuYFkhsolKSUX54LCFP1YRi/mec+4zgObu9v7n+1e8XjzzPOee++vcc889995zz9UM8Jf5K/OJt0xVj4Vk'
+    b'a0i2aFooFHJrn99kMCh7rZNa5+44f8HLvvawKvPa+TcbQ3X+gM+qliY+/icDq5gyLfSlPTBlWpVXygjkV9pybjay'
+    b'rzM8aq6FValOTWmzSTFOLXSvO1Qv2Zwaa5RiItVZHVMehxiAyD5J90DC8wxz8qAc8yLnGeYZ58Bb3sTQ2sSTiyKV'
+    b'jpBssgeCdlZtDzBnu+psn2dwQyEz0kOl6wCB1cBL3OlFkf6Q7xB3WhzOdmldQNoRUGedmTJdz0VTbjEY8mtK4Jnu'
+    b'yW+rhQyYPxFqaU6oHWxk60fDK1OT8ekfCU//PqmwBJDs+9Si/asMBvV3zX6I4tquZvdlrjLm2sNcAebay1y1zLWf'
+    b'ueqYq4G5GpmribmamauFuTTmamOuduYfAclJOyL5enxRXcWq6R8mSNnNKX+towvzxJwnA1Vj7YH83GLP2IftUAcB'
+    b'DpqTHJ/L79oD6k4NylDjTwOgkSqQSuWdQE83pp7Sl/kT8KWobTQiDKO8b+Qq1o+vxwzVpLtEmVT/HHiG3sF3LRFK'
+    b'obyLAEOm74H5RweqlDgUEpMwVvEkm2SLVNoGck8sS463sbT4WCnGFK+nTDQTSYXqUhzvYBnkVerv2qHAapJZz1Av'
+    b'VAIV6i4RVfUv6yna83dlaDt+wJIg0DBJ8v/RgDXOxC8gWtl4+FS6on397PVKl0lNeUjaWDm0rsY/ExCisLnq2fon'
+    b'4F3pukI2l3kQ+12kIeQ6FX58N/O0f69Wx4aUjtycq3jyv9cqHVKOla2fSiTEmPPPQtUzRdWxoMZqngJV74NVT/+P'
+    b'Vc8I1XGqY5KjSvLfhHXpzXx9BiPz9RuMzKe0WflL7aFnTP6jkp8jo39plAoLkPdNrHqOIcFgmBN7NXwZQmvjTwF7'
+    b'VwFbzFaL7loBPBPasLp9USRfE0C+r1SLHkDgROZFZgsd4F6NA9MljVSLHqWA0AF142rkXtdpljSatc8zaux7wWj9'
+    b'pR3O06Nn5vRhylrkpd9ikaDQrJGKHdr8PWQEhU9nn0LvfCy09szZRZFAXu8Zf4D64808fbS/3vdv1XXmMejakOSJ'
+    b'UGkCdEOH80y4/3VMmQ4UMD9hftPAvg7V2RHrKqVsK2QYIVvt9Xllf0LhI62vZHUoP2xjR0KOfMkED5+cyrJiuTyI'
+    b'Zdr4tIFSjAFkh4VNTp3ClkyYrpSkRhgMxmlSzNiRVV77PhBNJYOiC4/6+o65b6ol5DtlDxQenTINikFCCZognX3s'
+    b'YQeVtkHM2YhipK0GpARmHeNsUjpnyv1qnG3Yp6qdTfZgX/s+pTNq6U3c2fZ+NHGVmmpkjefO2evPnQOgUplQnGZu'
+    b'ojDWaK+vTu732S3nzqljIiBhdZWhtcxAKP2aVG8TdzVODNX1ZgdWo+bX/WmuIV2VmzzsQ3YSigUo7Lyq5LV8ZMiv'
+    b'isNAAJyEwoYOcmdj79jp2vY44Kbq9+EJzDQI2uB2VmMPKLuHRWCFCgdAPbCKzdzZ7FhdYLjCYPDZQs5mJbf5Cjlo'
+    b'D7SeBLTTki1/KiBKGfuk4RXZ0WVY+dZDImTN9iIIGV67pPVw7jenpcxVZfA9mzvhPcbZeNjZmLffquRaImczZ8vh'
+    b'hS3HchsPL/yGy43yXMhS2lEYEQclcbT7JsNnjVPDJgby4g93aRXNFqA9fUxri2p3Q39g1vhd8B3HpsabuLMdOpmF'
+    b'dTBvo/bFnTgA2bi3EQccPq2ZtRcXXoepQ8q8sGAY1M0fkAofwC4PBZKvABxpx3ZCYefZKe0HkCatl/bHdO2Zm5CE'
+    b'K24SJFSWxUrM2740gkNTv4+U0AbNho450sCq5Ejlk5A9YN8HFUHpBlVWV92XD8k7m9RVY/AFBL6zkXubWKOWBdlh'
+    b'gf5mQLnXR91wLA8x27QMCvBF2EPAP+qGNgBrSQJmfh/bjcDnEDwsDI4Mgw2Qi3ZVGGwKg6MR3PW9DjaHwVch+HgY'
+    b'3AfAJZGFUKbJUPrR03yRScHv8PNhlFZ5o+J8na0oe4HGUP6tItqValJfdcNNmNBvv6c6B8vVDeOxso3aaoCoG27L'
+    b'R9L7HgfAcgQ83Ae+BohIrFZ7mqI1BwtZrbrBTlRq0yYCEATUuUbm1KT3jKq7Lq8zSiqaRq2njZZe8KAA9mrRY9Tk'
+    b'iDpACh6G5AdRmeQNwBnc1QIiaCTPbWapJuAl5rYyt03d4MYMUi1sWSzgt12gOoyR3oMGwCz65tydt7zvffLwkoct'
+    b'6mMEiM9bHjVNvpHntitaglIVzcZZAb0LPtg4GxBFBip1qBsyRI1/I1LsD6nE+cxKVd9gpFJlUfYO0oUldepD6aza'
+    b'o8XeAIxVNRieSpsFhn/tt2eBECdZp/qSwZBoMA899pYJ+AHrIrd52NHQp5ACJVKTOMxACgfUMDWBFTejcDlQlJpY'
+    b'5E6u8u6aiZ+ggR3UVk+j/q2MNlLh9gLN7PXAn8p2g/hjpfHI/jBQe2zMY2UeE/NYmGcI84xgnjjmGcQ8A5lnBfMs'
+    b'Y6XUUUpvpecwegYoBSsmXmqhp42eBnp+T6F76dlEkE30/hI912FPV7aGy8GHIQaPp2ccPQfRcwQ9E+jZSM86errp'
+    b'mUrPYiOmtcko0pqi91zPY/56GH6OBhezCvapmrf3prxIR4T8LX/OBOrfcTU/M2tlpKOv/JmycpDBd2g36Um12BDZ'
+    b'HdAQOJZWchBD7cBRlpm/j8fgyJn8Knxx1Ml/dCy3yGZHtsknsSPAxoWonC23sGzTZL2ttTuuhxauHANPKBAIy2kW'
+    b'eHit8HDZpCFV0pAvT0uT8L8KJOdeacgX8PoFvp6WHgtIwwsCIEuX9j8tTW+E/zr4rw32lzKOQvySPSh2hxwEKTtw'
+    b'GjzcJnikWoQKUXUdqhAfwBP4DNTq8GjWwsem8YmZzBQPeomJe6bCj4U7WzTsS6z29qR4LJ4m7ayr0GzwOiUNHgvb'
+    b'Tku3BeDlT1uKSMWHzw+4JwGKCsXMrIXfF7CcgFG0l36nVcD7C7X0PukA/EPpM6ekwksr/LvaT0tTjwCGJxO+oFKT'
+    b'kqZCuGcCPJLcEPZPeNm4n2JPrYAWhAxjpjwBD8/M4HxWO7QuXL7bIO/bTkAC+7F0eyhG5kdYnjpRDiCl7WGIOfUw'
+    b'AJsg8DACZgLggJ7mpAaAHkDoHMyNMtErhpWYvwAeT/n8+yDgRsTKorEPvpIAPzMI/81SMhQjJgXon/kBvKRbWDt7'
+    b'GKgTswgLPhvKGfNI7EUjCmlJStsQXlCILOVs4AXF9NJYlgbJ8w2rUTxbI/z7YLrgs6u5TaHt5jzgLrU0b0o+4NVl'
+    b'hOq5a79amnVDnQHe1VLUAtj5UH0md9ZNvh9TkfuWZcJP8K1w1hnqiniL0tIeyvlejGsvD8Rx7XV4En8sYM7tzLVV'
+    b'G3GWROiN9kBN0sAQjHosaVm3rqc+3fF46/Mg4pTlIw2+Ju7cro0nfF+dstxmkCfzpDj4iOHerUMr8zu/gPFHWtUJ'
+    b'TyV3q4FoJzmdW3GAbKRenxRX42wSYz7KMFBkOQ2PONDrXOpsxjE++BRPGqmUD6I+6nzDN3teTqhutj/w7DSlHKWF'
+    b'SFx+TE8YVIQIw8VJ1yiIZ/xvmUB12BHtpdtIkWhNMgnZidGworeexGFqC9AmGlWmTa2DKGDLKAXFoG8gqwSsXaQR'
+    b'7ABUCGEUAlBzu/FNA82E/8FTs/z7fO9xY8gdx5yvA+htQJhd49wPuYXM7htehPq9hBmsA+3o3qkwKXKrzv1u7nqd'
+    b'O18K1YGi4bNSZdn5g81RznXjlJBJbrCHWO4me0gJmX1xGA8nUzDv6TCxCpz2HCDhdvBL5t0cjKpxbjbYsG7cu3mw'
+    b'Z4XPtbsvTn4gaqTqvmsid21RkT7btYz2UCg/txFnU5PkW7kT9NN1DlezPAhKPfBHperDXZujXJugPH0kfzaqCcsH'
+    b'cuemwUkrzh1iSQNvrjlXg8qL7xc8aRAvbcEs2yNY0iClOULpMAIRrt2nVERqm5wGw7ka06WYNsK09WCatSWAKe0+'
+    b'bs02KQ8vSzxXE4dx+uY/vAxbGQKis+O7E8g7kwcJ3GIApakniVhtuEgiKpuiAVEgAqvJP64A3hsRvhvnxXHnG4LR'
+    b'QLczzYvp/Wk5mzTIJhXOh9yU5UNAm55BDLEV5Oj907AIRThG8aRhwDKJ3JPGH84EllOdZSw2nk3oFsDaP88jt5Rx'
+    b'7x6QrsyTBYN60gLuDDBPAkvy1SThyAitVZSUCCLoj4nFJGt/O7IYB4AqIQYn7ZeGf5gjAXxDMsErT0uPV2CcZECo'
+    b'k4Z8iLJOGn6QcH6bTGk8foTgNk+WkIi2NaMpbqs0/ADhrUkV34B6AqWfD5EXUB32652Lu5qUT2AsO6yL+SNCpsdM'
+    b'AwaC76koEkHn1SvsbaYKt8DwKg0BSR0zP4sGlEnwblu1R5f5ODzuxxEQArBuThDSMQ8vQKnrC15D9PT1BW3mLEge'
+    b'mLFJQzRpSO0Vy5edq8m6yWSQbf6QfKWyfAQ0CK4SBfuW3Ys/5rK/YHk9cTAJiuKurUMPOCqWPHmRXMKyQqFjFjaB'
+    b'YGIdOINpBp7zRfKkIW6QGey8LjVAZMCQD9P6brmhPflLkhqo+uUf/13zBZgHsOUjhOwMS04xOt9yJY7Ow67E0flj'
+    b'GglsMClXi3bQpL0UJ+04LVBwWrCxEn4mApQm8c42SH5RePUrIrz6lZgeKk2kxS2lI+R75KKVL1yhywiVNrTjGgB2'
+    b'W+6EubTD2S73B3BeO87TITeYVHtbMsTSGPe2wKh7BSQ6h4KDV0EYzBbmRYVkDaaaGB7wNeOYUCcGtV3XkcKZka7m'
+    b'rtbGDsBhxQVPT34bjWt+H6qdgdNvsvUL4K3GSWtW6m+7F3yyaJFnFFcXdC/yqBkgiNZjRO1AMBTKzBerPCAW5Bju'
+    b'X4H6SvIPq7kzD37WckohyVEl71KdxfMWqGusq2jRDOOrG3BNTsvvumhel85li0d7MQY18N/DU035SOmwLh2gXQe5'
+    b'Mdkyxdw8/2bj9Gmh5vmBgWphJK5G0QJFOGoGRZ3dO+qxE3pUw4Jw1ASIuuC+7qi0tKANoqi3w1PbcoI0/irz1tsG'
+    b'G2EW36hVAMTRLg9mNazSvg8A87BAnfCyvku8YBVady7GRMMahZpr8bAurcqGCdfbcEIRx/vylYNovtmkOTEbZ6P6'
+    b'Ei5gghxXtLugyDlmGB/klAzJlmJS2gbSOlVKLE8fGF654q7mkNwUOshqgEVoeU3JbbpTKkI1Hvoy9AhtOJSjFfWV'
+    b'/AepcVbycaZUXDFbqqy0SDlZKiidrmacMDobIC3NBCX5KRlmQiceqeexiWaz8tCQ3PA/Y9L8GFmzA6lTGWegZSkg'
+    b'+p8kpM0OeGr3tupEX2v8DIgu9P5G7fk2UmTGs0qh68NU4X7lPRThBp+FvY2VDNoc9CtboJMV4JuyG/uiwXelsns1'
+    b'vURjA01rvRJkU5hfMPshlP29mH2ZpmefuOPzXtmHgpR9lPKthW3FIUuP7vFowf4YubM/zow7tGUaTuJYlfZREKfI'
+    b'HTQHf6zDsbZFlKye0dtkVUl473PjFOBDfTbEp1l4rlVVPvr0LVOGJ1Q3HYgsFaIOyjNsUIKaU1CwakjOBx+3tlEu'
+    b'zna2CmdwvIimkOlWCB6rljZ+VxDpsEELuUFWwMg/0QpBPK+xi+pwM08dCUrOdXzMSCpcafKLKxE9ip2ClItH4LDR'
+    b'jo10SufmJ/59yaKLRzvXD+vcp7/gZSeU3MZcGpcH4jTGaaV5cSwtXMHEBhTROFxXccYDm2kZx/Wia2+eoPLksCq9'
+    b'SSPl+dypjUoyyaBPWrirhScOcRjldFyoK8e5p4GDCnE/iI0Hl45xJA2hcWZNO47PbTzDxEFjHcL7Ms8ElpTKx1lY'
+    b'kpv34ekmlpTGPJk8BQBTYbquncD+lhTPvQ3c1cjkgVxuxrUqqII3nue2MTkWBhJz1h7FyOUW5opjuVZcoZAtzDtI'
+    b'2RuHdAi3mvatFQnxg5VWCaDmIH1giorkcLZpC77ReaGilWoaH56e2uRrubd9lNsE4rK/I3UI6Kz1zD1Eq/wOSpZr'
+    b'g0KoSt20QiPkCW0B+U+eInK9dJrAujzafCrCc1QEmKvZJOZ6HcfKTVrb15R/hTmvsgD01s04fX5JG9EqVrZ+QM6u'
+    b'4s7Xgcrhgl0p+b8xiJW4z/E7CWr+kuSvp7F5mL9eKqzB1zLUupE9cbGP91V/Pfqv2ZGOOl9/9ddZR4D36iT/72i6'
+    b'rspvaMuxQx+BSX679j20lWRzvkFCQqkl9Rs1qxoFJwHU1RScIajOOlaKGgzrJGHCEchfIcgEEClT42O1l1pxZ2IT'
+    b'd24GNTdUB8nWhWUP8J23hWRPO0of1qnNB2Rlb0Kv0b7ShHqadxNQ6mrSkzf3CtSbF0QDz7Vo0Vcgga+Fp/abFszU'
+    b'igIiw2yIlXEDLSTfpuRaDb54voo0ysSRPHUqdLBYVXniWyCGUY6eZ8yvinPXGUIH9UwqLYZLmlLbEo2Kx7Zosa2F'
+    b'4oq58tgF7dYW0V8KzVmJ/4ThmjZZnIXawuMkd6HweVwMyr3Lr5RRf2FVcpRSNpKk5LDuXvYLjN9yXG+Wavza+DC2'
+    b'RSFU7Ih2lwtVZovBN1zEGBUp36KUd6AAlQco5bE0l4tSymmV2heN0Y5op+8xGMIZSP6nqZB5wD+Sfwq+8zeQY/aF'
+    b'sSf/CrPLgyFURW2BbyWGOisV7sEVYVch73M5nno1ghR23BrCWCgLlXKaPvpukmyCn4h/uGAe0P+8LaAm1gVjsY6n'
+    b'vhE1Bu7SlnxLnIgsAyo/cQ0MZ64W4BcbCL4J8bH2fdrdx5FrBjLeTHtXK/TdOqV8Le11FEq0fF2ovQwJAzM9kgqP'
+    b'9GRQQUFPTh8Jj0dGM9SXUyaozi3wmZIotC3gOW8dd6Im7moAMUSL8eHJLgzGuO5DiFrmvyjlWVtweWprz8IgfMrb'
+    b'Oa3SgYres1Dn2IbLd5I/GckJvZWGhdqhdao7pHQ+KRXhZIWWtvaLZS1cnMFFosf2ScNf8OF8YlWUkZJ/8w2RjfI6'
+    b'JjjkeyjjX0XZbevF76QORNtCaJMOQjqHpCFd8PoDvQ7fuIyS203htyHuxhU0scF8p357Wpp+CGDv6mlB+lNr4Pv9'
+    b'LMKZXiEN+QTAMFGaVJSHCQ2voUnP+4VictQB4Zz2uwDjnxDwd4zYvfaEk5OiLTRjua1TGo6LVjUIKhYlwDUhvpUq'
+    b'9hEl+3c92RM08ZmES01Ea1RhiaSMryPptEksML32uvh9RVApZhuSIRhhP4vsUNJCfHbSzWrwc4IXhnv/Wd81Snkq'
+    b'dcT+GeGeNibdYMjs7sChOuVd5DGD75fAmmXEmsXsFDGnq5ZP298t+za1EGNeNHmBXvE1jMSa9yvqGVdxN8hrX3/u'
+    b'tbYb3Ynca4Of5G6NtFwb2QdnAkl9aONkBXMVstNa+TEQI95i5szDlF75BjWYYnWDqdDQS/CAMgRg0O4L1Q2xEKLV'
+    b'EGATAW5BwA4CrCXA3Qj4fwiYto4AqZjYYe1FBDlfUjdMgm9VLgdBRB0Mc1iKOlRglwNp+xcoCe3q1Cw1o6IxEnpn'
+    b'hzZuAvB6jS9S+TAUegejEbJHnbZZaRvNjp9+nXsLoe20oxNEGx5W9iaH3sEamHG/DqZJUEVXocdsyGs10hc7bI6j'
+    b'kLCENhlILF9lRrE8yEwbvnvzaHwvBLG89nNBqioY1pZ8LQi1cV5heELFneuIii/11Grz8W6qbHwWqfICipfnY6Wl'
+    b'Efwe1VkuKMwqIcE5II0d1b7RebnlBt899npORVedh4TgY948e73yvDEEM0OjeL8B35Vqk5EQYIryObIVZsWJvpu1'
+    b'mzF7VS+MuvEVLEE/gIGmgcuTJ0Pv+IgHgSyqYgOy9Nq97Bm3dKqEIpEqfWBOka6+UwayFIYsN0yZmLoVPoA8z3yG'
+    b'udGHfzs8zYl/0Iww28XddfxWN76JtDo5MdwefsTlqSYRnG7G/VPaOK0SEGod5n/jWyqj05K/zIYrQlLR/bjAAwwi'
+    b'2ANQtmBC9FQ31hL3fUE94lrusvD1lA2lqDWkwuyoC9Wdo1LhWeztomjv1GGxD6eb27fuNGCnbMHBgr3zOvwstXI/'
+    b'Bftfp4Sa4QkzquelItz/Fsmrrwa7MwFODz4EFa20B4wHS1aPnACz6mJrZCJM8OR2EZ2/i0mpk63sMCMqqD6bdegh'
+    b'df0JeHec9EWPKUmWThebooOngPt0Qq2nWj5iMzaqryLe0EpjBfvE0eGLTiyZEBGCLAB7PZYAau1W/Vgid35l+yPz'
+    b'DKF6TmRU1bowMS9p3ZsjsHWHROhGDmj+ckH73VHa8gPF3bx2xMcGakta85AKXzWIOcPGRiC3/az2RbO+QWMj6D1Q'
+    b'Z+0jhIGq0U4zKu3v0H1gvF9fQcsbhQd8U/1HfZm6GsrWbsYU15I5g1ODSNLODypOoGCvDAt2da1tehmK933ssNgP'
+    b'iFFwGxxqBzFABRex27V/HKP5wcVVTNccRhR/OE5CFUHjtqCdz2lt1xGspQYVM8d9ttOQgfqdzhyPjlTHhJSOCKno'
+    b'OM2woVxtmmcyacv+BrFna6/X/gmcH8oZiYlUonrdptmayVBD8v+d6ARTI03dQEQpO0ZbskjDUp0P0Y5E16MUpIKc'
+    b'C+hSxj4YpPJom394xZJ5vXf2p4W39ZWVIyNPS8MCxc7TskN1np5nVNdMoJUW3EtG4xHtOlAnJk8CrTFKjJ2AirHQ'
+    b'gETWzUekHd7TVMYWjX/erVQC2bgpvorHwv8g+B8B/6Pjqww///389/Pfz38///389/Pfz38///389/Pfz38///38'
+    b'9/Pfz38///389//fn75py3MtHs37r1Aov2omPLWvq0MhvmYmboVV+ff5HuTGEC0wsgp/wGfnBrWUbM/r5FtCbhOA'
+    b'bizJOwzBo6/Pid1tMOZZpNcqs6NVZevCY0Z2MlTH2tkRLXkAxM+1qMravesA2ssmgH3s8fCHLKyq2nk6xMck+ANy'
+    b'X3ug9T0DWi+wQ2qp+4tXMbOgWrp1Y16Ew50oN6ve00rFClUxNOVFTJxnnHdTqC4v9zQUUP4HlKcCi1g2/LcY6538'
+    b'Kvc3BRGOTJP8l3m/DB2kOmyuMaSleH5Vk2iaMGbsr6oTLZ78LtxOly28CHdrg1eeqzY8gYYyvOgMlCMYycfZ2Jgo'
+    b'Pi6We62JbFwsG9MPDTaeiWFjruJOC3vsBjbmWu60VY+5xcjG3Ew2eD0mIBVqAS6Ni52kJmG/nhGqU3LbJdaxNBJN'
+    b'Ub1t9rPqQyHlvCknTrXamKtRes+mPlSXdz4qR5p/NjpR9V1dx72NUKVvxEYDO0+7DKw9bGfigZr1Y1UT1XzcOmeH'
+    b'Q3V82vf7dAsUpW2kv973OKtin6revY+pebSJcYB596jlYh+H883fPmMCmraWGbh3D3MGoO1vPuu0GH3Xq0rCgVcM'
+    b'6rSmiR7cY+DOAP4eDh0KWiaiaSe0suraGzp00dG/K4LAUTUD4InnQ/hDU9lB/z755nkmcdLParD2nPRLmooNQ6fr'
+    b'xuU7PGPT7vLdSBjqxjMraFn6w72hEK7E9uVJU+31zAY/+SMRUf4wf5kJrbVyKvOXWQxxBoO04dIzsOnacyegMNV+'
+    b'eAIpRpCZ41iLzmp4DoNPiLewg+qGB3INBu2xfWjwgtaPXyCcJ1nUDdNz0aJZuweCEKZuyMtFi+8REKjd3A3cTMCR'
+    b'CLR2AysIOBqB52rDwC8ImIjAL7uBIQImI/CjbuCNzyMwFYFl3cCRBJyAwNe6gRkEzETgmm7gYgK6EfhsLVqqrhpU'
+    b'ZDDUJMcPW7xs+ESWlAavCYtzEgxSTHL8IHVcAkVLix9UnBx/J8ZKqkXzxPLYcUrIIh/jyh4LLuHL+sG5VwyCeOqG'
+    b'IsjofWhZgxbTnflvMPPkeJPWVRMKQUaxY5fMWMSUgIVKMPCpOQn42z9pxpKZs+FlQIKBdej5x9rPQgmu4xg7ALGZ'
+    b'KV5NCReuPwQN4KZ47Y8YUrhtWJTBkKJ0meWmcUpVLOsYPULe0YqGFMreEb24wKchF6yEJ3VC2qmpYM52WvH/A5RV'
+    b'S6/B/Yx2dUPgeX0vpU0bK2DAdcqICMBZS4e5RKQ6jHRzD4IWDd+LeyF8gQiGcKrfYapKezRtfmit1Tr4AoHP6OD6'
+    b'6u7kvsfk4jA5egWOHFzieR4CAyciQTZuiFoJ4X8AfOW4ES2fOrXTF2jbCQ20jgC/9h+GNh6UIaaoNWCwyIm+917A'
+    b'rWMqxOCVWIg3rhCFcIlCCHs+JQHr/RLi1ivlmJqhWmmhQ6B0dsrXzx6YfS7p+dQnpfUBVkN116Aws/H4WEgq/MSA'
+    b'Jt+IYUmkvO5YiWdfEZXKph37B+UGUe6CKCVJzxPWeMAKaH3CWFBHbUc3YjQhriTExwGxTuuNt6Yb78vOnsZ4DsmV'
+    b'DUFMGRlB5ByplCeQWc5woJhKldE+EIfebuCExL3tmqMTo7wk2ocpiKXstfa2WN0EYmUmc67lzrXMu44/ZKPNUBLy'
+    b'WyUQ8bmbuGtL2YOQk6NCGldrDzhqs+eVxPbN66yTH1GzjI6Ps9NKpvY1Fk97RanKyrsg5fQr8b5SnWzeXqdUxgWv'
+    b'LkH4EwiXdPgB5UQcaw/emJf7Sr48kCBv/xoA/dQl77PTeReuzYmEmMVp5u2JwRerk/tthxawn+W560oAZD86cl1f'
+    b'kJbQCFXsWFQXgIsFINFRkX0EaqG6NvVs8OuDTN59BrkPdfuqvJEGOdIeoHHHvk8cQY7RjyAnYuAJEOVmwsUDbHhQ'
+    b'GUahiTxzKivOgmxYsc8iNvD+Cij5o1CSS/7fozB52JR/HuW5VPQiMli1UpVuDznOCxvy2cryHQZfVt7ykEGel1f+'
+    b'Dqox8gy+6gkSSj6LtMOzC8bIR/mqmT2QMoDcz1fN6YHsBsjt6gasMGvEM3I3h4hL0A8BX4VFU91GtgFfZrMVKU+M'
+    b'y69Cc7tWGdAyLzr5+LGnnGyc2mKZs6XGqaUsmPH07BpnGwg257dpz2bNgo9TCQY1KYG7WlSvVuxsk3akRDoapXWB'
+    b'JBim0OiqQztWidm3cG+zdmcH9OYL0fJHlG443rfFzlMQz3RJvD/1xOs8h/HM8kfK3thenOlq1p7/CqUe+0qXem7m'
+    b'rC0pQILVONsXL0owKIEEGBWGFeH+5qmSAiQTnzgCjwsAeDTulAJCjPOjGmdTdnYCIH3OnbXzjNofIEdeinS2Byap'
+    b'a/hKsqFaF/BFq7Evqquv3nInWkGOdOPJ31rNh9ie0fOMqusj/J4J35mTeXJ5or2eu2qVPeVYJDwRP067A+sSipS/'
+    b'4EmZFJpXvowC11VqAzAdBXmoojmSOcvwBDgoK+qqNxU6TKWu+hQFmfN1UEx4sgLNshf3i3eiCMKkRpVjq0ovVmq1'
+    b'Z0Mh/UshM7Cdycuf4J6pFc0WdUKEFV1eWCPU5IirufeNvGevHsxcW6V1MFzs4c690o59zLUFktPiK9DEEV734JGp'
+    b'Wm31Wdw/3woESaTDv3ukHYn9R0fn9FNNeWphHyQKJuGq5V4o4l6tJRAKzTN0R3dhdO9e7tqOXxt+CIUmh5yBcUpu'
+    b'wCL5hyKXwljuqkU5nKXTSwv9Wxy5IXDAMkrBOvGkNKzkVxiWNFVd87eVxP2xQmtS12yCb18fAVeICvRZvRIbbYJo'
+    b'4QBEzrzYlBlPeFh53goYcJm3jbk0aafbIu1M7KOOjsAjQLntjucsS9z5IdTEVqayioov+qiro63Qo4H8crujPftu'
+    b'pdPsS5B2OLjc5jgn36h0RchWacezxlHlhZCs3E/J1fAAlqwx64axiUpFYrAaKrbXGj6hgdrlX5tRu9wOz3T7WVRv'
+    b'mbOJeferRYINAmrRI4qgtHM/dAJ2SiOfFdP2A/fPr441NtqPAmdAA/DCl1B7YM5GZJM6lEDOWu5qclQB+UBArQtE'
+    b'QcM0FnsbpB312rozoVBeboNBKvyjwHRUZQ/mya82A2mvz1v2oEG+Km9ZxGA1NQK9mLjqqKc2BG1q0dGV2OEaxJG/'
+    b'OsiAewN4HqDlPeSfBu6qQwZo0iZADplQaMLY49i0NS8KGT8gUsIYb7+HnR5CGzTzGfT4YZQH4bezUd34Lxzhft2D'
+    b'0HI6FEoCsSD5YyAbUJFMkv9E16X26SgWYul0RYv2/R6M3MyqxeFHGzs1tFLpvCenrz3UilYbulsDGODDng28bbpb'
+    b'g5Bsufg8Ubs4T9SiDTiFqpgNj174dvrP0rgAcktKbuekU4Gukx3Ht9Hwaz+NHVwjFaUFVJSbT/eoLPgdczqsDolv'
+    b'I30nkCFsi7CW+fYUajXspBiqhVLDFDrNrdD5bsVCh9tazIHx64xiiKMjFlUwSYrn0UMr8s9vX1MYCbONgjmAWWUP'
+    b'5J9v/gcAonhBqgDQ0Mc+1D4QlrXxHObC9b4bHJW+a2H4dxyWzXxsbFByfCiVVoC04LEfBI8JZ0GkirZ+hkL5DDw9'
+    b'j6EGWvC6UdiR5xFp2nEy8m9szL3QHkS3eaTqWCBc27pHVxx/lYeV2YJV6tB+E4amEXS7gBaG499GYW9i/Kww5m7C'
+    b'3CMwJyOmshc+MnvzxodoqZ9r5bINz09420C7pG4BNVtXaYGx1n/W9zD3Whydcj+eFAs/v4DpQf/gIJ5kc0T42pRK'
+    b'U/Crs4kTInzRQud0nwyFHgGuAf5I51dkoNelX2PfnGKBPh7cfJHDEHSRpOzeTr3mIOTvi1J27yWD6mhScbW/ATO/'
+    b'R+y07vQWatR27V48W1RJY3kqutWYF4fnxrRhNB+wPiL3fQ8dTAQ/uignGsuRfbEx0PqaldDT2Qbz4DuU3VvIFvV6'
+    b'vTC+AcruPfRycYE6tRuwdxXhqX71d1spAc0ht/lu56P8Id8t3PO90M61d0G0O2pkqVvJ7tDubSfT9SvtISCphKiQ'
+    b'4kmt9AdsQccoH0yPGfp6ij07DqjZX8wROjQDRGOjoEMqVRZHlfzr3qopE44AyEPD/DJxkGGbgQ4y4GggdTsAkPxo'
+    b'qqustEYIvau3lwCeYbUHgLkj+TiLQ8EVEdkyqhQN3H0jGH1zjqKAj7PWKCbI7wGaNHSQ1g/Uw5MytdoZNO9T0I0C'
+    b'9G4ajYWRfAQ7ieP6fd9h5UGDx7gn9aApMLzhkZobvsMDSGHZ/9YRlP1l8BT2dl6kA7mW0Ip2ijq26r0IDcrUjYF7'
+    b'gOmX70LjMQ1DPyQB1kbWdlvvCcsDbdIuoj+JCCBONKr+D2CpK8UEQriCUDeuxuSG7dLPF0WFTfzxIDUJmeD1+oRj'
+    b'41TEjEBMCtCXOCyY8Nf/QuhAoz4TY+1Kuc2oD+h3fKvPWbQwkYxIomu+Dc/tcDA8QoeNBp8kpu41yX3hMEqW3xym'
+    b'pQ48SMRcDY4SFC9S4V7i69fJyh0P84CQcRTQwsY0YA5WPoikaKO6IbkAqTKQDPYbtEQMVBIFWfoTwqOAoA0pEwRL'
+    b'plo0wmQQXwgR+vmcf6Fa0kDoUym9J5DKp6GJYD6g0AIjz6LnAnrO0UUgM+ilmIuZVO3EWsPXIkpjDmWBkbU/76Qj'
+    b's6q3CYaiAcRzmJC6KrsAWRJx0MsRnahqhDEKUcwJ5o8N8wwT6fz6lTwXxsyWG5fhea4+TMnqThsyhBr8sQ3dFGDP'
+    b'32UhZmaHTr/Z+2xGI0ig92jG3Qg1VTfY7oViDdiJ1NJEJyKmwM4RHEiVMCBG+w7EaDP05ohG7WAw3EFQUW3Uu4Do'
+    b'LND8urRqjWm7xMfWHw5hd/jzIdEdYnV3SCisc1ukwgITik4t6x19GOhnh3ZGjNY5JqytPse1n9U8QeogDpro+sww'
+    b'8/rmQVWMoNBXaBDF1jmKcqLLJifAbFIfppF/t2G45sNTfDSkh+WaNgNArV9EYqQYeYS008b5VlxkULbAs+KL2Ipm'
+    b'W1Qt59vpayC+ltHroKjaqLrWUoz47QCl60qpaBO8k7cf1o7+qFi1mvcElu4Q6C2OddswPakwJ1JYlu4DlW/8v1HG'
+    b'SspTkcgViPsI20M1ki2AQHmKgUj7E6C2jqJSjpCvOpu0MlHyR0D588ppnUOeEjSjovVoWPOAEtCwI9ZBjNryE1jx'
+    b'noWW+Sd+RIhMBIncjsJrqxctsUH3ndmNB2lG9KytaLeeuHix5hr67uj+7nuiRxPC73Otvcog8mwBUGsbtdit8sDe'
+    b'BfygNaw2BccpXUMwMCFcCu2v3SkFb1O6hvqg7nfJw3tH563hskC4lBwupch1EQQGn1VTPlU6+uZY3LvQAVAwXem6'
+    b'U46ah94sDBHBVKTzcL2mYSUQEtDubL2YkL9oDVcy+Ds15UOlw5xzEzaP71pM15Ao1IAR/xY2w4WlPW0mnBnoFE9D'
+    b'OV6hplxglUpHRE6CuupKrG1uCzuAg0czLyS+SDy3/YVNd5KXLXJ+wdYROBgNje8zn60wgviDgcDVog2BIQmiK12R'
+    b'cgxXNkWLzoGjX2rwJtCz5VsENFGN/Qcqx6NKN0fjTPNLklMYQk7H/CHJj8tjakpI6egjraqi9w4gnFS0hUiDqGpy'
+    b'dccoRSSwgaaq25NWY/nLi+FZ8Y1FKceeaPA9qSbfawWZqK8f0moeEVeKof6mHTzeo13rrRXAE6aBvBX3Xj2Yl7ZF'
+    b'02xDnXDv1W5SU453M20haNWTgtfBNPleq5vIDg1gMWhlp4Vjvetx0Y+ER9CmR1kGRGr91aVOAU/Wo8DqqEeBhVMP'
+    b'GKRaWG6jdgctToqB0pfDvS1a4BuYotMg6Xu6Z+KxCzdrfjT7mGf4D5OP9V/T5AMXT+HTHuIcR3td9Wfl5OqpHMf8'
+    b'1s+xRwqxK/lHiykCMNd3fxdKxW00PGC29rNMxinfFVjI678hj1/AMvazDpLfvit073kgpD7lnpEga1xNoEDdTS7W'
+    b'1HEJbuZtCNXDBA2db1zbywFKk/+sHDWYlCgp+Rx6H5HrgPWW3s/1AcX3CIxZuCS0sR11iz9updnHACxHKdSTDq6Z'
+    b'cobqa2+qKc/YHrwBEgWCNDFKF908UClbz5EoVbrMUhGNUCKOTuddOIH/EZHdqGZensx3tOhklte14gmHsOLiX0ts'
+    b'bNUH9wJKr0X7Gk99VTsUVKl8Wb0bN9Hwf2jcsq/CjTsMPkXTsm2GngaGbtDLp1dYRbuIH2fUIT/OqRMD6CAGg3kx'
+    b'boZBiz0B4/xU9imrUtdabvRHOq6WH1Gejzf4Uud7GweqebQttu6aYTCoq7lNE2m9t83guwk0A/s+JbcxVi3deu3n'
+    b'RmljhVpoIT9iJ93o4sjVJDbxug8KhQ+Kf/wJbsN+9gl64aSj0VrGn0kXxFO0VenmvGN4zEdMGGpYo7ZxC4T2x2Gd'
+    b'9OxKdCQijp/rPgMs4ojK85hujf8TXWXmsn5K5fwb3adUDFdWG9PpmIpIXijU92xBuYlHhQZCDg/4j/ruwzNYDH0G'
+    b'9lE3NqP27NK0Z/5KfHgjd2nKLqHVv4wNJ1uFJGrUJn910bkS1KfuuGPqzMVPyQtnLfJlT81evODJJbNmzJ+15FfZ'
+    b'i+Zmwc9zixcvvMO3MOs/7l//lPhPzl1EB6XhEWE0Gi+KP3bx4mwfvU2ctWDxDHQ0Zxgzd6EeOuapp+QlM5561mBI'
+    b'k5csmUWIqfKCBSI0ecbCGU/PItisGQt8cyi9JZC9nt7SWUuy8X3ckrn/sQKexQs8s3xy1kQoxqwlF8M8Cxb7LsVz'
+    b'L5mVPcuXHYalzVjy9Cyfe+5T8/XI3TDX4pnyglmEOGXB3EWz5Kw4fE+w33nXiLvvuXekY8aTT82cNRthw5+Ss32L'
+    b'F9qHwzvKrCtQR+5dyPH0GE8PeI5Px+kkwtLH02M8PcYbxmfCZ+ZF9XPNnTlzwazh6bOW+OY+NWPB2MXLhveQ/Cfg'
+    b'jVm4WF7k+694PQ1n+Al4lyR4Gbye5v/v6QHepaW7PF43E/00vIsSvQxeDyv+9/QE3v+ubw9D//f0EO9HFb4MXk+3'
+    b'+Cl4P6F83Z3rf5SP8P53ej1d9H/wH+L9JP4Ld3TDT8G7OMXL4F1WXPwHvB+1B/T/pDkzFj09K23GovnpMxbIs/67'
+    b'/Q8ITjl57owFi58eftttwy+KPVb2+RYvEmlOnJWdNSNnkUjwR3H00HCEMU/OXTDX96x7xqJZC/QyTVy8YNYEqH/v'
+    b'7+7SwffYxdnZvaRYz9+ExVDb4Z4nSRgkGAz9UfO9FG7/MTxlwbNoh2Cw/hhuvxw8acbChP8Avyz+BBAlGKHfZeD2'
+    b'y8A9SKDLwF2Ll86aeRn4o4QtZHFveNrdjsvCH063Xxbufo6k9Y/pMHfJrMuVH+GXK3/SglkzLlf+FF14XJo+dkas'
+    b'2KXtMm7xzMvSGeCXpXNa9rhZM5b8OB1ilsuk/8hiZN0fw8fM9ZDM7PcjuGtudvbl+GrJzFlLEgj2Y7j9P8Dv/BE8'
+    b'beHl009biBS6HPzhuQsuCx+3eNGsy8FFC4Thhv/Wf3rV/3J/F/eTuU/P8f3ndC/Fx1rOXTCru/7/C18oKT89/Ydk'
+    b'oQRafyJ+WCn4qemnuQUs+ifiPzJrme//Uh7sV/8XfOxvS/4P7SW46aenD/3tInnxv+m5ECTV/6bnZfTbi/Q9i44H'
+    b'8DCL0V9UDzzMShe1R7de+2P8MGvQX98e+EV6YS/8tFkLZmUtXuK7qP4AxyYVwuNiuMhXb8B+PfBwE11ar3BTXFqe'
+    b'MMnpr0/vcgrSXlTO/zW/mT/r2ScXz1gy879Ojn5KfJwc8bvcj01U2tDjsik+PUOLHIrGTRY/Okk2xasz402TJ2VK'
+    b'/h3mHy7wNejUpfUGeFXaLBAhNh4eE+JN6drMe8kkqjVyYvQP+blWnOQvuQ1e0Dww5+YnuNP6qwKxQ+wO7ViGi/cf'
+    b'3EcxZrSObbrnByXXulIq/HZNKNR6AB5PZGh/GI3BaF5sqna+ZpiRl/taeGWiNWPwM8IH1BsBnNX+PSBmtcOYsw6d'
+    b'+BzE2Wtdt+8wyV+JKyGPhdiH+Z1daHhW9BauLZBbOvSh9BotPNSZaYLfR/KjawGc5IuNCNX5qTSk6PtVZC6DrWPf'
+    b'x5y1tK/QqK/yMNf+c+d4bu0YvPsgFv1nVymdUTnHVGeTvT4Rps1XjC9J63eo2Pa2MdhOayyF6GbOuV8JRFQnm5vi'
+    b'VHckOwlvn6XC43M3FIZ521Rv05yrcB0DVxAuuUgh3aO9/j6uFGyDJ/pb97bztXRBxlb0ramWb1lhMGRAIrjI1OYP'
+    b'yL9QFeGREy+ieFAtrVpBnjg/RYvuDNoLuU0tresBDlJy2yPU0hKA5PRRS+fA75xIQ4TYOblo8SQey1Fz+/thQwyL'
+    b'cn4mc7VJzpOOt9GRFhTNN5NVqXnu256MQH+b7dzVVogbI/tYCSIEU6SdFRWtNkDMr6pb+mTEaem2il7+iGrdwl/F'
+    b'pKKtBAA2nYeWwwchKWCgVLkPo4wu9kpdzWo9ym7h1Oug79bbC9Dn+i6UkPdHwlvOw/MDmbtMtFF17iT5mB9aEbyH'
+    b'78ZVv9sLyE17hT/ku+n+1xB7YNlMaumhHdLfK3bh/tm5k6p1ZNAsvNMfEQZyrcGuUEjP3sPLcA/YftRxIXsU6xja'
+    b'eEAzNs6vtUau2Q9gR4x8PV9isQccz5jkG/kYi6OAnEmQmUewX7ZZzTQG/8FqghX2wEWOMdmnHu0v72LL73oXWz5O'
+    b'2Z1Iu98PMmeDVEhm+h/wNeTPap9UiImWPYUpD1GsQL3yaFrga0MJ56gM3wSSUrn7eKTYK3McklIOvU+V8jYCaU4r'
+    b'gQTkatpCK/Z+hkuaaGQEkC8Bcu40O4RY6jgAtHBngzl8BYj3K+DfiegtpYGvwSLOM5rJpVvdpaYn/MV48r7lewgb'
+    b'jZPrfOgzVlYz9JP8EPrPW5owtJIptLdYPoQW8fz1z0tqARZ6lxYp2jCDVWA7aPVdl9gsaQV7kEPZHjRE/9ReTxYN'
+    b'g9B+rlbLfBkvYGiGrv6ZQSxP/hN+e4mOagN59Vq7iW4MCUh31D3XR0gMpWwt7f/L6MnMonrRM2h+VcIdHyB+3jry'
+    b'CoaOsTL7wC86Dna2oGsz9A+c9xKFZqKb9RhXG4ZpGGkzgWPQ2e0847zIieratWRAAHQ8yJ1NNXnhOwGCd6rvH10h'
+    b'buIoXitieRvV0oSBpehBHR31NaJjVFFEyT/pR9eAzCvHTWK5XLcJtOBuYS2ZhAxEC/hHf9NtgoxbPNqrnwCdyjvE'
+    b'rso/DGGb4m7DutDZpJVxvv72fbrfSbST+4SSuwWTM/wmbI2bBgmpq9rupCV02oHHnQKRyZGXBVbhNhyB0RlYm+oe'
+    b'oge++7Iw9MZNyJBvlLSj8C5x1Ql6L+POdrNwbxNTRE5t6riOGvDZpB3rCBU3l7SX0AjK2ebGa5IKMif3spOw16dr'
+    b'abuRKo/vJv9MdMmDfyDakqhx8NRu34h+jAZ1ic0A2lQr20O6QuExJIkfsfKX2ToRVLSfDCJMXMUU1A0fot1NB2TP'
+    b'X8UUHArGFG5oRURy2lW51CK+uE3/zbSBkKjy9SuxRhSvNscDKDH4nX2fuo7eSzbZ1wItiwdFj1HOR8nt9pC6YwVu'
+    b'X1EmSmVEyepReyGjQKtJ2rGvxNq/+KG+Omic8oVEAIsSmi1/zNdjOc3I/pyq61b9mEO3E6SL+ee2XUipu3eRkcEE'
+    b'5t3CnNvVDVmQtTZ7oyAQuWJ1boeyui0lEfbQfYX3YtF8lnFKyCafDD5dMtZoPzqy8C4BTVIuIPSxiuMmdWyE8QJz'
+    b'blWd5cVT+5WPYc43lPMOn5l7twbfycstN+bczp1b80ZOkwcruVvwmE7uFi6/cfp1dawJyoFhy4xxvj7q2Ej63K7s'
+    b'ndDrDqJ0Dx9r0maWoRTNJpsYn6yWYgOx81y2aBM36u6YHmcdYofMvl7fPHcpuckG9lIA6LdsmH1fObmaP98Huo6c'
+    b'LI2TU1EWQnudkkoD5xpZshoFzdJf/gx4vT2/5jYrehazkOu1Yqfl9Os9IurYThRR3+xEEYVWSDCgtwmnrzvWkdtK'
+    b'NBJYTtYsSjnmbuCJJl8QSnScjFiIu36zAfkKQ+UD9kDJupHYHMWxfRKVDguwRkB9ASldsi4SCxI4ARxRXxIbU5yW'
+    b'YtFhypeSAERBFIf8z9k1Kc9NiysDQWOYPKnb17R2Bxa22rETZUcVq2MfsMPajRuIjjZ2WBwEQa/B0QCbYg9M7zHl'
+    b'0r7bgUTv2iGUFjInU7dZURoc1U1sTiVp9evJEsjV7rggratUqmO1Gz8Uts1He/VYckT8O0rvb5Qemrqo3IdX93jp'
+    b'uqKGsJ+oklVlYgicUERaHFoxq6XbcsnMQxg3Nxc7T6GlSzrkjSbKzWiM2ai9/wF0wVXo2XB2jfMze0K185hhstIR'
+    b'ldNfdcPH5wYYEtF/O/Q7+bPgFWJ7b9vj+ZQyWoSUlpL8g1Qz2EmR5vwPeg9Q8/dFIwN8/g4ywNfv0GEpe4CEsk1d'
+    b'La22Q/FjjaAv9i1OM7ckBk+puS32emMHd1lKrDHFVtvYwn3yKbxnhzVqL62jzbDeamIuJly1+h2kUCJe2AeF4ma0'
+    b'q0lAyQYaMxAphex89qvbNmLJ6ZYyaUdiFOi56jgjc+51OGvlPuq2fKpXA6inaun4FWj/sw6pxU6q26rR1rkSKbh6'
+    b'Xyg0ibv2OlwU52+94lyF2Z4pDcdp746TCXHm11i5a//kvBXG8WiIvK2pV8RfYsRyPaKIcss+PMukTC0ivaVluv2s'
+    b'mpIAjXQY+9YJNcVe7Gysdh41OM7JV1Q7G6cUOw9XO49M01P0tqRo8zE9g+pqFAk21EK5cd9+Z42z0eOb4bOfRYP3'
+    b'cUsW1zib5SzgmJQEiK16G0n12e/YuldobClkmVsLyWoDS3EEa+DeWm1+LVrmRsr7sF65++1njR3MuUdVsEGZs0xV'
+    b'0tGaCaRT7n4Yy27EZUyIOaqI3FM790jrnLXzP40uSU54oNgJ3b7MWIkZ7HyRMmA10g5nLTQMq0T7v1o8ZeP7RV5u'
+    b'rcE3CEKqwqNiw6WjIrpRbQjJ29lJreAH3NhHj4E1qnJXAW3tNmgLftBrsFf7c41uid4AeWyqQWt9tD2kXPpLO7xV'
+    b'ImT9r8mu+ArJb79EywBJi+rqhbeRA6O3hUKPkXKj+Vfrbp6PvED+UZ147CJG98ALwvzRIY5Uq8/qNp7GeoC632uX'
+    b'1Nz8tz/hucWvgbX/QAm/9TayNt5C5MX7iBaK+4i4HIs6EepWC9tRyzoDY1gdIrUhEoBsiYiZOQjRz4BS9plwn5pZ'
+    b'hdBh8HFYfGQmjgbIK2XkPq5KWvWa0AhfayBAs7TqRQGIg/8sm34D0r8h3jcIAOikk+Ij84mE09L0Zmn4a414EdJ0'
+    b'CN5WS4mcWQqUmYSXHk2aA8WelArT6sx/iit4MlNH4E1J0nDehLGGQKzSZop1YOn1gPsV/H8IaF+Ji4Fifgn/003B'
+    b'SLSL028h1KcO2tK3UG7nv6XrfLHK7tVioxfv7OQFdO1UQVjF5NL76NlaNr+/XdeM99AcCW3zpUKUEI7zzNUsKf+P'
+    b'5shtvDTPiDykrEAbip67aJRCIx0BtJADwBbtvi602duHd9tB7DsqnovwzUb3fC14zqR8tbiQaHotsgU2niIUaeAR'
+    b'/BB6s22V1n0z022fIHwTwXHWOB017lV4g5Ovr5SxaoGYMSqbL50ferSZW2n834rcM4y5ankJGSSCQIR50xk84bWb'
+    b'3M+yT6XCr+GTZi/MuZ8XuIWBys081zK0Jj+EE8SlsXgNz/5QHUxq12C01rcjkCwNfEMmkWVV2sVkWTW1mywkOQb/'
+    b'QJIbb//AWYb2nCT3E2ew5xlaZ5B4RqmF7FzL16Ad5USzreMjwdN4pYhtWhuQFYp0+3upYu5RlR+6RtBrIfrvJSRn'
+    b'I95A0k4OlNFZMV5SknOlNATvnjoE1CttF7eWfLBrSDSaJEtDDuDcSr/56gNpSJ1+uQrvEJNzYPbpr50RkZr5BrfI'
+    b'er/uKZl/L67N+gBmdyncael121UzgF/TZ/inRAeZ/pqBvApP3SsNwWD8V0wEylQsxd0pv2IVl8a81kbRp38mDf8q'
+    b'BzvzazYKmIZ9Yi8RrEHQEDtwLIXFuGrNm898gknh5S6lg0TyrwwUv6VxIpum8MUvTShFmmkeW4dXWlJyE81PnPsE'
+    b'xemaLDFXvYqcU9tctRPNCW9GGCGONR6CV03AqX5N9n3SzkMV3+EdZKV6jWvw2rFuWhzRRU+Ffv0NdvsPkZeDlnAj'
+    b'8VzIDU1f82uyGj7BPG+hVovBjCfxeCj2RCT4EFFLyB69RTsh0gJRxIFIzGEQipeSKQnF+kpK6JDOZUZi3953imgp'
+    b'f0V58Rg8PbeXNJM7AFannL9p6c2SreB7nI3nWZEzX7ThRCzJxjyxUkxk6wEhD1/Uujulbbchgsi6aoRouZI2Cpva'
+    b'Ce9vmyjM9huL+P1Lh2iwP7QInJPCc/YkYNpMxH+xXUyeT2I6ZwQOEDBmOU6msy09N/fYXrRSiuJ6NKtoUboercQm'
+    b'AvDOHo9N+LfGq9Zsf/lepIeS52GUxP8Q19fFRNI9GD167K1bUHigbQwtO2oqdyigonx2pts/6VE0aAwo7wdImLo0'
+    b'tTRVIXUBnbq2aN+WCL+pp7SxAXoDoFqaASh8J0bRPgoj2M9qNwGKnpLcHxN9w2AIp6XHfBqzf7k70X+9L471QrZZ'
+    b'EKJH7s49qxtx7/s9uS/vyf3RMIK67WXUvV7FZUaRLepmqwqoThSrCHO+qSSs1AUKhFKnaUpPnEyM9NdekTZgpBOs'
+    b'R6HTtLQe9Ok+c8m4RcHIknEWdVsrRCsMYAL/7JXAHzGBP+sJwPSKkojBykBjbETP9lrO+3g7z7/QkAakuqr8UiHl'
+    b'35eQYJgEclxVxEmx2l36Im77uZNovaSvd52EbIq9p1Tvv7SxTNw3k9KJFpobAvZ60PhGFSGh5Ktpgqh09cNLfcMN'
+    b'sx71fCSft0l7Cs9ieZvUFNCjm3F1GodTJbcRBlG8wUmPIvfhyUV9gv2gcbv6SU5nM3wu5vJ+vAJprrpNUsSVo0pu'
+    b'HUwvLgAdfB5WCdO1h+SH+c54WsWUdgYgPyDEIyYGauojVu5scjgbfPHSTqOjTh6Q9+x4tMbyNlV8aVF9V18djAk5'
+    b'm/Ir0Dgq2CASReLicNSoPVrcu2lwqTFTyW3uD8qZ3Nz64SWXD4GSp+yiasAE1Wvh+Wi36ouuHrPIyNLyFwct1WMs'
+    b'+BZNF6aU4f2o8ELmtThNPHZSXzRFHaX+DZQ5n71B6woD8eqnfLqx3IsuhpnczO9Fu+G+u9BMOmjn+ck4TH2IHQ7X'
+    b'W9T0dqXzKomaBk3UbwLOeAtRdtHVsaiBtIfN6OfgwYmuGNmFFun5qWgQyyZE46lSW8UXsWiG7o7utkhPi9Yt0u37'
+    b'ouoYp1wPs74Xp9iOSy7fDiALdbyXFDjqHDvEqpGIbdq71cIWfTwK0j3bMMNH6H6bUsxH2MuGU7quBpfb6O4/qXBg'
+    b'jxHz63u65UtEN1R9/oK2tAIPzEbkDNXNml3NuHrQxAvpkofEc9t3CaPmJraOIEETGa9CsWbgCWJn2Ix5ZJTQ9VCn'
+    b'TQ1ej9OhGwW0x4x5NHxl+xhBgwuUby1KV9+cmW8Y5ScEpmqqHqUQ0qPSzsIkXLDlpfH6+mmMkko0FidsiZDwdjUv'
+    b'LY4Sg1C79nA5lgjXBbUBQLPMXUjP1ge7wnbIYSINqrrErPg3f8Q59O//KHaD4hhe09SGt9NX0NHIbdjdc1u0bL9Y'
+    b'nxppFouMjfajuBZJciXv4zxaVSUtd32lcmGAtD5QWOkb7D+LVwZq9rM8cSQdIvL1w5M40MHj/WjHmhTcj1tJvyf7'
+    b'2jaxanShQKwjSYUlorFgtvTdLlxwbohklXKamvgKWrNP2HULtvNrFdljaxTD1UL9BkHQOQ/ltTLTCuJhiGMbruv4'
+    b'4hj92gPVCi7YGGoKldvhFx3RJyod/eXvOOFDDfwB+XbHNlxk9A1m9Ktuw2W/XWj1x86d/guef1iAuBzzVN+eQJfH'
+    b'R+tW587Gi31oSwXVBMY17GLdlbZU8DbADuei+panX5R9ClWSpsPOJroouwEvym4/vLD9WG7T4YWneG6TPGC+grla'
+    b'2XljY/HqPp3kbqIFOpJajKsSyJIb/6Uf30tH8+uTal66mJ22aR9/KyzN70eT1U7tOiUUCtoxG/l2lWMdlc5ZPjNQ'
+    b'Tr5F9zf+UEcoRJJG/14CaQvHJXTWo/NpeYAesh/S3kXnAhuUztmyyb4v+CHejz5QyW0y+KLytiHBjcHsPCKjMThP'
+    b'HfuS0mHMSYNw47UB+1kl0FfpnOO7llXDW3AARRtQU7gNGwjFVYqjesmJYD+AVF8hIME2kbZoTGPwmmpFpN1fHati'
+    b'2lczZYW1u+zPnwuFWh/EZurMkVbRXSaUtdkvTvAV7DQSyKAuKZYltm0ORhW5Ba+hkcUXqY5lTBEBxDk0iiidEb5o'
+    b'6APbsgASvJlVVmgW+9mKEyYF5ncYHC2N+5SVYqjSYVoagUbUvp5yLWoDymF9WjeiBOxcKPlfEswCzaSuRU8qOIpc'
+    b'yBemxspqKwWqa+v0kC/yUdwh2MCUxKtQ6GXqq+xuHGu2FVqF541T2h36GcaRXXiIjGCCgbXinWRfDDhzUUq2a0Xv'
+    b'hgGnYAymEaD1LEyz1LEvIm2TlM5FeOgFa/XeFSSyE8+dFbUMXs2pgu+Ze+C9KpyLJ5p2UFLrlOYLvmilFqr9jO/G'
+    b'4K+UzgW+a0SinKJUNJtgwI2qU2oj3Hr0WuDJVlIDOpdIhdMhneAKtQBvk8DjMs/kd76Am+YWRh0luCS/89eoIdzM'
+    b'S/Fb2lH+D5IA6hKj4xw2qLFYQUhwfH4nim05Ru9hedsjzcRWCfmduAoqD9ED7PVqsvEBZmNuE3NbgjFqwTzKOwL5'
+    b'La+nmruxmp/AcD0Rz0p6NS0dCp7Z+u73qFv+x4t4bb/HEfz639MeytRI3EN5HYf89ZvhqW19DkZBP77Kk+1HPVzF'
+    b'V9X/BmIc4+sRs+K4KUn7y3N43xDBpZjC+1FpmKRcuEv+SPXj+5wEPNG1YcEDdDEixlLXDIMPbY6K61Q/uqVy5WYc'
+    b'GlZtFr6o1Ff3Yn6H89vcWD7KVaS4EVPUHn8ufJgIdYpVeM2g+l7cY/Nwz4qKxCPvxw4s91GWm8zBK+6nywIt8PH8'
+    b'0oHBTBC9afBukB/BW6HkVGW51SiPTdc8a/ASiS0Q3x06BJXDN0/4Di7/Hkx3fQALFr4FUMWCpXPKMlSXmaJU2fAc'
+    b'Vv7FKxm4ZbHxdzgf+SM8tVufRX8CNjovYG5vvcGIl1xezWqUvVaYheMNcPr5f/3Ee/hOvzRK4ilMomWZuNNPzWsO'
+    b'xuEZmVPiGkCbvr2tJSBuzb2/E9sV+W1IO3ZB27LsIjqqKpG5SpOeJXrK0flVcbcNNva6H4Vy92iNv8W8j/82fOrh'
+    b'jDZjGd53wV1nWBVQ+dmBRp89XVWyPsN7Jf1nffFQjVnL9AO419Cxh9guXdKTlhnxLNYR17/CN1h4tCWUSz4+2+hO'
+    b'drWJlAobd8XihRbrG/AT6KbizX/a5znYIAQjAPO34A6ZoSZgzO/EFmf+ZgDIA5TzkXI/Pt10+435F3BXcOnNDBKk'
+    b'QAaJUy4Mks0N3xsSauaUlvaHHH2kswmAuG85BSpW4z8D3yOwOoftgRp/B3zdDV8V5yNq/N/jBiKO/n4c+e+nNxO8'
+    b'4bFrR626HqP6JH41jy1g6/wWVA6Cx9Xk62LZeo0q0oYc4DzD/Kiyqn4Ezoucg3VyZ4jyiuL33O5jE8dI7n0VG/6B'
+    b'V1HFym+L74NEbDhPN9j8fSneS9aOV7NWqf4mAM5B8wq3WrQFb30OfZp6fwRdI3wrrsX5Wy7oCMzfeB53G4sWCDQu'
+    b'boetVos+RoVtfR2G9lwkiwe71ReO4FSVgh5zh+pZpZoS0lPfh6uV9SKaVFgubI5U5QlTBBqfEFjcx9nHDhO54BjV'
+    b'3wYCGA/lMD8GZoRK3aFFkZw+8DZZ3yFOJZzNTe7ZjkIvosvmsY5TS46TIuE4JUOP96XN5iJsNnxcN3a20jFVTszv'
+    b'xBr6Rs5W9lCYQf6VIE3vW2/70q23UMUVpxZF4oQvyi2urg3GQifmRN/8qkQLVEC29L4RT2frV17B8L+8QntquOgj'
+    b'bmdp43TXPCjUV8n6evu8Zfp6O7pwCPgGhJfco/JXxtElkdcCm6qK+693GoFZMbJtynTBsGLjrdIazvSXlOndlKkV'
+    b'8hMHirS/+MKXVXbl0GiPTYbDV/6zlINUVEjb5sJIwL+GPkZQIRaJm2v4y4ihLV2GPVODFIQxjjDDech/FNcR283a'
+    b'ZH+kI1K+zx7gGSaWFIu3WA5iSQPpFss4/RbLIcwzjG6xTOB9CW0C87gJIy14DR4hoz6Jh+fNtkftRqqnfpSeqFu7'
+    b'O7Gp0sC+RpJZtNuOh0JCmNTuzrqhvBs+oBc8cH0PvPObHnjck3/vhn/ZDdfXko6+jKQ8gZYobUMIBym/X5ueLWjZ'
+    b'rL29FKd97UhLXNsNk69wFE4r5HY+bogjxSr50UDG8V4jHfRH+aaOc6OnmXFpt8NLVUUwgk3T2GHHb9EHTXb6/Rle'
+    b'rzfn0fkVVt0joxuXsJt1h4woV+/C5sjbL1a7Y+bgbePzUA8HnDjAoTlaO9u6n+Y8GitoEO43oERQ7DIsB1tbJwId'
+    b'qzBQKmDiFD0afmgOV5svi0MBYVZn4Ka18+uteBtqooXO67fwPHGdUWNPKep9Q9SHzqgjgLsbuKtlVP/sgbw/CF5m'
+    b'tbGpNhNfamE+m4V7G4INxjo+rYXLTdzbGAIdcCDLIl2nGDWZae1MqROLjK79eBoSd5lcKJzNWyf+3dDLNyl6RgXO'
+    b'1ka+hE00Dp5a7TPYKtpNMu13Dwp3oSsdVGH5iinsFE5Ozx4We9+9N6tPbcRUjC/hKJdr0Z5/RmwKV5m3Zi030EHF'
+    b'Rq3GR+k+2H0fpW+E8p1bT3wof4Cddzxi8t3AY4TbMvT1QG7LZDO7RqkxKRWm4OfsedPFtzd5tBzKetXGbhlhJRlB'
+    b'GwFntDNZuoAY7xMC4oxwhXZ/uHYjuBuVh1/lVw5CHjskD1bKfOTzYkBNHr6IbZuYvGWCrPRL7l63Tv8zmTThjaxI'
+    b'Vu3rDTCGfr+hZ8kHNKAh/F7m3M86+EoTz7QwuZFnWXmqjckN6DxwM+6k5FiZXOf4XH46/8G0FI9dfjx/pSlt4sQ0'
+    b'Od3hapAfw1l8vVaSLSYHfaKA6bDEUuEFC5pz3UDmXAMlfxs6xhpnUVND+edhfLtJKjqCkGmN7IA7v8qwFdrhYGsN'
+    b'un/LGOg4KM/Vc5sBuXnSxqRJ/tcsNDmGzG7QM3vZcpHBWAkiuG2Y90p4HZVhkfxL0UVafcnUa6x5F2bC9Olo8SYb'
+    b'WiSNVTqvkLXWDAh2TKuT/HhgUuQo+dE4FXIdM94FuR4yhHP90xKh9EiFN1u6L77qI/mvxGwft/D30GVH/gUy5yvq'
+    b'6itunT0Lv47fom8PqfAEvDN6B1k6izv368ufNc42k6HbxlUakreiCH3jnTtJlq7eBtwGKnE2kOXfsa1xZOL3mXLh'
+    b'qaX9hQkkGguepFByROVtYucnkjEgbp1AIF8zMLyJ5j8qra+cGKprnd4XCW1zHJQKWntVvUhUPdnrmiT5a8NVZ646'
+    b'7c/PCH1JKhzct7v2EdwFtBsAAD7WhmF94XXUOKB7F+gnZ8fmWqTCM31wZoxuu07AG7CMpHzRB4VnA6sd2q50DJJe'
+    b'OADfyEe4Nb4T5zkBxDwiT6SmWWkMl8+X6jgiFS5G+ZphgaIrt6MbDbmRpdrUDWP3v2XCRIGLl5kYcHFuIxsZ1vq+'
+    b'xIjj+1Bjy5XBrTzHlN/lyRjjlgdDvmLNqCZLcBXeM8kzLGwtupZpvRvvnuxKdY6ZIN8oqPm4RduUhXMYYVPybT1M'
+    b'1STCSn90fJL8HCAoF34hrQsoFx4VbpqsalIXzHulIs0cZqbJemafmi9i4RozmRfRni++Fnfo1qR/wy9jyJ2Gznql'
+    b'wt+JhOYZPGb3m0tBMW9VzYK4/ql4C2TXxEc9wLxugSbqd3xxuAVnILi3m6GIcD+tkvzJGPioBav2+A6o2ghzD3v4'
+    b'u2gJDchjkgrHIbt3po13OSX/qAhqUTXd6jgg+aejFkvVzF4cXof7l6n3pbvHsOFgnt0Oc3gYKNG9x0TMsRPxFbQX'
+    b'ZpXSznHW+YGZxjqm0BLmznH9mTJEP0g+jFyJ+ehJwx0NK6h4NGq3wgDReg0tyNRFyM9hOvYQpMSUCTQkNmqlmE25'
+    b'm+KlEqyBu/FSbuxBDczbjNYKTTQetkA/xdEKV9/yJoitSieEx5SmCeNPnil+6Uo/pStC8keYcD2GnEn8gMsdk3XL'
+    b'TF8C5n3NYrxjOJHyHkFeDchUWxmt295Ss+r2umjUKXbCOabgc2ICny5CGmHhg3ej391rkDK4mC1oghRqfZFW4fuC'
+    b'/EOXLKUo0XZdhaswf4v46bVtLupV2xWCdFjhPL3CaF6gpS6iPQWlmBoG678Rmme1TugP65Bh6oyS/18RAjJwkbjZ'
+    b'GN/lg9BQDcRGKRPHjJP8t3xPjCP49d6FYX59K6JH4sA4EIHGEnkGMfTBkKLsXk07IAWFwhEWKygmHe05Pcs60OFa'
+    b'F0b0sPE+mADhsDL20UzJv+eCzqzMtV+rWhCW8fdH9Jbxw9Eo4XkLJHpLhD5iCH9N+6HP+QYK+RYtaKsETI4KyU+7'
+    b'tOMsmNZJo+ibhXgBKM9t4Dedq0r0b31VKrQDYFQKdPyP4eVsVaLv2rMpKyy+K/mGFiF8yfmRduA9mFHt/sqSjcFx'
+    b'vYPx3Ap5JWTHKr67QjneF9Cis6+dfS5lRcDoi+lGVB+N1rhIRcJUciN6p4LembQFEHyuygD6qO9GQIvddQ1As827'
+    b'cFm8G1VL0bHyjIR1za5rBdbAi7DiAMt/9NmrlZApp3chbtD66PENg6RCdF0PaVy36zo8s2KD1+t3DRLJXX9Rcgfe'
+    b'hRZ8Ez7KcYRkKTZQwY6wwxVaTMWXFnZMaTYeaM3/Ei9ZZatQTWKNyhe2Ci1CaUbLxPzjuGLkM78foKCoD7ir8RbJ'
+    b'kPpkVB07UnHCHFULcQGDPoN9K070yf8KDxYB1ITQqMaoDpayAsROSlxwiONI6+lO4p+Jj04A0Zd5nviHdWp93w6F'
+    b'ghZgjtayc7TMI3zw9loummaBaaVHVW74+C2TrnU+Nk/ccyks21llD5+XksKuvt3tA4sR07NzrICuXC8gd20FbfTU'
+    b'/r/Orj8miuyOPxBOTkl217OtuTaW9C6Vi6eA3F3FE2GBVahQFpYVvQNx2B1gdGaHm50BSUsOd/HHMK4Y/efimdR6'
+    b'TWuu/YN4xhBjA/6IQtVUr95Jou3ZxHhzSlsu3jXYu5R+v+/NLrvrYhsJOzPv+36/933f9+vzvo8+6aQ+NE2/v6LP'
+    b'xZRCtY6FcBSghyroN5U/IaoBLEQ1gFFli3qIAnFC2+jzBG3Sj36HC1YTdN/ngTy77xO3+qhPs/XHg/tx/fH9/XRt'
+    b'rcnYnIEypeasUaI3j+qPdNewmdmG06mLmQd9/Wkz2vCMNtpo1JxFdBxqdjUP0F5Rd52y9X9CJcjFgtvmfYHClgzv'
+    b'KZQawyCZ6K7InkPYKTTs2U+llP2Aex9CWW0rx2yhndQvnqLKg187jrpbMhAShl+rQXRpp9CUYbjOGu9hO0VlyIj+'
+    b'KzqCyHPbbsSs6mPLQ4i8CE/72Y25ttxPbLkXH9maDllQhRAyjS33CnwOMCTFlo/hhxd6j4PctGAl9gMN9FLwsS4+'
+    b'4hqD4tC9o5iEY/Do/TUCXU7AA69Nd0hD5n/+Qi97H0MNpTVnEUA0ZHOE7tHZ5oTReyd2wzp4sqN3u3ZMP4lYDP3M'
+    b'NO0SUJhD9hwfMhCH4zgDgziOMOCH4wwDcTgOMQCH4+S0Rc+i4gvLt5f6/9byzwAkjiMsi44zDNrhOMmQHHaiU4AK'
+    b'UEKLMYQQFqROCxI19OlXXrkQhqF3FtbvuXdi/IMLxNE1DZyhuQdwmtQyQOHE0WkSxU6Z131sNj5hvtxO9b3pFyK7'
+    b'Rh1/S0PFsbfV3OiwQlta9BFGq31XHzOH2lF5yvIwpq0Ys4qQPTtCUCdgdqR/ifPO7NiiYKT3DgiUafPdOzMzMx9h'
+    b'PvQvG8Hp7CpcbM3ntzom9DQ86yI1WeHJJRCsE7mrKssoYlWPLGA/7GaDBWCBOmSJMIUx5o7ZGgzGsg7XhG3lDRvt'
+    b'rMzJVjb9Q2jYYT+D6hib4R0ZQsBTpv2rPxFjhKJ9XHesa+ERk7YVucxoYjfRG9ssoBX26EYH+v5lH5se1pjWzcOu'
+    b'yYjrLkxX3UbttzOfRlymG+/AgO/rRZ9p9yL81JZ4pN6ZfZjZ8X3RzP7AqMsy0oyeDJiWYIW83oprRTf1S5lTPz1B'
+    b'6htntAkq16CQp8wunupHZIgLBVn0Mso5FDRWlcEA5S22O61PIRLc/Dd6GTlIwS5vGIOoFxPGRK++WZutLYPaHKQ7'
+    b'b4993S9CBvcOsazh+MS+95RluBceYYOtnuV78+mwcYwhvWgdWBgwbJ5jUXwXFhxFlCLCrvkGxXY1/dGWe8OC3sGv'
+    b'Ce9yDq9mpUsPDIUttNo566RReLNlOfnQawy+xsZyG18ZY4tnZbNxIcpsq2Gh7VA8GCxYrFFaq1hTdkNMIk5Gau5E'
+    b'3v9nmG6KLDlMPLsu4XknveYmXoN+E+qUHVxy10H7mPkU+qq9R61ON6lKP9+DVfqvPdjQ7KhcSFuCK5a9i+kiINXB'
+    b'6rKjNuIt2+jI7gJK3SlzBcLx8aTVpN672Oid0rUlkXD+2d8QXGf3mnpvtu7NsgDw1hKOx/w5jWvgf8f195b4uM6N'
+    b'p4jL/aunxWVoWR4zm0b3fXiaR1vopd3996i2JmM9nVLhXD562sT83B+dmiBkJaoH9nxrdNBJIUK92URbFhmK7d5D'
+    b'ueL+/ah+BLe89dBO3McN4SbowxeK3kOapkHGiqiFth0+C8bP3U0PT/Pd3zGa7X9+GD6Xte9oOoZXGn6co903qMtS'
+    b'FlJ4+kXtDdvpEO4prs3ofr7vDN2T7nohciQ+BZ89+vBhRj87mJJWCf13dvwoA4XpvN1YEIt2Y7kvxnKHEoPWtXcr'
+    b'xbAY61eDZG4zSvHVYrjzL7seeCROuez6h/qWLKPWfAlX/CoKRgeqMx/0j6tZa7LTtddLH071rU0n2qsDFF25Nq37'
+    b'R+GptMjh6gIoViO7AOH/X0RcX2xPcyPSbfM7uB8IlWX03sWLa+5ZuzCZ7g3DJFpzHrOxH9PaBk+3eb+ZHgFhIdZ8'
+    b'Y9ZtZaCDhbbTrm8gvnk65AX+Zy/XMZdQ78v6Y+LYKNqebh7HUyiXNuOEJK27wDzQTE8sHMXL2L0T+uPLLhMHzplD'
+    b'V15Ku+yapMsuII431c9ct+4PstqMFuSVwlUr/aJINvCqM9gT8G3ke/CIAo+ERiHgl7sbOhSe87sV2ccHg1V+UsGp'
+    b'XJMndua7QZB4jyp3NvEBlVdWdnNdc7qQeKWdpy66hYAk0XjBPsCLViJQzUm10KpwSo+TuEWuxyNrAb+TzJ4wb+Cl'
+    b'TlnhxA2ioPo65jyHrtLD9UF6DJ2etQ/swFwFUym8mduC5xRfR16dxis9qex/xqmCHMgr5zrxnVJXksArT7MvF7lg'
+    b'8GkOWBROnyp08XNFMLctDX5ua8y49rScVwoBNZW1W+G7UqYWtVc8SSeb+A7BJ6bQ8MN0IFgKfpL1jj2hcwyVlXEB'
+    b'f6u8s1JrnbV2VsU5hRhSlkSHLAfjE5CyMBnTpFSiVZValRhqZwnORl8uSxKkMEGdDFZRAsEldao9CRRvgOviBJFr'
+    b'hTKKp1fK3aQeVUfEE6El+XaQDVqgWgCbMk5VRb7SW5EHv2quB+JyimJPA89JVFFSuRxQOSEAbJhAJq4AL6VylUgn'
+    b'9BmMWUMEsqaCKFB5nyoreUnWeQ1yZx6aoDnmsZQxHkOaIkMOfLLCl7UTkW9T8zhIEItFQY0deTxGzQiMO6hmuio/'
+    b'BCZAgfGiIAkB2h6aSVDrVHiJ8/U0k3aF6wL7ZtIqtLe0ysFgM5E4f0s7J/HwCe6EoBBoh68ABqDy/mbyNidJcg7x'
+    b'822cJqpglmQ/n4MK7br4ILxVEFjwapVVNAUgtxBSTOUSpoq2u0BPok69BBdMo15tICW1rS2RXMFz2EpR7CbQnSmp'
+    b'ZZCu5IApDYJNVugXDSEmZNBhzFDNtUJpgx+nIKGUppwMb+Cl6CdTp2UZykXkvUpk8UpZU4i3qraT80HpA+N3ygGo'
+    b'qaRi4lHPVWKWRFGAtvyEs1WJJOTDJ9yVU4WCSeFpqpxIgRbjT+VKAt7xJcVCm2KSskSWQg8vAo/zfmKlJGbeAhmn'
+    b'+lzWC6Jo5QY/oylmpFgRW+RZIQ+sFjNEY8ZaonZdPATFu3ZCl9fBi9Fu0VMJnbGbUzvWK7JUVVEtBNXGuD6xHFhd'
+    b'4cpEqBBFBgcBQQUZhxHFm6uRueMJTmgECR6EgKYmOkFmKUgmrKKEShgT8EosEssYFwSjzIYwa15FINMqNMogdgO0'
+    b'QurBQS0tEypNrYxRXiUeH4gOcZPAd+cF6WdM3sTESsxHjYxhYFGA/PHtaFdw/JDn8gsoreICBgceUfCzXiaO6OYV'
+    b'H3Lx25jiFW2yIjVT/ZZZ83dsT9A/RGpJNSkj9cRFnGQjPOtJCzW5ge4kW8C0nrqpoHZP6C/6P/yjqY544ekhDagj'
+    b'KHvhgvnPZRIyL3N+1vPZJC39uQULn0E/Dwzqgs+q30ei5buiFYrqmfSnxvvHsRl51vQneV6e5D8/P5jzi5z8/Pwc'
+    b'V0o9h/EdKo6x4s04akoUOyLHxGl+rOHCX19ifCvz480wPn83ob5h/oGTj1kVoH0bFtx6aS0hY2VgKAFzibwovGbw'
+    b'/NfFhBwraRo8v+7a1atgHyoH88i1q78fKSw8DO5ySpsGy9bVDy9dR8j+ctJ3vOLa1eriwsIg2H1c3tZ2H/xll7gj'
+    b'3ytua/txyWTdcPGFrztKhpdmlkDY627bxksv/dVXcmjBcyWjh3bhrXHgt7Dkh7t3lLzW95M34XsEvkcW3PqgGLIA'
+    b'eegrg/Ahrj74jZZ6vV54l5ZO1q2GsFcXQxqLb33QCeEcdAIdaX+QF81b8193bGYa'
 ))

@@ -12,6 +12,7 @@ from .resource_copy import resource_tree_facts
 from .resource_source import inspect_game
 
 DOWNLOAD_COMMAND = f'download_depot {STEAM_APP} {STEAM_DEPOT} {STEAM_MANIFEST}'
+DEPOT_FOLDER = f'Solbreaker-depot-{STEAM_MANIFEST}'
 CATALOG = Path(__file__).with_name('assets')/'build-11.21.0.1235_7376187-files.json.gz'
 
 
@@ -60,7 +61,7 @@ def find_depots(hint=''):
 def verify_depot(game, *, progress=None, cancelled=lambda: False, catalog=CATALOG):
     game = Path(game).resolve(strict=True)
     facts = inspect_game(game)
-    before = resource_tree_facts(game)
+    before = resource_tree_facts(game, include_change_time=False)
     files = json.loads(gzip.decompress(Path(catalog).read_bytes()))
     for name, size, checksum in files:
         if cancelled():
@@ -82,6 +83,6 @@ def verify_depot(game, *, progress=None, cancelled=lambda: False, catalog=CATALO
                     progress(completed, total)
         if digest.hexdigest() != checksum:
             raise ValueError('Хеш файла отличается от эталонной сборки. Дождись завершения загрузки или повтори её в Steam. Файл '+name)
-    if resource_tree_facts(game) != before:
+    if resource_tree_facts(game, include_change_time=False) != before:
         raise ValueError('Файлы изменились во время проверки. Дождись окончания загрузки и повтори проверку')
-    return dict(facts, files=len(files), bytes=total)
+    return dict(facts, files=len(files), bytes=total, tree_fingerprint=before['fingerprint'])
