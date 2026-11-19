@@ -11,7 +11,7 @@ from dataclasses import dataclass
 DRIVE_STATE = (
     '_road_poses', '_support_memory', '_support_hints', '_support_bounds',
     '_spring_rates', '_lean_states', '_drive_blocked', '_carrying_supported',
-    '_contact_support_cache', '_wall_recoil_latches', 'ground_commands',
+    '_contact_support_cache', '_wall_recoil_latches', '_wall_glances', 'ground_commands',
     'ground_track_rates',
 )
 

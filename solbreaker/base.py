@@ -1,6 +1,6 @@
 """Native BaseApp handshake for the pinned compatible build."""
 import asyncio
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field, asdict, replace
 import secrets
 import sqlite3
 import struct
@@ -845,7 +845,7 @@ class BaseEndpoint(asyncio.DatagramProtocol):
                         try:
                             self.send(addr, client, b'\x13' + account_update({
                                 'prevRev': rev, 'rev': rev,
-                                'cache': {'gameModes': game_mode_descriptions(False)},
+                                'cache': {'gameModes': game_mode_descriptions(False, self.garage_bot_rules(account_id))},
                             }))
                         except ChannelOverflow:
                             self._disconnect_client(addr, 'reliable send window exceeded')
@@ -1127,7 +1127,7 @@ class BaseEndpoint(asyncio.DatagramProtocol):
                                   entity_id=event.actor, **event.data)
             elif event.kind in ('consumable_used', 'consumable_state', 'consumable_rejected', 'armor_states',
                                  'module_hit', 'module_state', 'internal_module_deferred',
-                                 'internal_module_trace', 'ammo_rack_detonated',
+                                 'internal_module_trace', 'ammo_rack_detonated', 'ram_detonated', 'ram_shockwave',
                                  'state_modifiers', 'fire_started', 'fire_stopped', 'fire_tick',
                                  'fire_rejected', 'provision_effect', 'crew_hit'):
                 data = dict(event.data)
@@ -1536,21 +1536,34 @@ class BaseEndpoint(asyncio.DatagramProtocol):
                                                            **crew))
                 options.update(collision_scene=self.scene_for_vehicle(definition, spec.map_id),
                                descriptor=definition.descriptor)
+            get_setup = getattr(getattr(self.server.accounts, 'store', None), 'battle_setup', None)
+            setup = get_setup(client.account_id) if self.arenas.sandbox_enabled and get_setup else None
+            if setup and setup.active:
+                account['sandbox_preset'] = setup.preset.values
             bots = training.bots_enabled if training is not None else bot_enabled
             if not bots and definition is not None and self.arenas.sandbox_enabled:
                 options['bot_game'] = self.game
             if bots and definition is not None:
                 import uuid
-                from .bot_roster import select_bot_roster
+                from .bot_roster import custom_bot_roster, select_bot_roster
                 from .training_config import TrainingConfig
                 config = training or TrainingConfig(mode='bots')
                 training = config
                 identity = uuid.uuid4().hex
                 from .map_catalog import map_team_capacity
                 capacity = map_team_capacity(spec.map_id)
-                recipe = select_bot_roster(Path(self.server.manifest['game']), definition,
-                    enemies=min(capacity, config.enemies), allies=min(capacity-1, config.active_allies),
-                    seed=identity)
+                game = Path(self.server.manifest['game'])
+                if setup and setup.custom:
+                    recipe = custom_bot_roster(game, definition, setup, capacity=capacity, seed=identity)
+                    options['custom_bot_slots'] = True
+                else:
+                    recipe = select_bot_roster(game, definition,
+                        enemies=min(capacity, config.enemies), allies=min(capacity-1, config.active_allies),
+                        seed=identity)
+                if setup and setup.active and setup.preset.bots:
+                    key = definition.nation, definition.name
+                    recipe = tuple(replace(row, sandbox_preset=setup.preset.values)
+                                   if (row.definition.nation, row.definition.name) == key else row for row in recipe)
                 options.update(result_id=identity, bot_roster=recipe,
                     bot_game=Path(self.server.manifest['game']),
                     training=config,
@@ -1587,7 +1600,7 @@ class BaseEndpoint(asyncio.DatagramProtocol):
         self.send(addr, client, b"\x13" + account_method(24, bytes([reason]) + packed_blob(b"")))
 
     def start_shared(self, account_ids, teams=(1,2), map_id=None, *, bot_counts=(0, 0),
-                     room_mode='encounter', room_settings=None):
+                     room_mode='encounter', room_settings=None, room_lineup=None):
         """Attach independent sessions to one authoritative world."""
         self.require_arena_capacity()
         from .roster import validate_teams
@@ -1659,11 +1672,16 @@ class BaseEndpoint(asyncio.DatagramProtocol):
             options['vehicle_scenes'] = scenes
         if any(bot_counts):
             import uuid
-            from .bot_roster import select_room_bot_roster
+            from .bot_roster import custom_room_bot_roster, select_room_bot_roster
             identity = uuid.uuid4().hex
             definition = definitions.get(account_ids[0], self.definition)
-            roster = select_room_bot_roster(self.game, definition, teams=teams,
-                                           bot_counts=bot_counts, seed=identity)
+            human_definitions = tuple(definitions.get(account_id, definition) for account_id in account_ids)
+            if room_lineup is not None:
+                roster = custom_room_bot_roster(self.game, human_definitions, teams, room_lineup,
+                                                capacity=capacity, seed=identity)
+            else:
+                roster = select_room_bot_roster(self.game, definition, teams=teams, bot_counts=bot_counts,
+                                               seed=identity, human_definitions=human_definitions)
             options.update(result_id=identity, bot_roster=roster, bot_game=self.game,
                            bot_scene_settings=self.bot_scene_settings(roster, scenes[account_ids[0]]))
         if owners:
@@ -1685,12 +1703,21 @@ class BaseEndpoint(asyncio.DatagramProtocol):
                           entities=list(arena.vehicles),teams=list(teams),bot_counts=list(bot_counts))
         return arena
 
+    def garage_bot_rules(self, account_id):
+        if self.choosing_training_tank(account_id) and (room := self.rooms.current(account_id)):
+            return room.battle_mode
+        fallback = getattr(self.server, 'training_config', None)
+        store = getattr(self.server.accounts, 'store', None)
+        settings = store.training_config(account_id, fallback) if store is not None else fallback
+        return getattr(settings, 'battle_mode', None)
+
     def progression_update(self, client, *, inventory=True, removed=(), removed_types=()):
         state = self.progression.prepare(client.account_id)
         progress = self.server.accounts.get(client.account_id).progress
         update = account_snapshot(client.account_revision,self.server.manifest['game'],
                                   progress, garage=state,
-                                  training_return=self.choosing_training_tank(client.account_id))
+                                  training_return=self.choosing_training_tank(client.account_id),
+                                  bot_rules=self.garage_bot_rules(client.account_id))
         # AccountData's recursive delta merge (146eab0) removes a key for None
         # (146edb8 -> 1481230); omission alone leaves old inventory entries intact.
         # A full snapshot already excludes removed vehicles; tombstones are
@@ -2428,7 +2455,8 @@ class BaseEndpoint(asyncio.DatagramProtocol):
                             full_sync = client.account_revision is None and not client.training_hangar_sync
                             snapshot = account_snapshot(None if full_sync else previous,
                                 self.server.manifest["game"], progress, inventory, garage=garage,
-                                training_return=self.choosing_training_tank(client.account_id))
+                                training_return=self.choosing_training_tank(client.account_id),
+                                bot_rules=self.garage_bot_rules(client.account_id))
                             if garage is not None:
                                 from .camouflage import unlocked_paints
                                 snapshot['unlocks'] = {

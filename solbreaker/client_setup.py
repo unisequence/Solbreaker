@@ -7,6 +7,7 @@ import shutil
 import tempfile
 
 from .connection import REGIONS, atomic_write, connect_client
+from .managed_depot import MARKER, is_managed_source
 from .resource_copy import activate_no_replace, copy_resource_tree, resource_tree_facts
 from .resource_source import inspect_game
 from .setup_progress import report, report_copy
@@ -32,8 +33,12 @@ def prepare(game, destination, profile, *, windows=False, proton=None, steam=Non
         if not proton.is_file() or not steam.is_dir():
             raise ValueError('Provide an installed Proton executable and Steam directory')
     destination.parent.mkdir(parents=True, exist_ok=True)
-    source_facts = resource_tree_facts(game) if windows else None
-    if windows and shutil.disk_usage(destination.parent).free < source_facts['allocated_bytes'] + (1 << 30):
+    shared = (windows and is_managed_source(game) and
+              game.stat().st_dev == destination.parent.stat().st_dev)
+    inventory_options = dict(include_change_time=not shared)
+    source_facts = resource_tree_facts(game, **inventory_options) if windows else None
+    required = (1 << 30) + (source_facts['allocated_bytes'] if windows and not shared else 0)
+    if windows and shutil.disk_usage(destination.parent).free < required:
         raise ValueError('Client copy requires the full game size plus 1 GiB of free space')
     from . import client_atgm_aim, client_patch, client_recon, client_sandbox, client_tls, windows_profile_patch
     from . import replay_patch, stats_patch, client_ui, replay_ui, scene_quality
@@ -42,21 +47,26 @@ def prepare(game, destination, profile, *, windows=False, proton=None, steam=Non
         stage = Path(temporary)/'installation'
         stage.mkdir(mode=0o700)
         client = stage/'client'
+        management = (*REGIONS, 'server_config_urls.yaml.dvpl', 'loginapp_wot.pubkey.dvpl')
         if windows:
-            report('Копируем ресурсы игры. Это может занять несколько минут…')
-            copy_resource_tree(game, client, progress=report_copy)
+            private = {'wotblitz.exe', *(f'Data/{name}' for name in management)}
+            report('Подключаем общие ресурсы игры…' if shared else
+                   'Копируем ресурсы игры. Это может занять несколько минут…')
+            copy_resource_tree(game, client, progress=None if shared else report_copy,
+                               share=(lambda name: name not in private) if shared else None,
+                               ignore=(MARKER,))
         else:
             report('Подключаем ресурсы отдельного клиента…')
             client.mkdir()
             for item in game.iterdir():
-                if item.name not in ('Data', 'wotblitz.exe'):
+                if item.name not in ('Data', 'wotblitz.exe', MARKER):
                     (client/item.name).symlink_to(item, target_is_directory=item.is_dir())
             (client/'Data').mkdir()
             for item in (game/'Data').iterdir():
-                if item.name not in (*REGIONS, 'server_config_urls.yaml.dvpl', 'loginapp_wot.pubkey.dvpl'):
+                if item.name not in management:
                     (client/'Data'/item.name).symlink_to(item, target_is_directory=item.is_dir())
         # Management resources are independent files for both resource policies.
-        for name in (*REGIONS, 'server_config_urls.yaml.dvpl', 'loginapp_wot.pubkey.dvpl'):
+        for name in management:
             shutil.copyfile(game/'Data'/name, client/'Data'/name)
         (stage/'private').mkdir(mode=0o700)
         (stage/'documents').mkdir()
@@ -90,6 +100,8 @@ def prepare(game, destination, profile, *, windows=False, proton=None, steam=Non
         manifest = client_atgm_aim.upgrade(stage, manifest, manifest['client_exe_sha256'])
         client_sandbox.upgrade(stage, manifest, manifest['client_exe_sha256'])
         client_ui.install_ui_guards(stage)
+        from .client_practice_picker import install as install_target_picker
+        install_target_picker(stage)
         from .client_reticle import install as install_reticle
         manifest = install_reticle(stage, json.loads(manifest_path.read_text()))
         from .client_time_stop import install as install_time_stop
@@ -99,7 +111,7 @@ def prepare(game, destination, profile, *, windows=False, proton=None, steam=Non
         scene_quality.install(stage)
         install_registration(stage)
         client_tls.configure_environment({}, stage, json.loads(manifest_path.read_text()))
-        if windows and resource_tree_facts(game) != source_facts:
+        if windows and resource_tree_facts(game, **inventory_options) != source_facts:
             raise ValueError('Game resources changed during client preparation')
         atomic_write(client/'steam_appid.txt', b'444200\n')
         if windows:

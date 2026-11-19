@@ -119,7 +119,7 @@ class Motion:
 
 @dataclass
 class GroundMotion:
-    """Optional planar skid state created only by an experimental tank impact."""
+    """Optional planar and yaw momentum carried between ground steps."""
     velocity: tuple | None = None
     yaw_rate: float = 0.
     active: bool = False
@@ -453,6 +453,7 @@ class SupportLayout:
 class CollisionWorld:
     # A private timeline can bound its active hull without modifying map assets.
     movement_circle = None  # (entity, center_x, center_z, radius)
+    open_map_borders = frozenset()
     SKIN = .008
     STEP = .06
     GRAVITY = 9.81
@@ -468,7 +469,8 @@ class CollisionWorld:
     # rigid for now; its small overlap with a drivable surface represents the
     # suspension travel of the road wheels inside it, never a wall contact.
     SUSPENSION_TRAVEL = .10
-    SUSPENSION_OMEGA = 32.
+    # Give heave and hull attitude time to follow abrupt changes in grade.
+    SUSPENSION_OMEGA = 26.
     SUSPENSION_ANGULAR_OMEGA = 12.
     # Vertical speed by which the ground may fall away from the gravity-bound
     # hull before it separates. Smaller crest/kink hops (under ~5 cm) are
@@ -514,9 +516,12 @@ class CollisionWorld:
     DYNAMIC_FALL_GAP_STEPS = 60
     # Explicit local impact-layer parameters. They are arena-wide sandbox
     # rules, not inferred from MKM codes or the unlabelled XML resistance rows.
-    GROUND_IMPACT_RESTITUTION = .08
+    GROUND_IMPACT_RESTITUTION = 0.
     GROUND_IMPACT_FRICTION = .50
     GROUND_IMPACT_MIN_CLOSING_SPEED = .05
+    RAM_TRACK_SPEED_RETENTION = .65
+    RAM_TRACK_YAW_RETENTION = .50
+    RAM_REARM_CLEAR_STEPS = 15
     # Track side grip is stronger than hull-on-hull impact friction.
     GROUND_LATERAL_GRIP = 1.80 * GRAVITY
     DYNAMIC_RECOVER_AFTER = 2.5
@@ -548,6 +553,8 @@ class CollisionWorld:
     WALL_RECOIL_RESTITUTION = .15
     WALL_RECOIL_MAX_SPEED = 1.
     WALL_RECOIL_REARM_DISTANCE = .25
+    WALL_GLANCE_YAW_RATE = math.radians(125.)
+    ROCK_IMPACT_MIN_SPEED = 3.
 
     def __init__(self, assets, terrain, player_position=None, target_position=None, *, vehicles=None,
                  incremental=False, vehicle_assets=None, experimental_6dof=None,
@@ -589,6 +596,7 @@ class CollisionWorld:
         self.last_contact = None
         self.last_wall_recoil = None
         self._wall_recoil_latches = {}
+        self._wall_glances = {}
         self.trace_dynamic_contacts = os.environ.get('SOLBREAKER_DRIVE_TRACE') == '1'
         self.dynamic_contact_trace = {}
         self.last_reject_reason = None
@@ -636,6 +644,9 @@ class CollisionWorld:
         self.ground_mass_properties = {}
         self.last_ground_impacts = ()
         self.ground_contact_pairs = frozenset()
+        self._ground_ram_clear_steps = {}
+        self.air_ram_impacts = {}
+        self._air_tank_contacts = set()
         self._synced = {}
         self._support_layouts = {}
         self._support_ranks = {}
@@ -1069,8 +1080,13 @@ class CollisionWorld:
 
     def _tank(self, position, group, entity=None):
         assets = self.assets_for(entity)
-        cached = self._kinematic_shapes.get(id(assets))
-        if cached is None or cached[0] is not assets:
+        # Bullet retains shapes until the world disconnects. Polygon targets
+        # reuse their stock shapes by descriptor while releasing scene meshes.
+        key = getattr(assets, 'practice_shape_key', None)
+        owner = key if key is not None else assets
+        cache_key = key if key is not None else id(assets)
+        cached = self._kinematic_shapes.get(cache_key)
+        if cached is None:
             shapes, names = [], []
             proxies = getattr(assets, 'contact_proxies', None)
             if proxies:
@@ -1082,7 +1098,7 @@ class CollisionWorld:
                     names.append(name)
                     shapes.append(bullet.createCollisionShape(bullet.GEOM_MESH,
                         fileName=assets.mesh_files.mesh(verts), physicsClientId=self.cid))
-            cached = self._kinematic_shapes[id(assets)] = (assets, shapes, names)
+            cached = self._kinematic_shapes[cache_key] = (owner, shapes, names)
         _, shapes, names = cached
         hull = names.index('hull')
         links = [(name, shape) for name,shape in zip(names,shapes) if name != 'hull']
@@ -1809,6 +1825,7 @@ class CollisionWorld:
                     before[entity] = (center, rotation.ravel(), linear, angular)
                 result = self._rapier.step(sub_dt)
                 final_contacts = self._rapier_contacts(result['contacts'], sub_dt)
+                self._record_air_rams(before, final_contacts)
                 for entity, dynamic in list(self.dynamic_bodies.items()):
                     state = result['states'][str(entity)]
                     orientation = state['orientation']
@@ -1915,6 +1932,7 @@ class CollisionWorld:
         else:
             bullet.resetBaseVelocity(dynamic.body, com_velocity, angular, physicsClientId=self.cid)
         state.velocity, state.grounded = velocity, False
+        self._wall_glances.pop(entity,None)
         self._synced[entity] = (pose, state)
         return True
 
@@ -1932,6 +1950,19 @@ class CollisionWorld:
             dynamic = self.dynamic_bodies[entity]
             bullet.changeDynamics(dynamic.body, -1, linearDamping=linear_damping, physicsClientId=self.cid)
             dynamic.restore_air_damping = True
+        return True
+
+    def add_airborne_velocity(self, entity, delta):
+        state = self.motion[entity]
+        if state.grounded:
+            return False
+        if entity in self.dynamic_bodies:
+            return self.add_flight_velocity(entity, delta)
+        # Keep swept flight and its stored spin until the usual dynamic handoff.
+        state.velocity = tuple(current + extra for current, extra in zip(state.velocity, delta))
+        if entity in self.pending_dynamics:
+            pose, _, angular = self.pending_dynamics[entity]
+            self.pending_dynamics[entity] = pose, state.velocity, angular
         return True
 
     def _constrain_dynamic_pose(self, entity, pose, velocity, rotation):
@@ -2073,6 +2104,7 @@ class CollisionWorld:
                             for key in sorted(keys):
                                 self.destroy(key, direction)
                     self._record_fall_contacts(entity,dynamic,before[entity],contacts)
+                self._record_air_rams(before, current_contacts, bullet_bodies=True)
                 previous_contacts = {} if contacts_changed else current_contacts
         for entity, dynamic in list(self.dynamic_bodies.items()):
             contacts = previous_contacts.get(entity)
@@ -2230,6 +2262,69 @@ class CollisionWorld:
             self.dynamic_fall_peak[entity] = peak+best['fraction']
             self.fall_impacts.append(best)
 
+    def _ram_body_snapshot(self, entity, pose, velocity, angular):
+        props = self.ground_mass_properties[entity]
+        basis = matrix(pose.yaw, pose.pitch, pose.roll)
+        offset = basis @ props.center_of_mass
+        return (np.asarray(pose.position) + offset, basis,
+                np.asarray(velocity) + np.cross(angular, offset), angular)
+
+    def _record_air_rams(self, before, contacts, *, bullet_bodies=False, swept=False):
+        """Measure damage from hull contact before the flight solver dissipates it."""
+        if not self.experimental_ground_impacts:
+            return
+        dynamic_ids = ({body.body: entity for entity, body in self.dynamic_bodies.items()}
+                       if bullet_bodies else {})
+        grounded = {}
+
+        def contact_motion(entity, point, normal):
+            if entity in before:
+                center, basis, linear, angular = before[entity]
+                props = self.dynamic_bodies.get(entity) or self.ground_mass_properties[entity]
+            else:
+                props = self.ground_mass_properties[entity]
+                if entity not in grounded:
+                    omega = self.ground_commands.get(entity, (None, 0.))[1]
+                    grounded[entity] = self._ram_body_snapshot(entity, self.poses[entity],
+                                                                 self.motion[entity].velocity,
+                                                                 (0., omega, 0.))
+                center, basis, linear, angular = grounded[entity]
+            arm = np.asarray(point) - center
+            angular_arm = np.cross(arm, normal) @ np.asarray(basis).reshape(3, 3)
+            inverse_mass = 1. / props.mass + float(np.sum(angular_arm**2 / props.inertia_diagonal))
+            normal_speed = float(np.dot(linear, normal) + np.dot(angular, np.cross(arm, normal)))
+            return normal_speed, inverse_mass
+
+        for entity, rows in contacts.items():
+            for contact in rows:
+                body = contact[2]
+                other = dynamic_ids.get(body, self.body_entities.get(body))
+                if (other is None or other == entity or contact[8] > self.SKIN
+                        or (not swept and contact[9] <= 0.)):
+                    continue
+                pair = (min(entity, other), max(entity, other))
+                self._air_tank_contacts.add(pair)
+                if pair in self.ground_contact_pairs:
+                    continue
+                normal = np.asarray(contact[7])
+                speed_a, inverse_a = contact_motion(entity, contact[5], normal)
+                speed_b, inverse_b = contact_motion(other, contact[6], normal)
+                closing = speed_a - speed_b
+                if not math.isfinite(closing) or closing > -self.RAM_MIN_CLOSING_SPEED:
+                    continue
+                energy = .5 * closing**2 / (inverse_a + inverse_b)
+                previous = self.air_ram_impacts.get(pair)
+                if previous is not None and previous['ram_energy'] >= energy:
+                    continue
+                forward = entity == pair[0]
+                share = (inverse_a if forward else inverse_b) / (inverse_a + inverse_b)
+                self.air_ram_impacts[pair] = dict(
+                    entity_a=pair[0], entity_b=pair[1], airborne=True, ram=True,
+                    closing_speed=closing, separation=contact[8],
+                    point_a=tuple(contact[5 if forward else 6]),
+                    point_b=tuple(contact[6 if forward else 5]),
+                    ram_energy=energy, ram_energy_a=energy*share, ram_energy_b=energy*(1.-share))
+
     def _begin_fall(self, entity, pose):
         self._fall_episodes[entity] = self._fall_episodes.get(entity,0)+1
         self._fall_peaks[entity] = float(pose.position[1])
@@ -2384,6 +2479,7 @@ class CollisionWorld:
         self._lean_states.clear()
         self._drive_blocked.clear()
         self._wall_recoil_latches.clear()
+        self._wall_glances.clear()
         self.last_wall_recoil = None
         self._carrying_supported.clear()
         self._contact_support_cache.clear()
@@ -2472,6 +2568,7 @@ class CollisionWorld:
         self._lean_states.pop(entity, None)
         self._drive_blocked.pop(entity, None)
         self._wall_recoil_latches.pop(entity, None)
+        self._wall_glances.pop(entity, None)
         if state.grounded:
             self._seed_support_memory(entity, road, state.velocity[1])
             if lean is not None:
@@ -2538,6 +2635,11 @@ class CollisionWorld:
                 self.track_links[entity] = old_tracks
                 if body is not None:
                     bullet.removeBody(body, physicsClientId=self.cid)
+
+    def release_practice_scene(self, assets):
+        self._support_layouts.pop(id(assets), None)
+        self._mass_models.pop(id(assets), None)
+        assets.close()
 
     def set_turret(self, yaw, entity=None, pitch=0.):
         entity = self.primary_id if entity is None else entity
@@ -3196,9 +3298,21 @@ class CollisionWorld:
             return True, []
         return False, points
 
-    def _inside(self, pose, entity=None):
+    def sandbox_terrain_bounds(self):
+        terrain = self.terrain
+        # The terrain mesh ends at its last sample, one cell before MAX_X/Z.
+        return (terrain.MIN, terrain.MIN_Z, terrain.MAX_X - terrain.WIDTH / terrain.size,
+                terrain.MAX_Z - terrain.DEPTH / terrain.size)
+
+    def movement_bounds(self, entity):
+        if entity in self.open_map_borders:
+            return self.sandbox_terrain_bounds()
+        return self.assets.bounds
+
+    def _inside(self, pose, entity=None, *, bounds=None):
         assets = self.assets_for(entity)
-        lo_x,lo_z,hi_x,hi_z = self.assets.bounds
+        lo_x,lo_z,hi_x,hi_z = bounds if bounds is not None else self.movement_bounds(
+            self.primary_id if entity is None else entity)
         # Use the physical chassis vertices, not the entity's center, at the map edge.
         cached = self._chassis_bounds.get(id(assets))
         if cached is None or cached[0] is not assets:
@@ -3248,7 +3362,7 @@ class CollisionWorld:
     def _border_pose(self, pose, entity, *, flight_bounds=None, rotation=None):
         """Project the hull onto the playable rectangle, independently on both axes."""
         x, y, z = pose.position
-        low_x, low_z, high_x, high_z = self.assets.bounds
+        low_x, low_z, high_x, high_z = self.movement_bounds(entity)
         if flight_bounds is None:
             if self._inside(pose, entity):
                 return pose
@@ -3431,6 +3545,9 @@ class CollisionWorld:
             if not (math.isfinite(dt) and dt > 0):
                 raise ValueError('Invalid motion interval')
             state = self._motion_state(entity)
+            start = self.poses[entity]
+            incoming = state.velocity
+            pitching = state.suspension_velocity[1]
             if state.grounded and entity not in self.dynamic_bodies:
                 clipped = self._border_drive(entity, distance, yaw_delta, planar_displacement)
                 if clipped != planar_displacement:
@@ -3464,9 +3581,8 @@ class CollisionWorld:
                         x, _, z = self.poses[entity].position
                         travel = math.hypot(*planar_displacement) if planar_displacement is not None else abs(distance)
                         near_circle = math.hypot(x-cx, z-cz) + travel >= radius - self.SKIN
-                    if near_circle:
-                        # Native drive replicas know the map rectangle. The
-                        # Python solver checks the circle on each contact step.
+                    if near_circle or entity in self.open_map_borders:
+                        # Native solvers use the original map rectangle.
                         native = None
                     elif self._native_physics is not None:
                         native = self._native_physics.move(self,entity,distance,yaw_delta,dt,state,
@@ -3482,11 +3598,196 @@ class CollisionWorld:
                                                        planar_displacement)
                     else:
                         pose,moved,rest = native
+                    if (state.grounded and self.experimental_6dof
+                            and not self.wall_trampoline and self._has_suspension(entity)):
+                        missing_yaw = math.remainder(start.yaw+yaw_delta-pose.yaw,math.tau)
+                        requested_yaw = math.copysign(min(abs(yaw_delta),abs(missing_yaw)),yaw_delta)
+                        travel = (abs(distance) if planar_displacement is None
+                                  else math.hypot(*planar_displacement))
+                        if (travel <= 1.5*dt and abs(requested_yaw) > 1e-6
+                                and missing_yaw*yaw_delta > 0.):
+                            pose, pivoted = self._pivot_at_map_contact(entity,pose,requested_yaw)
+                            moved |= pivoted
+                        if self.last_contact == 'map' or entity in self._wall_glances:
+                            pose, slipped = self._map_contact_response(
+                                entity, start, pose, distance, yaw_delta, dt, state,
+                                incoming, pitching, planar_displacement)
+                            moved |= slipped
+                if not state.grounded:
+                    self._wall_glances.pop(entity,None)
                 if not state.grounded and rest > 1e-9 and entity not in self.dynamic_bodies:
                     moved |= self._fly(entity,rest,state)
                 pose = self.poses[entity]
         self._synced[entity] = (pose,state)
         return pose,moved
+
+    def _pivot_at_map_contact(self, entity, pose, turn):
+        """A blocked low-speed turn can rotate about the corner touching the map."""
+        origin = pose
+        steps = math.ceil(abs(turn)/math.radians(.75))
+        step = turn/steps
+        c,s = math.cos(step),math.sin(step)
+        road = self._road_poses[entity]
+        for _ in range(steps):
+            x,y,z = pose.position
+            yaw = math.remainder(pose.yaw+step,math.tau)
+            rotated = Pose(pose.position,yaw,pose.pitch,pose.roll)
+            points = self._contacts(rotated,entity,suspension=True)
+            if not points or any(p[2] not in self.map_bodies or p[2] in self.breakable_bodies
+                                 for p in points):
+                break
+            # Try the closest corners first. Rotating the centre around the
+            # vehicle-side contact keeps that part of the hull at its fulcrum.
+            for point in sorted(points,key=lambda p:p[8])[:4]:
+                ax,_,az = point[5]
+                dx,dz = ax+c*(x-ax)+s*(z-az)-x,az-s*(x-ax)+c*(z-az)-z
+                nx,_,nz = point[7]
+                if math.hypot(nx,nz) < .25 or dx*nx+dz*nz < -self.SKIN:
+                    continue
+                for clearance in (0.,self.SKIN,2*self.SKIN):
+                    sx,sz = dx+clearance*nx,dz+clearance*nz
+                    _,rise,_ = self._road_velocity(road,sx,sz)
+                    candidate = Pose((x+sx,y+rise,z+sz),yaw,pose.pitch,pose.roll)
+                    if (self._clip_circle(entity,candidate)[0] is candidate
+                            and self._valid(candidate,pose,entity=entity,suspension=True)[0]):
+                        pose = candidate
+                        break
+                if pose is candidate:
+                    break
+            else:
+                break
+        self.set_pose(self.bodies[entity],pose)
+        self.poses[entity] = pose
+        return pose,pose is not origin
+
+    def _map_contact_response(self, entity, start, pose, distance, yaw_delta, dt, state,
+                              incoming, pitching, displacement):
+        """Recover the surface limiting the ground solver's last move."""
+        yaw = start.yaw + yaw_delta
+        dx,dz = displacement if displacement is not None else (
+            math.sin(yaw)*distance,math.cos(yaw)*distance)
+        travel = math.hypot(dx,dz)
+        guide = self._wall_glances.pop(entity,None)
+        if travel < 1e-6:
+            return pose,False
+        fx,fz = dx/travel,dz/travel
+        x,y,z = pose.position
+        native = self._native_physics
+        if native is not None:
+            native.sync(self,(entity,))
+            # A wall can briefly clear the nose as the hull turns. Keep the
+            # same measured face in range across that gap and mesh seams.
+            skin = max(.45 if guide else 0.,min(.35,travel)+self.SKIN)
+            points = native.query(operation='contacts',entity=entity,skin=skin)
+        else:
+            sx,sz = (fx*travel,fz*travel) if guide is None else (-.16*guide[0],-.16*guide[2])
+            probe = Pose((x+sx,y,z+sz),pose.yaw,pose.pitch,pose.roll)
+            points = self._contacts(probe,entity,suspension=True)
+            self.set_pose(self.bodies[entity],pose)
+        if not points or any(p[2] not in self.map_bodies or p[2] in self.breakable_bodies
+                             for p in points):
+            return pose,False
+        walls = []
+        for p in sorted(points,key=lambda point:point[8])[:8]:
+            px,py,pz = p[6]
+            normal = p[7]
+            # At the foot of a boulder the closest point can be on its bottom
+            # edge. Probe just beyond that edge, close enough to use the same face.
+            for offset in (0.,2*self.SKIN):
+                rx,rz = px+fx*offset,pz+fz*offset
+                face = self._static_ray((rx,py+.12,rz),(rx,py-.12,rz))
+                if (face[0] in self.map_bodies and face[0] not in self.breakable_bodies
+                        and .18 < face[4][1] < .78
+                        and abs(sum((a-b)*n for a,b,n in zip(p[6],face[3],face[4]))) <= self.SKIN*3):
+                    normal = face[4]
+                    break
+            nx,ny,nz = normal
+            close = -(fx*nx+fz*nz)
+            if (guide is not None and abs(ny) <= .18 and close >= -.08
+                    and nx*guide[0]+nz*guide[2] >= .95):
+                return self._glance_along_wall(entity,start,pose,state,guide[:3],dx,dz,
+                                               dt,distance,guide[3],yaw_delta)
+            if self.last_contact == 'map' and .18 < ny < .78 and close >= .35:
+                speed = min(travel/dt,incoming[0]*fx+incoming[2]*fz)
+                if pitching > -.4 and speed*close >= self.ROCK_IMPACT_MIN_SPEED:
+                    pose = self._pitch_against_rock(entity,pose,state,p[6],speed*close,ny)
+                return pose,False
+            if self.last_contact == 'map' and abs(ny) <= .18 and .02 <= close <= .65:
+                walls.append(normal)
+        if walls:
+            return self._glance_along_wall(entity,start,pose,state,walls[0],dx,dz,
+                                           dt,distance,0.,yaw_delta)
+        return pose,False
+
+    def _glance_along_wall(self, entity, start, pose, state, normal, dx, dz, dt, distance,
+                          previous_rate, requested_yaw):
+        nx,_,nz = normal
+        length = math.hypot(nx,nz)
+        nx,nz = nx/length,nz/length
+        tx,tz = -nz,nx
+        along = dx*tx+dz*tz
+        if along < 0.:
+            tx,tz,along = -tx,-tz,-along
+        if along < 1e-6:
+            return pose,False
+        target = math.atan2(tx,tz) + (math.pi if distance < 0. else 0.)
+        angle = math.remainder(target-pose.yaw,math.tau)
+        if abs(angle) > math.pi/3 or requested_yaw*angle < -1e-5:
+            return pose,False
+        target_rate = min(self.WALL_GLANCE_YAW_RATE,abs(angle)*24.)
+        rate = target_rate+(abs(previous_rate)-target_rate)*math.exp(-28.*dt)
+        turn = math.copysign(min(abs(angle),rate*dt),angle)
+        covered = max(0.,(pose.position[0]-start.position[0])*tx
+                        +(pose.position[2]-start.position[2])*tz)
+        blocked = self.last_contact == 'map'
+        remaining = max(0.,along-covered) if blocked else 0.
+        steps = max(1,math.ceil(remaining/self.STEP),math.ceil(abs(turn)/math.radians(.75)))
+        road = self._road_poses[entity]
+        resolved = pose
+        for _ in range(steps):
+            x,y,z = pose.position
+            sx,sz = tx*remaining/steps,tz*remaining/steps
+            _,rise,_ = self._road_velocity(road,sx,sz)
+            yaw = math.remainder(pose.yaw+turn/steps,math.tau)
+            candidate = Pose((x+sx,y+rise,z+sz),yaw,pose.pitch,pose.roll)
+            if (self._clip_circle(entity,candidate)[0] is not candidate
+                    or not self._valid(candidate,pose,entity=entity,suspension=True)[0]):
+                break
+            pose = candidate
+        self.set_pose(self.bodies[entity],pose)
+        self._wall_glances[entity] = (nx,0.,nz,
+            math.remainder(pose.yaw-resolved.yaw,math.tau)/dt)
+        if pose is resolved:
+            return pose,False
+        self.poses[entity] = pose
+        travelled = math.hypot(pose.position[0]-resolved.position[0],pose.position[2]-resolved.position[2])
+        if blocked and covered+travelled:
+            speed = min(along,covered+travelled)/dt
+            state.velocity = self._road_velocity(road,tx*speed,tz*speed)
+        return pose, bool(travelled)
+
+    def _pitch_against_rock(self, entity, pose, state, point, closing, ny):
+        x,y,z = pose.position
+        px,py,pz = point
+        nose = (px-x)*math.sin(pose.yaw)+(pz-z)*math.cos(pose.yaw)
+        if (nose < self.assets_for(entity).support[1]*.55
+                or py < y-self.SKIN or py-y > self.assets_for(entity).support[1]):
+            return pose
+        # A forward-facing inclined contact pushes up at the nose. Validate
+        # the first part of the pitch with the rear support kept in place.
+        lift = math.radians(min(3.5,closing*ny*.8))
+        tail = self._support_layout(entity).patch
+        for factor in (1.,.5,.25):
+            pitch = pose.pitch-lift*factor
+            rise = tail*(math.sin(pose.pitch)-math.sin(pitch))
+            candidate = Pose((x,y+rise,z),pose.yaw,pitch,pose.roll)
+            if self._valid(candidate,pose,entity=entity,suspension=True)[0]:
+                hy,pr,rr = state.suspension_velocity
+                state.suspension_velocity = (hy,min(pr,-lift*14.),rr)
+                self.poses[entity] = pose = candidate
+                break
+        self.set_pose(self.bodies[entity],pose)
+        return pose
 
     def begin_ground_step(self):
         """Reset per-tick inputs for the opt-in planar contact solver."""
@@ -3497,6 +3798,8 @@ class CollisionWorld:
             self.ground_track_rates.clear()
             self.ground_contacts.clear()
             self.last_ground_impacts = ()
+            self.air_ram_impacts.clear()
+            self._air_tank_contacts.clear()
             self._sensor_aabb_cache = {}
 
     def _record_ground_contacts(self, entity, points, candidate):
@@ -3653,20 +3956,15 @@ class CollisionWorld:
         for entity, (velocity,yaw_rate) in self.ground_commands.items():
             state[entity] = (velocity,yaw_rate)
 
+        # A tank can hand back to the track solver in the tick it was hit.
+        # That pair must not generate a second ram on the ground.
+        if self.air_ram_impacts:
+            self.ground_contact_pairs = self.ground_contact_pairs.union(self.air_ram_impacts)
         pairs = sorted(self._ground_contact_pairs().items())
         from .impact_native import try_ground_impacts
         native = try_ground_impacts(self,state,pairs)
         if native is not None:
-            updates,impacts,touching = native
-            for entity,(velocity,yaw_rate) in updates.items():
-                self.ground_motion[entity] = GroundMotion(velocity,yaw_rate,True)
-            self.ground_commands.clear()
-            self.ground_contact_pairs = frozenset(touching)
-            limit = self.GROUND_IMPACT_TRACE_LIMIT
-            self.last_ground_impacts = (tuple(impacts[:limit])
-                                        + tuple(impact for impact in impacts[limit:]
-                                                if impact.get('ram')))
-            return updates
+            return self._commit_ground_impacts(*native)
 
         def geometry(entity, point, pose):
             props = self.ground_mass_properties[entity]
@@ -3748,8 +4046,6 @@ class CollisionWorld:
                 wb -= t_b*tangent_impulse/inertia_b
 
             state[a],state[b] = (va,wa),(vb,wb)
-            self.ground_motion[a] = GroundMotion(va,wa,True)
-            self.ground_motion[b] = GroundMotion(vb,wb,True)
             updates[a],updates[b] = (va,wa),(vb,wb)
             impacts.append(dict(entity_a=a,entity_b=b,
                 point_a=tuple(float(x) for x in point_a),
@@ -3763,8 +4059,35 @@ class CollisionWorld:
                 ram=ram,ram_energy=ram_energy,ram_energy_a=ram_energy*share_a,
                 ram_energy_b=ram_energy*(1-share_a)))
 
+        return self._commit_ground_impacts(updates,impacts,touching)
+
+    def _commit_ground_impacts(self, updates, impacts, touching):
+        # Both sets of tracks scrub speed on a fresh ram. Apply it once per
+        # tank across the contact batch, after measuring the energy for HP.
+        rams = {(impact['entity_a'], impact['entity_b']) for impact in impacts if impact.get('ram')}
+        rammed = {entity for pair in rams for entity in pair}
+        for entity,(velocity,yaw_rate) in updates.items():
+            if entity in rammed:
+                velocity = tuple(v*self.RAM_TRACK_SPEED_RETENTION for v in velocity)
+                track_rate = self.ground_track_rates.get(entity,0.)
+                yaw_rate = track_rate+(yaw_rate-track_rate)*self.RAM_TRACK_YAW_RETENTION
+                updates[entity] = velocity,yaw_rate
+            self.ground_motion[entity] = GroundMotion(velocity,yaw_rate,True)
         self.ground_commands.clear()
-        self.ground_contact_pairs = frozenset(touching)
+        # A swept contact can disappear for a few ticks as the hulls shift
+        # and immediately touch again. Resolve those impulses, but rearm ram
+        # damage and track braking only after sustained separation.
+        touching = touching | self._air_tank_contacts
+        for pair in rams | self.air_ram_impacts.keys():
+            self._ground_ram_clear_steps[pair] = 0
+        for pair, clear in tuple(self._ground_ram_clear_steps.items()):
+            if pair in touching:
+                self._ground_ram_clear_steps[pair] = 0
+            elif clear+1 >= self.RAM_REARM_CLEAR_STEPS:
+                del self._ground_ram_clear_steps[pair]
+            else:
+                self._ground_ram_clear_steps[pair] = clear+1
+        self.ground_contact_pairs = frozenset(touching | self._ground_ram_clear_steps.keys())
         limit = self.GROUND_IMPACT_TRACE_LIMIT
         # The trace is bounded, but a ram carries HP consequences downstream.
         self.last_ground_impacts = (tuple(impacts[:limit])
@@ -4569,6 +4892,10 @@ class CollisionWorld:
                     candidate = ground if landing else Pose((x+dx,y+dy,z+dz),pose.yaw,pose.pitch,pose.roll)
                     valid,points = self._valid(candidate,pose,(dx,dz) if dx or dz else None,
                                                entity=entity,climb=False,suspension=suspension)
+                if (not valid and self.experimental_ground_impacts
+                        and any(point[2] in self.body_entities for point in points)):
+                    snapshot = self._ram_body_snapshot(entity, pose, (vx, vy, vz), (0., 0., 0.))
+                    self._record_air_rams({entity: snapshot}, {entity: points}, swept=True)
                 if valid or not (dx or dz):
                     break
                 self.last_contact = self._contact_kind(points) if points else 'slope_or_border'

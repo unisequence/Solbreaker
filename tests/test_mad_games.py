@@ -20,7 +20,7 @@ from solbreaker.battle import (SOUND_ENEMY_SIGHTED, SOUND_PLAYER_SIGHTED, active
                                world_motion_messages)
 from solbreaker.motion import vehicle_snapshot
 from solbreaker.battle_settings import TITLE, decode, packed_recipe
-from solbreaker.consumables import ACTIVE, COOLDOWN
+from solbreaker.consumables import ACTIVE, COOLDOWN, READY, ConsumableSpec, ConsumableState
 from solbreaker.native_rooms import room_options
 from solbreaker.modules import TrackSpec, TrackState
 from solbreaker.mercury import read_blob
@@ -207,7 +207,7 @@ class MadGamesTests(TestCase):
         arena.started = 1.
         arena.simulation_time = 2.
         self.assertTrue(arena._activate_consumable(owner, state, 2.))
-        self.assertEqual((owner.engine_factor, owner.rotation_factor), (4., .75))
+        self.assertEqual((owner.engine_factor, owner.rotation_factor), (4., 1.10))
         self.assertEqual(arena._drive_speed_factor(owner), 2.)
         self.assertEqual(arena._terrain_mobility(owner).resistance, .4)
         self.assertEqual(arena.equipment_state(owner)[0][:2], (24, ACTIVE))
@@ -221,6 +221,28 @@ class MadGamesTests(TestCase):
         self.assertEqual(arena._drive_speed_factor(owner), 1.)
         self.assertEqual(arena.equipment_state(owner)[0][:2], (24, COOLDOWN))
         self.assertTrue(arena._activate_consumable(owner, state, 32.))
+
+    def test_timed_boost_clears_the_public_indicator_even_when_already_ready(self):
+        arena = self.arena(mad_games.MODE)
+        player = arena.players[1]
+        tank = arena.vehicle_for(1)
+        regular = ConsumableSpec('afterburning', 14, (14 << 8) | 0xfb, 5., 1.)
+        regular_state = ConsumableState(regular)
+        fuel_state = tank.consumables[3]
+        tank.consumables = (regular_state, fuel_state)
+        arena.started = 1.
+        self.assertTrue(arena._activate_consumable(tank, regular_state, 2.))
+        self.assertTrue(arena._activate_consumable(tank, fuel_state, 2.))
+        arena.simulation_time = 7.
+        arena._consumables(tank, 7.)
+        ended = next(event for event in reversed(arena.events)
+                     if event.kind == 'consumable_state' and event.data['ident'] == 14)
+        self.assertEqual(ended.data['state'], READY)
+        stop = active_equipment_message(arena, tank, ((14, READY, 2., 5.),))
+        fuel = active_equipment_message(arena, tank)
+        self.assertIn(struct.pack('<BBdf', 10, COOLDOWN, 2.-arena.epoch, 0.), stop)
+        self.assertIn(struct.pack('<BBdf', 55, ACTIVE, 2.-arena.epoch, 15.), fuel)
+        self.assertTrue(event_messages(arena, player, (ended,)).endswith(stop + fuel))
 
     def test_high_octane_protects_existing_track_health_during_the_active_window(self):
         arena = self.arena(mad_games.MODE)
@@ -263,26 +285,34 @@ class MadGamesTests(TestCase):
             motion.velocity = (0., 0., distance/dt)
             return replace(vehicle.pose, position=(x, y, z+distance)), True
 
-        arena.world = Mock(motion={vehicle.entity_id: motion})
+        arena.world = Mock(spec=['motion', 'poses', 'ground_motion', 'assets_for', 'move', 'close',
+                                 'advance_close'],
+                           motion={vehicle.entity_id: motion}, poses={vehicle.entity_id: vehicle.pose},
+                           ground_motion={})
+        arena.world.assets_for.return_value = None
         arena.world.move.side_effect = move
         return arena, vehicle, vehicle.consumables[3]
 
-    def test_accelerator_traverses_fifty_metres_in_the_selected_direction(self):
-        for flags, expected in ((0, 50.), (2, -50.)):
+    def test_accelerator_adds_one_impulse_and_coasts_after_the_effect(self):
+        for flags, direction in ((0, 1), (2, -1)):
             with self.subTest(flags=flags):
                 arena, vehicle, state = self.dash_arena()
                 vehicle.flags, vehicle.last_input = flags, 2.
+                vehicle.speed = 5. * direction
+                arena.world.motion[vehicle.entity_id].velocity = (0., 0., vehicle.speed)
                 self.assertIs(state.spec, mad_games.ACCELERATOR)
                 self.assertTrue(arena._activate_mad_dash(vehicle, state, 2.))
+                self.assertAlmostEqual(vehicle.speed, (5. + mad_games.DASH_VELOCITY_BOOST) * direction)
                 self.assertIn(struct.pack('<BBdf', 49, ACTIVE, 2.-arena.epoch, 1.15),
                               active_equipment_message(arena, vehicle))
-                for tick in range(1, 71):
+                for tick in range(1, 72):
+                    previous_speed = abs(vehicle.speed)
                     arena._drive(vehicle, 1./60, 2.+tick/60)
-                    if not vehicle.mad_dash_direction:
-                        break
-                self.assertAlmostEqual(vehicle.pose.position[2], expected, places=6)
+                    self.assertLess(abs(vehicle.speed), previous_speed)
+                    self.assertLess(previous_speed - abs(vehicle.speed), 1.)
+                self.assertGreater(direction * vehicle.pose.position[2], 30.)
                 self.assertEqual(state.state_at(3.16).state, COOLDOWN)
-                self.assertEqual(abs(vehicle.speed), mad_games.DASH_EXIT_SPEED)
+                self.assertGreater(abs(vehicle.speed), 15.)
 
     def test_accelerator_stops_at_a_blocked_drive_step(self):
         arena, vehicle, state = self.dash_arena()
@@ -290,9 +320,9 @@ class MadGamesTests(TestCase):
         arena.world.move.return_value = (vehicle.pose, False)
         self.assertTrue(arena._activate_mad_dash(vehicle, state, 2.))
         self.assertFalse(arena._drive(vehicle, 1./60, 2.+1./60))
-        self.assertEqual(vehicle.mad_dash_direction, 0)
+        self.assertEqual(vehicle.speed, 0.)
         self.assertEqual(vehicle.pose.position[2], 0.)
-        self.assertEqual(state.state_at(2.1).state, COOLDOWN)
+        self.assertEqual(state.state_at(2.1).state, ACTIVE)
 
     def test_accelerator_protects_against_the_ram_that_stops_it(self):
         arena = self.arena(mad_games.MODE)
@@ -314,6 +344,53 @@ class MadGamesTests(TestCase):
         arena._ground_impact(impact, 2.6)
         self.assertEqual(source.health, source.max_health - 115)
 
+    def test_only_a_high_energy_lethal_ram_detonates_and_pushes(self):
+        for closing_speed, health, detonation in ((-55., 400, True), (-12., 400, False), (-55., 10_000, False)):
+            with self.subTest(closing_speed=closing_speed, health=health):
+                arena = self.arena(mad_games.MODE)
+                source, victim = arena.vehicle_for(1), arena.vehicle_for(2)
+                for account in (1, 2):
+                    arena.ready(account, 1.)
+                source.mad_passive = victim.mad_passive = None
+                source.health = source.max_health = 10_000
+                victim.health = victim.max_health = health
+                source.pose = replace(source.pose, position=(0., 0., 6.))
+                victim.pose = replace(victim.pose, position=(0., 0., 0.))
+                arena.world = Mock()
+                arena.world.add_ground_velocity.return_value = True
+                arena.drain_events()
+                impact = dict(entity_a=source.entity_id, entity_b=victim.entity_id, ram=True,
+                              closing_speed=closing_speed, airborne=True,
+                              ram_energy_a=1_000_000., ram_energy_b=9_000_000.)
+                arena._ground_impact(impact, 2.)
+                events = arena.drain_events()
+                kinds = [event.kind for event in events]
+                self.assertEqual('ram_detonated' in kinds, detonation)
+                self.assertEqual('ram_shockwave' in kinds, detonation)
+                if detonation:
+                    self.assertEqual(victim.killer, source.entity_id)
+                    self.assertLess(kinds.index('ram_detonated'), kinds.index('killed'))
+                    self.assertLess(kinds.index('killed'), kinds.index('ram_turret_created'))
+                    pushed, vx, vz = arena.world.add_ground_velocity.call_args.args
+                    self.assertEqual((pushed, vx), (source.entity_id, 0.))
+                    self.assertGreater(vz, 0.)
+                    wire = event_messages(arena, arena.players[1], events)
+                    self.assertIn(b'\x12' + struct.pack('<IBII', victim.entity_id, 61, source.entity_id, 0), wire)
+                    turret = arena.ram_turrets[victim.entity_id]
+                    self.assertIn(struct.pack('<IH', turret.entity, 8), wire)
+                    self.assertGreater(turret.pose_at(3.)[0][1], turret.origin[1])
+                    arena._retire_ram_turret(victim.entity_id)
+                    self.assertEqual(arena.drain_events()[-1].data['turret_id'], turret.entity)
+                    self.assertNotIn(victim.entity_id, arena.ram_turrets)
+                    self.assertIn(victim.entity_id, arena.ram_detached_hulls)
+                    arena.emit('ram_turret_restored', victim.entity_id)
+                    respawn = arena.drain_events()
+                    for account in (1, 2):
+                        wire = event_messages(arena, arena.players[account], respawn)
+                        self.assertIn(b'TFS1TRRT' + struct.pack('<I', victim.entity_id), wire)
+                else:
+                    arena.world.add_ground_velocity.assert_not_called()
+
     def test_accelerator_preserves_momentum_if_the_tank_leaves_the_ground(self):
         arena, vehicle, state = self.dash_arena()
         motion = arena.world.motion[vehicle.entity_id]
@@ -327,8 +404,7 @@ class MadGamesTests(TestCase):
         arena.world.move.side_effect = launch
         self.assertTrue(arena._activate_mad_dash(vehicle, state, 2.))
         self.assertTrue(arena._drive(vehicle, 1./60, 2.+1./60))
-        self.assertEqual(vehicle.mad_dash_direction, 0)
-        self.assertAlmostEqual(vehicle.speed, mad_games.DASH_SPEED)
+        self.assertGreater(vehicle.speed, mad_games.DASH_VELOCITY_BOOST - 1.)
         self.assertTrue(any(event.kind == 'airborne' for event in arena.drain_events()))
 
     def test_accelerator_rejects_critical_tracks_without_consuming_cooldown(self):

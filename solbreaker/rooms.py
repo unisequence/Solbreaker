@@ -4,6 +4,7 @@ import json
 import re
 import secrets
 import time
+from .battle_setup import RoomLineup
 from .roster import TEAMS, TEAM_SIZE, ROOM_CAPACITY, WAITING
 from .map_catalog import map_team_capacity
 from .training_config import BATTLE_MODES, RoomBattleSettings
@@ -32,6 +33,7 @@ class Room:
     battles_count: int = 0
     wins: dict[int,int] = field(default_factory=lambda: {team:0 for team in TEAMS})
     bot_counts: tuple[int, int] = (0, 0)
+    lineup: RoomLineup = field(default_factory=RoomLineup)
     battle_mode: str = 'encounter'
     battle_settings: RoomBattleSettings = field(default_factory=RoomBattleSettings)
     # Only result IDs are retained, never worlds or departed player objects.
@@ -40,8 +42,11 @@ class Room:
     @property
     def active_bot_counts(self):
         capacity = map_team_capacity(self.map_id)
-        return tuple(max(0, min(count, capacity-sum(m.team == team for m in self.members.values())))
-                     for team, count in zip(TEAMS, self.bot_counts))
+        free = tuple(capacity-sum(m.team == team for m in self.members.values()) for team in TEAMS)
+        if self.lineup.custom:
+            return tuple(len(self.lineup.team_slots(team, available))
+                         for team, available in zip(TEAMS, free))
+        return tuple(max(0, min(count, available)) for count, available in zip(self.bot_counts, free))
 
 
 def room_bot_counts(values):
@@ -102,7 +107,7 @@ class RoomManager:
         return value
 
     def create(self,account,team=1,map_id=None,*,bot_counts=(0,0),battle_mode='encounter',
-               battle_settings=RoomBattleSettings()):
+               battle_settings=RoomBattleSettings(),lineup=None):
         team=self.team(team);self.hangar(account)
         if self.current(account):raise ValueError('Already in a room')
         if len(self.rooms)>=32:raise ValueError('Room limit reached')
@@ -116,7 +121,7 @@ class RoomManager:
             # Native prebattleID 0 means no room.
             if ident!='000000' and ident not in self.rooms:break
         room=Room(ident,account,{account:Member(account,team)},map_id=map_id,bot_counts=bot_counts,
-                  battle_mode=battle_mode,battle_settings=battle_settings)
+                  battle_mode=battle_mode,battle_settings=battle_settings,lineup=lineup or RoomLineup())
         self.rooms[ident]=room;self.memberships[account]=ident
         return room
 
@@ -208,7 +213,7 @@ class RoomManager:
         for target in list(room.members):self.leave(target)
 
     def rename(self,account,title,description,*,map_id=None,bot_counts=None,battle_mode=None,
-               battle_settings=None):
+               battle_settings=None,lineup=None):
         room=self.owned(account)
         if map_id is not None:
             map_id=self.validate_map_id(map_id)
@@ -224,6 +229,8 @@ class RoomManager:
             room.battle_mode=battle_mode
         if battle_settings is not None:
             room.battle_settings=battle_settings
+        if lineup is not None:
+            room.lineup=lineup
         room.title,room.description=title,description
         self.reset_ready(room)
         return room
@@ -231,8 +238,9 @@ class RoomManager:
     def set_bots(self,account,counts):
         room=self.owned(account)
         counts=room_bot_counts(counts)
-        if room.bot_counts!=counts:
+        if room.bot_counts!=counts or room.lineup.custom:
             room.bot_counts=counts
+            room.lineup=RoomLineup()
             self.reset_ready(room)
         return room
 
@@ -252,6 +260,8 @@ class RoomManager:
         options={'room_settings':room.battle_settings}
         if any(bot_counts):
             options['bot_counts']=bot_counts
+        if room.lineup.custom and any(bot_counts):
+            options['room_lineup']=room.lineup
         if room.battle_mode != 'encounter':
             options['room_mode'] = room.battle_mode
         arena=self.endpoint.start_shared([m.account_id for m in members],teams,map_id=room.map_id,**options)

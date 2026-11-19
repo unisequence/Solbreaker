@@ -13,14 +13,29 @@ GRAVITY_JUMP = 64
 FAST_RELOAD = 128
 TELEPORT = 256
 NEXT_TARGET, TOGGLE_TARGET_FIRE, CLEAR_TARGETS = 512, 1024, 2048
-PRACTICE_ACTIONS = NEXT_TARGET | TOGGLE_TARGET_FIRE | CLEAR_TARGETS
 RESTORE_HP = 4096
 BOSS_PICK_ROLE = 8192
 BOSS_RESPAWN = 16384
 GOD_MODE = 32768
 CHANGE_TANK = 65536
 TIME_STOP = 1 << 17
+REMOVE_TARGET = 1 << 18
+PICK_TARGET = 1 << 19
+TARGET_AI = 1 << 22
+TOGGLE_MAP_BORDER = 1 << 25
+TANK_STATS = 1 << 29
+(STAT_BOOST, STAT_RELOAD, STAT_AIM, STAT_ACCURACY, STAT_TURRET, STAT_HULL, STAT_DAMAGE, STAT_HEALTH,
+ STAT_BRAKE, STAT_REVERSE, STAT_GRIP) = range(11)
+TANK_STAT_NAMES = ('Boost', 'Reload', 'Aim', 'Accuracy', 'Turret', 'Hull', 'Damage', 'Health',
+                   'Brake', 'Reverse', 'Grip')
+PRACTICE_MENU = 1 << 30
+PRACTICE_FEEDBACK = 1 << 31
+MENU_SPAWN, MENU_HEAL, MENU_DESTROY, MENU_REMOVE, MENU_CLEAR, MENU_RETURN_FIRE = range(6)
+MENU_MISS, MENU_HEALED, MENU_DESTROYED, MENU_REMOVED, MENU_FULL_HEALTH = range(5)
+PRACTICE_ACTIONS = NEXT_TARGET | TOGGLE_TARGET_FIRE | CLEAR_TARGETS | REMOVE_TARGET
 BRANCH_SHOT_BASE = 1 << 30
+# These are client entity IDs, in a separate namespace from arena-body IDs.
+PRACTICE_ENTITY_BASE = 1 << 29
 PRACTICE_TANKS = (
     ('china', 'Ch01_Type59', 'Type 59'),
     ('ussr', 'KV1', 'KV-1'),
@@ -39,14 +54,74 @@ RESTORE_HP_KEY = 0x4000
 HP_RESTORED = 0x8000
 GOD_MODE_KEY = 0x10000
 TIME_STOP_KEY = 1 << 17
+REMOVE_TARGET_KEY = 1 << 18
+PICK_TARGET_KEY = 1 << 19
+TARGET_SELECTED = 1 << 20
+TARGET_UNAVAILABLE = 1 << 21
+TARGET_AI_CHANGED = 1 << 23
+TARGET_AI_MISSING = 1 << 24
+MAP_BORDER_OPEN = 1 << 26
+MAP_BORDER_CLOSED = 1 << 27
+MAP_BORDER_OUTSIDE = 1 << 28
+AI_LEVELS = (None, 'easy', 'normal', 'hard')
+AI_APPLY_ALL = 4
 TARGET_FIRE_OFF, TARGET_FIRE_ON, TARGETS_CLEARED, TARGET_SLOTS_FULL = range(4, 8)
 INPUT_LEASE = .85
 BOOST_POWER = 2.4
 BOOST_SPEED = 1.75
 
 
+def boost_factor(vehicle, maximum):
+    strength = getattr(vehicle, 'sandbox_boost_strength', None)
+    if strength is None:
+        strength = 100 if getattr(vehicle, 'sandbox_boost', False) else 0
+    return 1. + (maximum-1.) * strength/100.
+
+
+def stat_percent(vehicle, stat):
+    return getattr(vehicle, 'sandbox_stats', {}).get(stat, 0)
+
+
+def stat_bonus(vehicle, stat, maximum=2.):
+    return 1. + (maximum-1.)*stat_percent(vehicle, stat)/100.
+
+
+def brake_assist(percent, speed, forward, target, acceleration, slope, dt):
+    if not percent or speed*forward > 0. or (forward and not speed):
+        return target, acceleration, False
+    # Stop before applying reverse power. At maximum the longitudinal
+    # contact cancels the whole tick's motion, including downhill gravity.
+    stop_acceleration = abs(speed + slope*dt)/dt
+    assist = min(1., percent/100.)
+    acceleration += max(0., stop_acceleration-acceleration)*assist
+    return 0., acceleration, percent == 100
+
+
+def reload_limit(vehicle):
+    if not vehicle.sandbox_fast_reload:
+        return None
+    return getattr(vehicle, 'sandbox_reload_override', None) or FAST_RELOAD_SECONDS
+
+
 def token(arena):
     return arena.unique_id & 0xffffffff or 1
+
+
+def vehicle_wire_id(arena, entity):
+    ids = getattr(arena, 'practice_client_ids', None)
+    return ids.get(entity, entity) if ids else entity
+
+
+def vehicle_arena_id(arena, entity):
+    ids = getattr(arena, 'practice_client_ids', None)
+    if not ids:
+        return entity
+    for slot, client in ids.items():
+        if client == entity:
+            return slot
+    if entity in ids or entity >= PRACTICE_ENTITY_BASE:
+        return -1  # The old model no longer refers to a target.
+    return entity
 
 
 def advertisement(arena, *, notice=0, ability=False):
@@ -55,16 +130,39 @@ def advertisement(arena, *, notice=0, ability=False):
     capabilities = (SANDBOX_KEYS | FAST_RELOAD_KEY if arena.sandbox_enabled else 0) | (
         GRAVITY_KEY if getattr(arena, 'gravity_mode', False) is True or ability else 0)
     if arena.sandbox_enabled:
-        capabilities |= TELEPORT_KEY | RESTORE_HP_KEY | GOD_MODE_KEY
+        capabilities |= TELEPORT_KEY | RESTORE_HP_KEY | GOD_MODE_KEY | TOGGLE_MAP_BORDER | TANK_STATS
     if getattr(arena, 'practice', False):
-        capabilities |= PRACTICE_KEYS
+        capabilities |= PRACTICE_KEYS | REMOVE_TARGET_KEY
+        if arena.sandbox_enabled:
+            capabilities |= PRACTICE_MENU
+        if getattr(arena, 'practice_game', None) is not None:
+            capabilities |= PICK_TARGET_KEY
     else:
         capabilities &= ~0x08
     if getattr(arena, 'time_stop_enabled', False):
         capabilities |= TIME_STOP_KEY
+    if target_ai_available(arena):
+        capabilities |= TARGET_AI
     capabilities |= notice
     second = b'\1' + struct.pack('<I', capabilities) if capabilities else b'\0'
     return b'\x13' + variable8(96, b'\x03TFS1SBOX' + struct.pack('<I', token(arena)) + second)
+
+
+def preset_advertisement(arena, account_id):
+    if not arena.sandbox_enabled:
+        return b''
+    vehicle = arena.vehicle_for(account_id)
+    values = getattr(vehicle, 'sandbox_preset', ())
+    if not isinstance(values, tuple) or len(values) != len(TANK_STAT_NAMES):
+        return b''
+    # The current preset is captured at battle creation. Subsequent live
+    # slider edits use their ordinary incremental updates.
+    data = bytes(values).ljust(12, b'\0')
+    return b'\x13' + variable8(96, b'\x06TFS1STAT' + struct.pack('<I', token(arena)) + data + b'\0')
+
+
+def target_ai_available(arena):
+    return arena.sandbox_enabled and (getattr(arena, 'practice', False) or bool(getattr(arena, 'training_bots', ())))
 
 
 def decode_boss_pick(number):
@@ -128,7 +226,8 @@ def receive(endpoint, addr, client, arena, body, now):
     if control.token == 0:
         if not control.flags and not control.shot and client.reliable_window_used < 200:
             client.sandbox_input = (current, None, now, 0)
-            endpoint.send(addr, client, advertisement(arena, ability=ability))
+            endpoint.send(addr, client, advertisement(arena, ability=ability)
+                          + preset_advertisement(arena, client.account_id))
         return True
     if control.token != current:
         return True
@@ -140,10 +239,11 @@ def receive(endpoint, addr, client, arena, body, now):
         distance = (control.sequence-previous[1]) & 0xffffffff
         if not 0 < distance < (1 << 31):
             return True
-    client.sandbox_input = (current, control.sequence, now, control.flags)
-    if (control.flags ^ previous[3]) & (BOOST | FLIGHT | MISSILE_VIEW | FAST_RELOAD | GOD_MODE):
+    flags = previous[3] if control.flags in (PICK_TARGET, TARGET_AI, TOGGLE_MAP_BORDER, TANK_STATS, PRACTICE_MENU) else control.flags
+    client.sandbox_input = (current, control.sequence, now, flags)
+    if (flags ^ previous[3]) & (BOOST | FLIGHT | MISSILE_VIEW | FAST_RELOAD | GOD_MODE):
         endpoint.server.event('sandbox_controls', account_id=client.account_id,
-                              arena_id=arena.result_id, flags=control.flags)
+                              arena_id=arena.result_id, flags=flags)
     if getattr(arena, 'owner_backed', False):
         endpoint.owner_service.sandbox(addr, client, raw)
     else:
@@ -169,7 +269,15 @@ class Control:
             raise ValueError('Invalid sandbox control size')
         control = cls(*INPUT.unpack(data))
         length = math.hypot(control.x, control.y, control.z)
-        if control.flags in (CHANGE_TANK, TIME_STOP) and not length and not control.shot:
+        if control.flags in (CHANGE_TANK, TIME_STOP, TOGGLE_MAP_BORDER) and not length and not control.shot:
+            return control
+        if control.flags == PICK_TARGET and not length and control.shot & 0xffff:
+            return control
+        if control.flags == TANK_STATS and not length and (control.shot >> 8) < len(TANK_STAT_NAMES) and (control.shot & 255) <= 100:
+            return control
+        if control.flags == PRACTICE_MENU and not length and control.shot <= MENU_RETURN_FIRE:
+            return control
+        if control.flags == TARGET_AI and not length and control.shot < 2 * AI_APPLY_ALL:
             return control
         if control.flags & (BOSS_PICK_ROLE | BOSS_RESPAWN):
             if length:

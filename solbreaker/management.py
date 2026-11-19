@@ -115,7 +115,7 @@ def required(value, label):
     return str(Path(value).expanduser().absolute())
 
 
-def command(action, settings, *, windows=None, interface=None, replay=None):
+def command(action, settings, *, windows=None, interface=None, replay=None, depot=None):
     """Build argv without a shell; both UIs use the exact same operations."""
     windows = sys.platform == 'win32' if windows is None else windows
     python = sys.executable
@@ -131,6 +131,14 @@ def command(action, settings, *, windows=None, interface=None, replay=None):
         else:
             connection, server_url = settings.connection.strip(), settings.server_url.strip()
     cli = [python, '-u', '-m', 'solbreaker']
+    if action in ('stage-depot', 'cleanup-depot'):
+        receipt, resources = depot
+        phase = 'stage' if action == 'stage-depot' else 'cleanup'
+        args = cli + ['manage-depot', phase, '--receipt', str(receipt), '--resources', str(resources),
+                      '--client', required(settings.client, 'папку клиента')]
+        if action == 'cleanup-depot' and settings.local_connection:
+            args += ['--state', required(settings.state, 'папку данных сервера')]
+        return args
     if action == 'lan':
         address, subnet = interface
         return cli + ['configure-lan', '--state', state, '--address', address, '--subnet', subnet]
@@ -315,7 +323,7 @@ class Manager:
             return f'{ready} {status}'
         return status
 
-    def run(self, action, *, output=None, interface=None, replay=None):
+    def run(self, action, *, output=None, interface=None, replay=None, depot=None):
         if self.busy:
             raise ValueError('Дождись завершения текущей операции')
         job_settings = replace(self.settings, connection=output) if action == 'export' and output else self.settings
@@ -364,7 +372,7 @@ class Manager:
         else:
             if self.server is not None and self.server.running and action in ('prepare-server', 'network', 'lan', 'server-name', 'backup'):
                 raise ValueError('Сначала останови локальный сервер')
-            self.job = Job(action, command(action, job_settings, interface=interface), self.output)
+            self.job = Job(action, command(action, job_settings, interface=interface, depot=depot), self.output)
         self.notice = {'server': 'Сервер запускается', 'prepare-server': 'Подготовка сервера',
                        'prepare-client': 'Подготовка клиента', 'play': self.notice}.get(action, 'Операция выполняется')
 

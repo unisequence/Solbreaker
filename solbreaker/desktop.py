@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 import sys
 
-from PySide6.QtCore import QRectF, QSize, Qt, QTimer, QUrl, Signal, Slot
+from PySide6.QtCore import QLockFile, QRectF, QSize, Qt, QTimer, QUrl, Signal, Slot
 from PySide6.QtGui import QColor, QDesktopServices, QFont, QIcon, QPainter, QPainterPath, QPixmap
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFormLayout,
     QFrame, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit,
@@ -230,6 +230,9 @@ class SetupWizard(QDialog):
         self.fields = {}
         self.pending = []
         self.job = None
+        self.depot_job = None
+        self.depot_lock = None
+        self.setup_settings = None
         self.failed = False
         self.complete = False
         title = ('Настройка своего сервера' if local else 'Подключение к серверу') if reuse_client else 'Настройка игры'
@@ -341,7 +344,7 @@ class SetupWizard(QDialog):
     def download_depot(self):
         from .desktop_depot import DepotDialog
         steam = self.fields['steam'].text() if 'steam' in self.fields else ''
-        dialog = DepotDialog(self, steam)
+        dialog = DepotDialog(self, steam, resume_file=self.window.config.parent/'depot-download.json')
         if dialog.exec() == QDialog.Accepted:
             self.fields['game'].setText(dialog.selected_game)
             self.fields['game'].setCursorPosition(0)
@@ -513,16 +516,24 @@ class SetupWizard(QDialog):
         installed = prepared_client(settings)
         if self.first_step and not installed:
             raise ValueError(tr('Сначала подготовь клиент Solbreaker.'))
-        self.window.manager.update_settings(settings)
-        settings.save(self.window.config)
-        self.window.sync_fields()
         self.pending = []
+        self.setup_settings = settings
+        self.depot_job = self.prepare_depot(settings, installed)
+        if self.depot_job is not None:
+            _, resources = self.depot_job
+            if Path(settings.game).expanduser().resolve() != resources:
+                self.pending.append('stage-depot')
+                self.setup_settings = replace(settings, game=str(resources))
+        if 'stage-depot' not in self.pending:
+            self.save_setup_settings()
         if self.local and not prepared_server(settings):
             self.pending.append('prepare-server')
         if not installed:
             self.pending.append('prepare-client')
         elif not connection_matches(settings, self.local):
             self.pending.append('connect')
+        if self.depot_job is not None:
+            self.pending.append('cleanup-depot')
         self.failed = False
         self.next.setEnabled(False)
         self.back.setEnabled(False)
@@ -530,8 +541,43 @@ class SetupWizard(QDialog):
         self.progress.setVisible(bool(self.pending))
         self.start_next()
 
+    def prepare_depot(self, settings, installed):
+        from .managed_depot import RECEIPT, location, read_record
+        receipt = self.window.config.parent/RECEIPT
+        record = read_record(receipt)
+        if record is None:
+            return None
+        source = Path(record['source'])
+        resources = location(record, Path(settings.client), windows=sys.platform == 'win32')
+        game = Path(settings.game).expanduser().resolve()
+        server_game = document(settings.local_profile_path.with_name('manifest.json')).get('game')
+        if isinstance(server_game, str) and Path(server_game).expanduser().resolve() == source:
+            return None
+        if game == source:
+            if installed:
+                return None
+        elif game != resources:
+            return None
+        lock = QLockFile(str(source.with_suffix('.lock')))
+        lock.setStaleLockTime(0)
+        if not lock.tryLock(0):
+            raise ValueError(tr('Скачанный депот сейчас используется.'))
+        self.depot_lock = lock
+        return receipt, resources
+
+    def save_setup_settings(self):
+        self.window.manager.update_settings(self.setup_settings)
+        self.setup_settings.save(self.window.config)
+        self.window.sync_fields()
+
+    def unlock_depot(self):
+        if self.depot_lock is not None:
+            self.depot_lock.unlock()
+            self.depot_lock = None
+
     def start_next(self):
         if not self.pending:
+            self.unlock_depot()
             self.complete = True
             self.activity.setText(tr('Всё готово. Можно начинать игру.'))
             self.progress.setVisible(False)
@@ -543,11 +589,16 @@ class SetupWizard(QDialog):
             return
         action = self.pending.pop(0)
         self.progress.setRange(0, 0)
-        self.activity.setText({'prepare-server': tr('Подготавливаем свой сервер…'),
+        self.activity.setText({'stage-depot': tr('Подготавливаем общее хранилище ресурсов…'),
+                               'cleanup-depot': tr('Удаляем временную папку загрузки…'),
+                               'prepare-server': tr('Подготавливаем свой сервер…'),
                                'prepare-client': tr('Создаём отдельный клиент Solbreaker…'),
                                'connect': tr('Сохраняем подключение к серверу…')}[action])
         try:
-            self.window.manager.run(action)
+            if action in ('stage-depot', 'cleanup-depot'):
+                self.window.manager.run(action, depot=self.depot_job)
+            else:
+                self.window.manager.run(action)
             self.job = self.window.manager.job
         except (OSError, ValueError) as error:
             self.show_error(error)
@@ -573,9 +624,18 @@ class SetupWizard(QDialog):
             self.details.appendPlainText('\n'.join(visible))
         if self.job is not None and self.job.returncode is not None:
             result = self.job.returncode
+            action = self.job.action
             self.job = None
-            if result == 0:
-                self.start_next()
+            if result == 0 or action == 'cleanup-depot':
+                try:
+                    if action == 'stage-depot':
+                        self.fields['game'].setText(self.setup_settings.game)
+                        self.save_setup_settings()
+                    self.start_next()
+                    if result != 0:
+                        self.activity.setText(tr('Игра готова. Папку загрузки пока не удалось удалить.'))
+                except (OSError, ValueError) as error:
+                    self.show_error(error)
             elif self.first_step and not self.local:
                 self.show_error(tr('Не удалось настроить подключение. Причина указана в журнале выше.'))
             else:
@@ -583,6 +643,7 @@ class SetupWizard(QDialog):
 
     def show_error(self, error):
         self.failed = True
+        self.unlock_depot()
         self.pending.clear()
         self.job = None
         self.error_label.setText(tr(str(error)))

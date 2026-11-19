@@ -36,6 +36,40 @@ class SteamDepotTests(unittest.TestCase):
             with patch('solbreaker.steam_depot.steam_roots', return_value=[root]):
                 self.assertEqual(find_depots(), [depot])
 
+    def test_verified_download_survives_failed_setup_and_is_removed_after_setup(self):
+        from solbreaker import managed_depot
+        from solbreaker.resource_copy import resource_tree_facts
+
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            original = root/'Downloads'/managed_depot.DEPOT_FOLDER
+            metadata = original/managed_depot.METADATA
+            metadata.mkdir(parents=True)
+            (metadata/'depot.config').write_bytes(b'downloader data')
+            binary = original/'wotblitz.exe'
+            binary.write_bytes(b'game binary')
+            catalog = root/'catalog.gz'
+            catalog.write_bytes(gzip.compress(json.dumps([['wotblitz.exe', 11, 'digest']]).encode()))
+            record = {'source': str(original), 'fingerprint': resource_tree_facts(
+                original, include_change_time=False)['fingerprint']}
+            client = root/'Install/client'
+            managed = managed_depot.location(record, client, windows=True)
+            check_game = lambda path: {'game': str(path)}
+            with patch.object(managed_depot, 'CATALOG', catalog), \
+                 patch.object(managed_depot, 'inspect_game', side_effect=check_game), \
+                 patch.object(managed_depot, 'validate_snapshot'), \
+                 patch.object(managed_depot, 'ensure_lab', return_value=(client, {'game': str(original)})) as lab:
+                managed_depot.stage(record, managed)
+                self.assertTrue(binary.samefile(managed/'wotblitz.exe'))
+                self.assertFalse((managed/managed_depot.METADATA).exists())
+                with self.assertRaisesRegex(ValueError, 'ещё использует'):
+                    managed_depot.cleanup(record, managed, client)
+                self.assertTrue(original.is_dir())
+                lab.return_value = client, {'game': str(managed)}
+                managed_depot.cleanup(record, managed, client)
+                self.assertFalse(original.exists())
+                self.assertEqual((managed/'wotblitz.exe').read_bytes(), b'game binary')
+
     def test_verification_rejects_same_size_corruption_and_missing_files(self):
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -107,3 +141,61 @@ class SteamDepotTests(unittest.TestCase):
         dialog.downloader = None
         dialog.deleteLater()
         app.processEvents()
+
+    def test_depot_shows_qr_in_utf8_and_windows_console_encoding(self):
+        from PySide6.QtWidgets import QApplication
+        from solbreaker.desktop_depot import DepotDialog
+        app = QApplication.instance() or QApplication([])
+        size = 29
+        rows = ['  '*size]*4 + ['  '*4+'██'*(size-8)+'  '*4]*(size-8) + ['  '*size]*4
+        for encoding in ('utf-8', 'cp437'):
+            with self.subTest(encoding=encoding), patch('solbreaker.desktop_depot.find_depots', return_value=[]):
+                dialog = DepotDialog(None)
+                process = Mock()
+                process.readAllStandardOutput.return_value = (
+                    b'Use the Steam Mobile App to sign in with this QR code:\r\n'
+                    + ('\r\n'.join(rows)+'\r\n').encode(encoding))
+                dialog.downloader = process
+                dialog.read_download()
+                self.assertFalse(dialog.qr.isHidden())
+                self.assertFalse(dialog.qr.pixmap().isNull())
+                dialog.downloader = None
+                dialog.deleteLater()
+                app.processEvents()
+
+    def test_resume_remembers_the_depot_folder_and_reuses_it(self):
+        from PySide6.QtWidgets import QApplication
+        from solbreaker.desktop_depot import DEPOT_FOLDER, DepotDialog
+        app = QApplication.instance() or QApplication([])
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            depot = root/'downloads'/DEPOT_FOLDER
+            depot.mkdir(parents=True)
+            receipt = root/'runtime/depot-download.json'
+            tool = root/'DepotDownloader.exe'
+            tool.touch()
+            with patch('solbreaker.desktop_depot.find_depots', return_value=[]), \
+                 patch('solbreaker.desktop_depot.bundled_downloader', return_value=str(tool)), \
+                 patch('solbreaker.desktop_depot.QProcess') as child:
+                first = DepotDialog(None, resume_file=receipt)
+                first.download_to(depot)
+                first.download_lock.unlock()
+                first.downloader_session.cleanup()
+                first.downloader = None
+                first.deleteLater()
+
+                reopened = DepotDialog(None, resume_file=receipt)
+                with patch('solbreaker.desktop_depot.QFileDialog.getExistingDirectory') as choose:
+                    reopened.start_download()
+                    choose.assert_not_called()
+                args = child.return_value.start.call_args.args[1]
+                self.assertEqual(args[args.index('-dir')+1], str(depot))
+                self.assertIn('-validate', args)
+                reopened.download_lock.unlock()
+                reopened.downloader_session.cleanup()
+                reopened.downloader = None
+                reopened.worker = Mock(result={'game': str(depot), 'files': 1})
+                reopened.verified()
+                self.assertFalse(receipt.exists())
+                reopened.deleteLater()
+                app.processEvents()

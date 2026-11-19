@@ -25,12 +25,22 @@ from solbreaker.collision import Motion, Pose
 from solbreaker.consumables import ACTIVE, COOLDOWN, READY, ConsumableState
 from solbreaker.modules import TrackSpec, TrackState
 from solbreaker.native_rooms import room_options
+from solbreaker.profile import game_mode_descriptions
 from solbreaker.training_config import RoomBattleSettings, TrainingConfig
 from solbreaker.vehicle_data import Shell, Weapon
 from solbreaker.uprising import BattleState, CHOICE_SECONDS, CLIENT_GAME_MODE, MODE, RESPAWN_CLOAK
 
 
 class UprisingTests(TestCase):
+    def test_hangar_advertises_selected_ability_catalog(self):
+        for rules, catalog in ((MODE, 'hellgames'), ('mad_games', 'arcade'), ('regular', '')):
+            with self.subTest(rules=rules):
+                garage = game_mode_descriptions(False, rules)
+                room = game_mode_descriptions(True, rules)
+                self.assertEqual(garage[7]['arcadeAbilities'], catalog)
+                self.assertEqual(garage[1]['arcadeAbilities'], '')
+                self.assertEqual(room[1]['arcadeAbilities'], catalog)
+
     def test_room_and_solo_settings_accept_uprising(self):
         config = decode(TITLE, 'SolbreakerBots/2/0/1/1/6/0/-1/0', 0, {})
         self.assertEqual(config.battle_mode, MODE)
@@ -46,7 +56,7 @@ class UprisingTests(TestCase):
         player = arena.players[1]
         avatar = create_avatar({'nickname': player.nickname}, player.avatar_id, arena.unique_id,
                                arena.client_map_id, game_mode=CLIENT_GAME_MODE)
-        mode = pb_int(4, 2) + pb_blob(5, b'hellgames') + pb_blob(7, b'hellgames') + pb_int(12, False)
+        mode = pb_int(4, 2) + pb_blob(5, b'hellgames') + pb_blob(7, b'hellgames') + pb_blob(8, b'hellgames') + pb_int(12, False)
         for remaining in (2, 1, 0):
             cell = create_avatar_cell(arena.space_id, player.team, remaining)
             self.assertEqual(initial_messages(arena, player),
@@ -369,7 +379,7 @@ class UprisingTests(TestCase):
                     impact(3, 6.1, 'not_penetrated')
                     self.assertEqual([loss(tank) for tank in (primary, near, other, distant)], [60, 60, 0, 0])
                     events = arena.drain_events()
-                    splash = b'\x13\x6f' + struct.pack('<I3f', shooter.entity_id, *primary.pose.position)
+                    splash = b'\x13\x6f' + struct.pack('<I3f', 0, *primary.pose.position)
                     cooldown = consumable_message(upgrade.compact_id, COOLDOWN, 30, 30)
                     self.assertIn(splash, event_messages(arena, peer, events))
                     self.assertIn(cooldown + splash, event_messages(arena, player, events))
@@ -501,6 +511,8 @@ class UprisingTests(TestCase):
                     arena._fire_burst_next(tank, at)
                 shots = [event for event in arena.drain_events() if event.kind == 'shot']
                 self.assertEqual([event.data['at'] for event in shots], list(times))
+                self.assertEqual([event.data.get('shooting_count', 1) for event in shots],
+                                 [len(times)] + [0]*(len(times)-1))
                 self.assertEqual((tank.ammo, tank.clip, tank.burst_pending), (ammo, clip, False))
                 if weapon.pump_reload_times:
                     self.assertAlmostEqual(tank.pump_at, times[-1] + 3.)
@@ -593,6 +605,7 @@ class UprisingTests(TestCase):
         hunter, target = arena.vehicle_for(1), arena.vehicle_for(2)
         original = Pose((12., 0., 25.), 0.)
         target.pose = original
+        target.speed = 3.
         slot = ConsumableState(uprising.TORNADO)
         hunter.consumables = (slot,)
         motion = Motion(velocity=(0., 0., 3.))
@@ -609,7 +622,8 @@ class UprisingTests(TestCase):
         self.assertEqual(target.pose.position, original.position)
         self.assertGreaterEqual(abs(target.pose.yaw), math.radians(120.))
         self.assertLessEqual(abs(target.pose.yaw), math.pi)
-        world.relocate_training_body.assert_called_once_with(target.entity_id, target.pose, motion=motion)
+        world.relocate_training_body.assert_called_once_with(target.entity_id, target.pose, motion=Motion())
+        self.assertEqual(target.speed, 0.)
         self.assertEqual(slot.ready_at, 41.)
         self.assertTrue(any(event.kind == 'orientation_rebased' for event in arena.drain_events()))
 
@@ -816,10 +830,17 @@ class UprisingTests(TestCase):
                                       event_messages(arena, player, events))
                         effect = provision_effect_message(tank.entity_id, RESPAWN_CLOAK.compact_id,
                                                           argument=1)
-                        self.assertIn(effect, event_messages(arena, player, events))
+                        indicator = struct.pack('<BBdf', 94, ACTIVE, arena.simulation_time - arena.epoch, 10.)
+                        payload = event_messages(arena, player, events)
+                        self.assertIn(effect, payload)
+                        self.assertIn(indicator, payload)
                         if not solo:
-                            self.assertNotIn(effect, event_messages(arena, arena.players[2], events))
-                            self.assertIn(effect, reconnect_message_parts(arena, player))
+                            other_payload = event_messages(arena, arena.players[2], events)
+                            self.assertNotIn(effect, other_payload)
+                            self.assertNotIn(indicator, other_payload)
+                            reconnect = reconnect_message_parts(arena, player)
+                            self.assertIn(effect, reconnect)
+                            self.assertIn(indicator, b''.join(reconnect))
                             self.assertNotIn(effect, reconnect_message_parts(arena, arena.players[2]))
                         self.assertTrue(mad_games.concealed(tank, source.team))
                         self.assertFalse(mad_games.concealed(tank, tank.team))
@@ -851,6 +872,7 @@ class UprisingTests(TestCase):
                                               if event.kind == 'mad_cloak').data['enabled'])
                         self.assertIn(provision_effect_message(tank.entity_id, RESPAWN_CLOAK.compact_id),
                                       event_messages(arena, player, events))
+                        self.assertIn(struct.pack('<BB', 94, COOLDOWN), event_messages(arena, player, events))
                     else:
                         self.assertEqual(arena.winner, 2)
                         self.assertEqual(arena.finish_reason, 'elimination')

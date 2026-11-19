@@ -86,6 +86,8 @@ def launch_client(lab, *, auto_login=None, profile=None, url=None, lighting=None
         manifest = upgrade_form(lab, manifest)
         from .client_ui import install_sandbox_bindings, install_server_name, install_training_maps
         manifest = install_sandbox_bindings(lab, manifest)
+        from .client_practice_picker import install as install_target_picker
+        install_target_picker(lab)
         from .client_reticle import install as install_reticle
         manifest = install_reticle(lab, manifest)
         from .client_time_stop import install as install_time_stop

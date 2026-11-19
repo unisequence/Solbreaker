@@ -85,10 +85,7 @@ class TrainingBot:
         if type(difficulty) is not str or difficulty not in DIFFICULTIES:
             raise ValueError('Invalid bot difficulty')
         self.entity_id = entity_id
-        self.difficulty = difficulty
-        self.profile = DIFFICULTIES[difficulty]
-        self.STOP_DISTANCE = self.profile.stop_distance
-        self.SHOT_CHECK_SECONDS = self.profile.shot_check_seconds
+        self.set_difficulty(difficulty)
         # Per-bot deterministic stream: reproducible tests and replays.
         self.random = random.Random(entity_id)
         self.target_id = None
@@ -150,6 +147,14 @@ class TrainingBot:
         self.learned_corridors = 0
         self.margin_goal = None
         self.margin_until = self.next_margin_check = 0.
+
+    def set_difficulty(self, difficulty):
+        self.difficulty = difficulty
+        self.profile = DIFFICULTIES[difficulty]
+        self.STOP_DISTANCE = self.profile.stop_distance
+        self.SHOT_CHECK_SECONDS = self.profile.shot_check_seconds
+        self.sighted = self.aim = None
+        self.next_shot_check = 0.
 
     def controls(self, pose, target_position, now, *, closing_speed=0., braking_acceleration=12.,
                  stop_distance=None, remaining_distance=None, align_at_stop=False):
@@ -1174,13 +1179,14 @@ class BotDirector:
 
     def step(self, now):
         a=self.arena;nav=self.navigation
+        disabled = getattr(a, 'disabled_training_bots', ())
         if nav:
             nav.refresh(a.world.destroyed)
             nav.step()
         due=[]
         for eid,ai in a.training_bots.items():
             bot=a.vehicles[eid]
-            if not bot.alive:
+            if not bot.alive or eid in disabled:
                 bot.flags=0
                 if nav:nav.cancel(eid)
                 continue
@@ -1208,4 +1214,4 @@ class BotDirector:
         self.stats['decisions']+=len(due)
         self.stats['max_decisions_per_step']=max(self.stats['max_decisions_per_step'],len(due))
         return {eid:a.vehicles.get(ai.target_id) if ai.target_id in ai.visible else None
-                for eid,ai in a.training_bots.items()}
+                for eid,ai in a.training_bots.items() if eid not in disabled}

@@ -50,6 +50,12 @@ def main(argv=None):
     prepare_client.add_argument('--windows', action='store_true')
     prepare_client.add_argument('--proton', type=Path)
     prepare_client.add_argument('--steam', type=Path)
+    depot = commands.add_parser('manage-depot', help=argparse.SUPPRESS)
+    depot.add_argument('phase', choices=('stage', 'cleanup'))
+    depot.add_argument('--receipt', type=Path, required=True)
+    depot.add_argument('--resources', type=Path, required=True)
+    depot.add_argument('--client', type=Path, required=True)
+    depot.add_argument('--state', type=Path)
     connect = commands.add_parser('connect-client', help='Import a public server profile into an idle prepared client')
     connect.add_argument('--lab', type=Path, required=True)
     connect.add_argument('--connection', type=Path, required=True)
@@ -148,6 +154,17 @@ def main(argv=None):
         elif args.command == 'restore-t49-textures':
             from .client_t49_textures import restore
             result = restore(args.lab, args.source)
+        elif args.command == 'manage-depot':
+            from . import managed_depot
+            record = managed_depot.read_record(args.receipt)
+            if record is None:
+                raise ValueError('Результат проверки скачанного депота не найден.')
+            if args.phase == 'stage':
+                managed_depot.stage(record, args.resources)
+            else:
+                managed_depot.cleanup(record, args.resources, args.client.expanduser().resolve(), args.state)
+                args.receipt.unlink(missing_ok=True)
+            return
         elif args.command == 'prepare-client':
             from .client_setup import prepare
             import tempfile

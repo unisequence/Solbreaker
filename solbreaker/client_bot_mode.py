@@ -15,6 +15,7 @@ _APPEARANCE = ContextVar('tfs_bot_mode_appearance', default='native')
 
 BOT_MODE = 'eGameMode.Rating'
 BOT_DESCRIPTION = 'Local/BotsDescription'
+POLYGON_DESCRIPTION = 'Local/TargetDescription'
 
 
 def _mode_description(prefix, key):
@@ -30,6 +31,8 @@ def _bot_mode(prefix):
 
 CARD_BOT_MODE = _bot_mode('mode')
 SELECTED_BOT_MODE = _bot_mode('session.gameModesAccountModel.mode')
+SELECTED_POLYGON_MODE = ('session.gameModesAccountModel.mode.gameMode == eGameMode.Regular and '
+                         + _mode_description('session.gameModesAccountModel.mode', POLYGON_DESCRIPTION))
 ORIGINAL_VEHICLE_GATE = ('not isNull(selectedTank) and selectedTank.allowedForGameMode '
                          'and not selectedTank.needsTopMastery and not selectedTank.needsTopModules')
 LOCAL_VEHICLE_GATE = ('not isNull(selectedTank) and (('+SELECTED_BOT_MODE+') or '

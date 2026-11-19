@@ -34,7 +34,7 @@ def disk_allocation_unit(path):
     return max(512, os.statvfs(path).f_frsize)
 
 
-def resource_tree_facts(source, *, allocation_unit=4096):
+def resource_tree_facts(source, *, allocation_unit=4096, include_change_time=True):
     """Bounded streaming metadata inventory, not a resource-content hash.
 
     Full-copy plans reject links/reparse/special files. Existing Linux resource
@@ -66,7 +66,8 @@ def resource_tree_facts(source, *, allocation_unit=4096):
             # allocated bytes after traversal. Its entries are recorded below.
             content_size = info.st_size if stat.S_ISREG(info.st_mode) else 0
             record = (path.relative_to(source).as_posix(), stat.S_IFMT(info.st_mode), content_size,
-                      info.st_mtime_ns, info.st_ctime_ns, info.st_dev, info.st_ino)
+                      info.st_mtime_ns, info.st_ctime_ns if include_change_time else 0,
+                      info.st_dev, info.st_ino)
             fingerprint.update(json.dumps(record, ensure_ascii=False, separators=(',', ':')).encode())
             fingerprint.update(b'\n')
     return dict(bytes=logical, allocated_bytes=allocated + allocation_unit, files=files,
@@ -78,7 +79,8 @@ def _source_fd(path):
         # Share the native handle-level reparse and identity checks. The low
         # level opener receives a single actual filename, not user path input.
         from .platform_io import _open_windows
-        return _open_windows(path.parent, path.name, False, False, False)
+        return _open_windows(path.parent, path.name, False, False, False,
+                             create_directories=False, allow_readonly_hardlinks=True)
     directory = os.open(path.anchor, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
     try:
         for part in path.parts[1:-1]:
@@ -125,16 +127,25 @@ def verified_copy_file(source, destination):
     return str(destination)
 
 
-def copy_resource_tree(source, destination, *, inventory_path=None, progress=None):
+def copy_resource_tree(source, destination, *, inventory_path=None, progress=None,
+                       share=None, ignore=()):
     source, destination = Path(source), Path(destination)
-    before = resource_tree_facts(source)
+    options = dict(include_change_time=share is None)
+    before = resource_tree_facts(source, **options)
     completed = 0
     last_report = 0.
     context = Path(inventory_path).open('x', encoding='utf-8') if inventory_path else nullcontext(None)
     with context as inventory:
         def copy_file(original, copied):
             nonlocal completed, last_report
-            result = verified_copy_file(original, copied)
+            if share is not None and share(Path(original).relative_to(source).as_posix()):
+                try:
+                    os.link(original, copied)
+                    result = copied
+                except OSError:
+                    result = verified_copy_file(original, copied)
+            else:
+                result = verified_copy_file(original, copied)
             if inventory is not None:
                 entry = dict(path=Path(original).relative_to(source).as_posix(),
                              bytes=Path(copied).stat().st_size, sha256=sha256(Path(copied)))
@@ -146,11 +157,12 @@ def copy_resource_tree(source, destination, *, inventory_path=None, progress=Non
                     progress(completed, before['bytes'])
                     last_report = now
             return result
-        shutil.copytree(source, destination, symlinks=False, copy_function=copy_file)
+        shutil.copytree(source, destination, symlinks=False, copy_function=copy_file,
+                        ignore=lambda path, _: ignore if Path(path) == source else ())
         if inventory is not None:
             inventory.flush()
             os.fsync(inventory.fileno())
-    if resource_tree_facts(source) != before:
+    if resource_tree_facts(source, **options) != before:
         raise ValueError('Resource tree changed during copying')
     return before
 

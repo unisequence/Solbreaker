@@ -1,4 +1,5 @@
 """Download the pinned Steam depot and verify it for the first-run wizard."""
+import json
 from pathlib import Path
 import re
 import shutil
@@ -11,9 +12,10 @@ from PySide6.QtGui import QDesktopServices, QImage, QPixmap
 from PySide6.QtWidgets import QApplication, QDialog, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QProgressBar, QVBoxLayout, QWidget
 
 from .build_info import STEAM_APP, STEAM_DEPOT, STEAM_MANIFEST
-from .desktop import button, label
+from .connection import atomic_write
+from .desktop import button, document, label
 from .desktop_i18n import tr
-from .steam_depot import DOWNLOAD_COMMAND, bundled_downloader, find_depots, verify_depot
+from .steam_depot import DEPOT_FOLDER, DOWNLOAD_COMMAND, bundled_downloader, find_depots, verify_depot
 
 DEPOT_PROGRESS = re.compile(r'^\s*(\d{1,3}[.,]\d{2})%\s')
 QR_ROW = re.compile(r'(?:██|  ){21,100}')
@@ -54,9 +56,12 @@ class Verification(QThread):
 
 
 class DepotDialog(QDialog):
-    def __init__(self, parent, steam=''):
+    def __init__(self, parent, steam='', *, resume_file=None):
         super().__init__(parent)
         self.steam = steam
+        self.resume_file = resume_file
+        saved = document(resume_file).get('folder') if resume_file else None
+        self.resume_parent = Path(saved) if isinstance(saved, str) and saved else None
         self.worker = None
         self.downloader = None
         self.downloader_session = None
@@ -78,10 +83,12 @@ class DepotDialog(QDialog):
         layout.addWidget(label(tr('Windows-сборка 11.21.0.1235_7376187 занимает около 21 ГиБ. '
                                   'Для загрузки нужен аккаунт Steam с доступом к игре.'), 'muted'))
         if sys.platform == 'win32':
-            layout.addWidget(label(tr('Для отдельного клиента оставь ещё около 22 ГиБ на диске назначения.'), 'muted'))
+            layout.addWidget(label(tr('При установке из папки Steam понадобится ещё около 22 ГиБ на диске назначения.'), 'muted'))
         depot_actions = QHBoxLayout()
         self.download = button(tr('Скачать через DepotDownloader'), self.start_download, True)
         depot_actions.addWidget(self.download)
+        self.change_folder = button(tr('Выбрать другую папку'), self.choose_download_folder)
+        depot_actions.addWidget(self.change_folder)
         if bundled_downloader() is None:
             depot_actions.addWidget(button(tr('Получить DepotDownloader'), lambda: QDesktopServices.openUrl(
                 QUrl('https://github.com/SteamRE/DepotDownloader/releases/latest'))))
@@ -142,9 +149,35 @@ class DepotDialog(QDialog):
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.detect)
         self.timer.start(3000)
+        self.refresh_resume()
         self.detect()
 
     def start_download(self):
+        if self.refresh_resume():
+            self.download_to(self.resume_parent)
+        else:
+            self.choose_download_folder()
+
+    def choose_download_folder(self):
+        selected = QFileDialog.getExistingDirectory(self, tr('Куда скачать сборку?'),
+                                                     str(self.resume_parent or ''))
+        if selected:
+            self.download_to(Path(selected))
+
+    def refresh_resume(self):
+        available = self.resume_parent is not None and (self.resume_parent/DEPOT_FOLDER).is_dir()
+        self.download.setText(tr('Продолжить загрузку' if available else 'Скачать через DepotDownloader'))
+        self.download.setToolTip(str(self.resume_parent/DEPOT_FOLDER) if available else '')
+        self.change_folder.setVisible(available)
+        return available
+
+    def remember_download(self, folder):
+        self.resume_parent = folder
+        if self.resume_file:
+            self.resume_file.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write(self.resume_file, (json.dumps({'folder': str(folder)})+'\n').encode())
+
+    def download_to(self, parent):
         if self.downloader is not None or (self.worker and self.worker.isRunning()):
             return
         executable = bundled_downloader() or shutil.which('DepotDownloader') or shutil.which('depotdownloader')
@@ -152,10 +185,10 @@ class DepotDialog(QDialog):
             executable, _ = QFileDialog.getOpenFileName(self, tr('Выбери исполняемый файл DepotDownloader'))
         if not executable:
             return
-        selected = QFileDialog.getExistingDirectory(self, tr('Куда скачать сборку?'))
-        if not selected:
-            return
-        target = Path(selected).resolve()/f'Solbreaker-depot-{STEAM_MANIFEST}'
+        parent = parent.resolve()
+        if parent.name == DEPOT_FOLDER:
+            parent = parent.parent
+        target = parent/DEPOT_FOLDER
         if target.resolve() != target:
             self.status.setText(tr('Выбери папку без символической ссылки на каталог загрузки.'))
             return
@@ -166,8 +199,12 @@ class DepotDialog(QDialog):
             return
         try:
             self.downloader_session = TemporaryDirectory(prefix='solbreaker-depot-')
+            self.remember_download(parent)
         except OSError as error:
             lock.unlock()
+            if self.downloader_session is not None:
+                self.downloader_session.cleanup()
+                self.downloader_session = None
             self.status.setText(str(error))
             return
         self.download_lock = lock
@@ -192,8 +229,11 @@ class DepotDialog(QDialog):
         process.readyReadStandardOutput.connect(self.read_download)
         process.finished.connect(self.download_finished)
         process.errorOccurred.connect(self.download_process_error)
-        process.start(str(Path(executable).resolve()), ['-app', str(STEAM_APP), '-depot', str(STEAM_DEPOT),
-                      '-manifest', str(STEAM_MANIFEST), '-qr', '-dir', str(target)])
+        arguments = ['-app', str(STEAM_APP), '-depot', str(STEAM_DEPOT),
+                     '-manifest', str(STEAM_MANIFEST), '-qr', '-dir', str(target)]
+        if target.is_dir():
+            arguments.append('-validate')
+        process.start(str(Path(executable).resolve()), arguments)
 
     def read_download(self, final=False):
         self.download_output += bytes(self.downloader.readAllStandardOutput())
@@ -209,6 +249,9 @@ class DepotDialog(QDialog):
                 self.status.setText(tr('Отсканируй QR-код в мобильном приложении Steam.'))
                 continue
             if self.qr_rows is not None:
+                # The Windows console can emit full blocks as OEM byte 0xDB.
+                if b'\xdb' in raw:
+                    line = raw.decode('cp437').rstrip('\r')
                 rows = self.qr_rows
                 if QR_ROW.fullmatch(line) and (not rows or len(line) == len(rows[0])):
                     rows.append(line)
@@ -263,7 +306,7 @@ class DepotDialog(QDialog):
             super().reject()
         elif self.download_cancelled:
             self.progress.hide()
-            self.status.setText(tr('Загрузка остановлена. Выбери ту же папку, чтобы продолжить.'))
+            self.status.setText(tr('Загрузка остановлена.'))
         elif code or exit_status != QProcess.NormalExit:
             self.progress.hide()
             detail = self.download_error
@@ -274,8 +317,10 @@ class DepotDialog(QDialog):
             self.verify()
 
     def set_working(self, active):
-        for widget in (self.folder, self.browse, self.check, self.download):
+        for widget in (self.folder, self.browse, self.check, self.download, self.change_folder):
             widget.setEnabled(not active)
+        if not active:
+            self.refresh_resume()
 
     def open_steam(self):
         QApplication.clipboard().setText(DOWNLOAD_COMMAND)
@@ -330,6 +375,14 @@ class DepotDialog(QDialog):
             super().reject()
         elif self.worker.result:
             self.selected_game = self.worker.result['game']
+            if self.resume_parent is not None and Path(self.selected_game) == self.resume_parent/DEPOT_FOLDER:
+                self.resume_parent = None
+                if self.resume_file:
+                    try:
+                        self.resume_file.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+                self.refresh_resume()
             self.progress.setRange(0, 1000)
             self.progress.setValue(1000)
             self.status.setText(tr('Сборка проверена. Все {files} файлов совпали.').format(files=self.worker.result['files']))
@@ -340,6 +393,13 @@ class DepotDialog(QDialog):
 
     def accept(self):
         if self.selected_game:
+            if self.resume_file:
+                from .managed_depot import RECEIPT, record_download
+                try:
+                    record_download(self.worker.result, self.resume_file.with_name(RECEIPT))
+                except OSError as error:
+                    self.status.setText(str(error))
+                    return
             super().accept()
 
     def reject(self):

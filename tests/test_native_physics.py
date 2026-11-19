@@ -10,6 +10,7 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 
+from solbreaker import mad_games
 from solbreaker.arena import Arena
 from solbreaker.big_boss import BigBoss, GravityTrap
 from solbreaker.collision import CollisionWorld, Destructible, Motion, Pose, matrix
@@ -145,6 +146,46 @@ class NativePhysicsTests(unittest.TestCase):
         self.assertIsNone(legacy._native_physics)
         native.move(.05, 0., 200, dt=1/60)
         self.assertEqual(native._native_physics.steps, 1)
+
+    def test_ground_skid_builds_with_speed_and_recovers_after_steering(self):
+        assets = self.assets('flat')
+        assets.forward_speed = 60. / 3.6
+        assets.rotation_speed = math.radians(35.)
+        world = self.world(assets)
+        arena = Arena([dict(id=1, nickname='Pilot'), dict(id=2, nickname='Peer')],
+                      b'', world.terrain, now=1., solo=False, room_mode=mad_games.MODE)
+        self.addCleanup(arena.close)
+        arena.ready(1, 1.)
+        arena.started = 1.
+        arena.world = world
+        vehicle = arena.vehicle_for(1)
+        entity = vehicle.entity_id
+        self.assertTrue(arena._activate_consumable(vehicle, vehicle.consumables[3], 2.))
+
+        def drive(start, kmh, turn):
+            world.relocate_training_body(entity, Pose((0., 0., 0.), 0.))
+            vehicle.pose = world.poses[entity]
+            vehicle.speed = kmh / 3.6
+            world.motion[entity].velocity = (0., 0., vehicle.speed)
+            slips = []
+            for frame in range(120):
+                now = start + frame * arena.STEP
+                arena.simulation_time = vehicle.last_input = now
+                vehicle.flags = 1 | (turn if frame < 36 else 0)
+                arena._drive(vehicle, arena.STEP, now)
+                vx, _, vz = world.motion[entity].velocity
+                slips.append(math.degrees(math.remainder(vehicle.pose.yaw - math.atan2(vx, vz), math.tau)))
+            return slips
+
+        slow = drive(2., 10., 8)
+        fast = drive(4., 120., 8)
+        mirrored = drive(6., 120., 4)
+        self.assertLess(max(map(abs, slow)), 1.)
+        self.assertGreater(fast[35], 10.)
+        self.assertGreater(fast[35], fast[17] + 1.)
+        self.assertGreater(fast[36], 1.)
+        self.assertAlmostEqual(fast[35], -mirrored[35], delta=.2)
+        self.assertLess(abs(fast[-1]), 1.)
 
     def test_gravity_recoil_slides_on_flat_ground_and_air_control_adds_no_lift(self):
         assets = self.assets('flat')
@@ -287,6 +328,193 @@ class NativePhysicsTests(unittest.TestCase):
                 world.move(.05,0.,200,dt=1/60)
         self.assertEqual(world._native_physics.steps, 160)
         self.assertLess(world.poses[200].position[2], 3.)
+
+    def test_oblique_wall_contact_turns_and_keeps_tangent_motion(self):
+        assets = self.assets('wall')
+        assets.vertices = box((-30.,0.,4.), (30.,3.,4.25))
+        world = self.world(assets)
+        yaw = math.radians(67.)
+        start = world.training_placement(200, -4., 1., yaw, stationary=True)
+        world.relocate_training_body(200, start)
+        for _ in range(45):
+            pose, _ = world.move(.15, 0., 200, dt=1/60)
+        self.assertGreater(pose.yaw, math.radians(83.))
+        self.assertGreater(pose.position[0]-start.position[0], 5.)
+        self.assertLess(pose.position[2], 3.1)
+        self.assertTrue(world.motion[200].grounded)
+
+    def test_stationary_hull_can_pivot_around_a_wall_contact(self):
+        world = self.world(self.assets('wall'))
+        for _ in range(32):
+            world.move(.08, 0., 200, dt=1/60)
+        start = world.poses[200]
+        for _ in range(20):
+            pose, _ = world.move(0., math.radians(.65), 200, dt=1/60)
+        self.assertAlmostEqual(math.degrees(pose.yaw-start.yaw), 13.)
+        self.assertLess(pose.position[2],start.position[2]-.10)
+        self.assertTrue(all(point[8] > -.03
+                            for point in world._contacts(pose,200,suspension=True)))
+
+    def test_ram_scrubs_speed_after_measuring_damage_energy(self):
+        world = self.world(self.assets('flat'))
+        a,b = 200,201
+        pose_a, pose_b = Pose((0.,0.,0.),0.), Pose((0.,0.,4.),0.)
+        contact = {'normal':(0.,0.,-1.), 'point_a':(0.,0.,2.), 'point_b':(0.,0.,2.),
+                   'pose_a':pose_a, 'pose_b':pose_b, 'separation':0.}
+        with patch.object(world,'_ground_contact_pairs',return_value={(a,b):contact}):
+            updates = world.resolve_ground_impacts({a:((0.,10.),0.), b:((0.,0.),0.)})
+        impact, = world.last_ground_impacts
+        self.assertAlmostEqual(updates[a][0][1],impact['velocity_a'][1]*.65)
+        self.assertAlmostEqual(updates[b][0][1],impact['velocity_b'][1]*.65)
+        self.assertTrue(impact['ram'])
+        self.assertGreater(impact['ram_energy'],240000.)
+
+    def test_ram_rearms_after_a_sustained_gap(self):
+        world = self.world(self.assets('flat'))
+        a, b = 200, 201
+        pair = (a, b)
+        contact = {'normal': (0., 0., -1.), 'point_a': (0., 0., 2.), 'point_b': (0., 0., 2.),
+                   'pose_a': Pose((0., 0., 0.), 0.), 'pose_b': Pose((0., 0., 4.), 0.),
+                   'separation': 0.}
+        states = {a: ((0., 10.), 0.), b: ((0., 0.), 0.)}
+        with patch.object(world, '_ground_contact_pairs', return_value={pair: contact}) as collect:
+            world.resolve_ground_impacts(states)
+            self.assertTrue(world.last_ground_impacts[0]['ram'])
+            collect.return_value = {}
+            world.resolve_ground_impacts(states)
+            collect.return_value = {pair: contact}
+            updates = world.resolve_ground_impacts(states)
+            self.assertFalse(world.last_ground_impacts[0]['ram'])
+            self.assertAlmostEqual(updates[b][0][1], world.last_ground_impacts[0]['velocity_b'][1])
+            collect.return_value = {}
+            for _ in range(world.RAM_REARM_CLEAR_STEPS):
+                world.resolve_ground_impacts(states)
+            collect.return_value = {pair: contact}
+            world.resolve_ground_impacts(states)
+            self.assertTrue(world.last_ground_impacts[0]['ram'])
+
+    def test_accelerator_adds_momentum_during_flight(self):
+        for backend, flags, direction in (('bullet', 0, 1), ('rapier', 0, 1), ('swept', 2, -1)):
+            dynamic_backend = 'rapier' if backend == 'rapier' else 'bullet'
+            with self.subTest(backend=backend), patch.dict(os.environ, SOLBREAKER_DYNAMIC_BACKEND=dynamic_backend):
+                world = self.world(self.assets('flat'))
+                if backend == 'rapier' and world._rapier is None:
+                    continue
+                arena = Arena([dict(id=1, nickname='Pilot'), dict(id=2, nickname='Peer')],
+                              b'', world.terrain, now=2., solo=False, room_mode=mad_games.MODE)
+                self.addCleanup(arena.close)
+                arena.ready(1, 2.)
+                arena.ready(2, 2.)
+                arena.started = 2.
+                arena.world = world
+                flyer = arena.vehicle_for(1)
+                entity = flyer.entity_id
+                with patch('solbreaker.mad_games.vehicle_abilities', return_value=('dash',)):
+                    mad_games.install_ability(flyer, 'lightTank')
+                state = flyer.consumables[3]
+                flyer.flags, flyer.last_input = flags, 2.
+                flyer.pose = Pose((0., 8., 0.), 0.)
+                velocity, spin = (3., 2., 10.), (.1, .2, .3)
+                world.relocate_training_body(entity, flyer.pose, motion=Motion(velocity, False))
+                if backend == 'swept':
+                    world.short_flight_spins[entity] = spin
+                else:
+                    self.assertTrue(world.set_flight_velocity(entity, velocity, spin))
+
+                self.assertTrue(arena.use_consumable(1, state.spec.ident, now=2.))
+                boosted = (3., 2., 10. + direction * mad_games.DASH_VELOCITY_BOOST)
+                self.assertEqual(world.motion[entity].velocity, boosted)
+                np.testing.assert_allclose(
+                    world.short_flight_spins[entity] if backend == 'swept' else world.flight_spin(entity),
+                    spin, atol=1e-6)
+                self.assertFalse(arena.use_consumable(1, state.spec.ident, now=2.))
+                self.assertEqual(state.uses, 1)
+                self.assertEqual(world.motion[entity].velocity, boosted)
+
+                arena._fixed_step(2. + arena.STEP)
+                self.assertGreater(direction * flyer.pose.position[2], .25)
+                self.assertLess(world.motion[entity].velocity[1], velocity[1])
+                self.assertFalse(world.motion[entity].grounded)
+
+    def test_airborne_ram_damages_both_tanks_once(self):
+        for backend in ('bullet', 'rapier', 'swept'):
+            dynamic_backend = 'rapier' if backend == 'rapier' else 'bullet'
+            with self.subTest(backend=backend), patch.dict(os.environ, SOLBREAKER_DYNAMIC_BACKEND=dynamic_backend):
+                assets = self.assets('flat')
+                world = self.world(assets)
+                if backend == 'rapier' and world._rapier is None:
+                    continue
+                arena = Arena([dict(id=1, nickname='Pilot'), dict(id=2, nickname='Peer')],
+                              b'', world.terrain, now=1., solo=False)
+                self.addCleanup(arena.close)
+                arena.ready(1, 1.)
+                arena.ready(2, 1.)
+                arena.world = world
+                flyer, target = (arena.vehicle_for(i) for i in (1, 2))
+                target.pose = Pose((0., 0., 7.), 0.)
+                flyer.pose = Pose((0., .30, 0.), 0.)
+                for vehicle in (flyer, target):
+                    vehicle.health = vehicle.max_health = 2000
+                    world.relocate_training_body(vehicle.entity_id, vehicle.pose)
+                if backend == 'swept':
+                    world.relocate_training_body(flyer.entity_id, flyer.pose, motion=Motion((0., 0., 16.), False))
+                else:
+                    self.assertTrue(world.set_flight_velocity(flyer.entity_id, (0., 0., 16.), (0., 0., 0.)))
+
+                for frame in range(45):
+                    arena._fixed_step(2. + (frame + 1) * arena.STEP)
+                hits = [event for event in arena.events if event.kind == 'ground_impact' and event.data['ram']]
+                self.assertEqual(len(hits), 1)
+                damage = hits[0].data
+                self.assertTrue(damage['airborne'])
+                self.assertGreater(damage['ram_damage_a'], 0)
+                self.assertGreater(damage['ram_damage_b'], 0)
+                self.assertEqual(target.health, target.max_health - damage['ram_damage_b'])
+                self.assertEqual(flyer.damage, damage['ram_damage_b'])
+
+    def test_destroyed_moving_tank_coasts_to_a_stop(self):
+        assets = self.assets('flat')
+        world = self.world(assets)
+        arena = Arena([dict(id=1, nickname='Pilot'), dict(id=2, nickname='Peer')],
+                      b'', world.terrain, now=1., solo=False)
+        self.addCleanup(arena.close)
+        arena.ready(1, 1.)
+        arena.ready(2, 1.)
+        arena.world = world
+        vehicle = arena.vehicle_for(1)
+        entity = vehicle.entity_id
+        vehicle.pose = world.poses[entity]
+        vehicle.speed = 10.
+        world.motion[entity].velocity = (0., 0., 10.)
+        arena._damage_health(vehicle, vehicle.health, arena.vehicle_for(2).entity_id, 2., shell_hit=True)
+        self.assertFalse(vehicle.alive)
+        self.assertEqual(vehicle.speed, 10.)
+        arena.finish(2, 'elimination', 2.)
+        for frame in range(180):
+            arena._fixed_step(2. + (frame + 1) * arena.STEP)
+            if frame == 30:
+                self.assertGreater(vehicle.speed, 0.)
+                self.assertLess(vehicle.speed, 10.)
+        self.assertAlmostEqual(vehicle.speed, 0.)
+        self.assertGreater(vehicle.pose.position[2], 6.)
+        self.assertLess(vehicle.pose.position[2], 12.)
+
+    def test_steep_rock_contact_pitches_the_nose_without_a_launch(self):
+        assets = self.assets('rock')
+        assets.vertices = box((-5.,0.,4.), (5.,1.,6.))
+        leading_top = (assets.vertices[:,1] == 1.) & (assets.vertices[:,2] == 4.)
+        assets.vertices[leading_top,2] += .65
+        world = self.world(assets)
+        peak = 0.
+        speed = 10.
+        for _ in range(50):
+            pose, _ = world.move(speed/60, 0., 200, dt=1/60)
+            state = world.motion[200]
+            speed = min(10., max(0.,state.velocity[2])+3.5/60)
+            peak = min(peak,pose.pitch)
+            self.assertTrue(state.grounded)
+        self.assertLess(peak, math.radians(-2.))
+        self.assertLess(pose.position[2], 3.5)
 
     def test_external_pose_and_turret_changes_reach_native_queries(self):
         world = self.world(self.assets('flat'))

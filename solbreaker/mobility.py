@@ -10,6 +10,7 @@ import math
 from dataclasses import dataclass
 
 FIRM, MEDIUM, SOFT = 0, 1, 2
+STEERING_GRIP_FACTOR = .56  # Local calibration for sustained track steering.
 
 
 @dataclass(frozen=True)
@@ -184,3 +185,10 @@ def skid_velocity(previous, yaw, speed, grip_step):
     if magnitude > limit:
         vx, vz = vx*limit/magnitude, vz*limit/magnitude
     return (vx, vz), residual
+
+
+def steering_skid(previous, yaw, yaw_delta, speed, grip_step, terrain_turn_factor):
+    # Align momentum to the hull at the end of the step. Using half the turn
+    # misses the lateral demand that causes slip at high speed.
+    return skid_velocity(previous, yaw + yaw_delta, speed,
+                         grip_step * STEERING_GRIP_FACTOR * terrain_turn_factor)

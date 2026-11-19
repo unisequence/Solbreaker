@@ -4,12 +4,13 @@ The caller supplies a checked roster from the current arena. The v1 wire
 format does not include last-known coordinates, source of a marker, or an
 expiry; this builder must not pretend to provide those missing facts.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import math
 
 from .recon import ReconState
-from .recon_wire import ReconSnapshot
+from .recon_wire import ReconSnapshot, encode
 from .roster import TEAM_SIZE, TEAMS
+from .sandbox import vehicle_wire_id
 
 
 @dataclass(frozen=True)
@@ -68,3 +69,16 @@ def build_team_spotting_snapshot(arena, observer_id, *, battle_id, sequence):
     ))
     lamp = observer.alive and observer.mad_observation_warning
     return ReconSnapshot(battle_id, sequence, lamp, targets)
+
+
+def encode_arena_recon_snapshot(arena, snapshot, observer_id):
+    if getattr(arena, 'practice', False):
+        observer = arena.vehicles[observer_id]
+        markers = set(snapshot.markers)
+        if observer.alive:
+            phase = getattr(getattr(arena, 'time_stop', None), 'entity', None)
+            markers.update(entity for entity in arena.practice_active
+                           if entity != phase and arena.vehicles[entity].alive
+                           and arena.vehicles[entity].team != observer.team)
+        snapshot = replace(snapshot, markers=tuple(sorted(vehicle_wire_id(arena, entity) for entity in markers)))
+    return encode(snapshot)

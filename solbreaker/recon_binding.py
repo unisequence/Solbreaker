@@ -136,8 +136,8 @@ class ReconBindings:
         be established separately before any payload is sent to a client.
         Call from the owning server event loop, without yielding mid-snapshot.
         """
-        from .recon_snapshot import RosterVehicle, build_recon_snapshot, build_team_spotting_snapshot
-        from .recon_wire import encode
+        from .recon_snapshot import (RosterVehicle, build_recon_snapshot, build_team_spotting_snapshot,
+                                     encode_arena_recon_snapshot)
         bound = self.resolve(token)
         arena = bound.arena
         sequence = self.next_sequence(token)
@@ -145,17 +145,18 @@ class ReconBindings:
         if timeline is not None:
             private = timeline.recon_snapshot(bound.observer_id, bound.battle_id, sequence)
             if private is not None:
-                return encode(private)
+                return encode_arena_recon_snapshot(arena, private, bound.observer_id)
         if arena.team_spotting:
-            return encode(build_team_spotting_snapshot(arena, bound.observer_id,
-                                                       battle_id=bound.battle_id, sequence=sequence))
+            snapshot = build_team_spotting_snapshot(arena, bound.observer_id,
+                                                    battle_id=bound.battle_id, sequence=sequence)
+            return encode_arena_recon_snapshot(arena, snapshot, bound.observer_id)
         roster = tuple(RosterVehicle(v.entity_id, v.team, v.alive)
                        for v in arena.vehicles.values()
                        if timeline is None or v.entity_id != timeline.entity)
         snapshot = build_recon_snapshot(arena.recon, roster, bound.observer_id,
                                         battle_id=bound.battle_id, sequence=sequence,
                                         now=arena.simulation_time)
-        return encode(snapshot)
+        return encode_arena_recon_snapshot(arena, snapshot, bound.observer_id)
 
     def renew(self, token):
         """Extend a still-valid lease; expired or revoked leases cannot revive.
