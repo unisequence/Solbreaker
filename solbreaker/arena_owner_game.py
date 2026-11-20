@@ -70,6 +70,11 @@ def snapshot(arena: Arena, events=(), *, account_id=None, training_error=None) -
         if getattr(arena, 'practice', False):
             state['practice_spawned'] = tuple(sorted(arena.practice_spawned))
             state['practice_client_ids'] = dict(arena.practice_client_ids)
+            if getattr(arena, 'proving_ground', None):
+                state['range_targets'] = tuple((eid, number, arena.vehicles[eid].nickname,
+                                                arena.vehicles[eid].descriptor)
+                                               for eid, number in arena.practice_numbers.items())
+                state['range_score'] = dict(arena.proving_ground.score)
         capture = getattr(arena, 'base_capture', None)
         state['base_capture'] = capture.view() if capture is not None else None
         supremacy = getattr(arena, 'supremacy', None)

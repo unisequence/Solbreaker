@@ -26,6 +26,18 @@ class ArenaInputQueueTests(TestCase):
         self.endpoint.queue_arena_input(account_id, self.endpoint.clients[account_id], self.arena,
                                         ArenaCommand(account_id, action, args, 100.))
 
+    def test_inline_arena_does_not_send_events_to_loading_client(self):
+        self.endpoint.send = Mock()
+        self.endpoint.clients[1].battle_spawned = False
+        self.endpoint.clients[2].battle_spawned = True
+        self.endpoint.clients[2].result_sent = False
+        self.arena.results = lambda: ()
+        self.arena.reports = {}
+        with patch('solbreaker.base.event_messages', return_value=b'equipment') as messages:
+            self.endpoint._flush_arena_results(self.arena, ())
+        messages.assert_called_once_with(self.arena, self.arena.players[2], ())
+        self.endpoint.send.assert_called_once_with(2, self.endpoint.clients[2], b'equipment')
+
     def test_tick_applies_fifo_without_entering_simulation(self):
         calls = []
         self.arena.aim_angles = lambda *args: calls.append(('aim', args, self.arena._input_only))
@@ -59,6 +71,26 @@ class ArenaInputQueueTests(TestCase):
 
 
 class OwnerMotionDeliveryTests(IsolatedAsyncioTestCase):
+    async def test_vehicle_updates_wait_for_spawn_but_leave_can_reset_loading_client(self):
+        clients = {i: SimpleNamespace(arena_id='arena', account_id=i, phase='battle',
+                    account_created=True, battle_spawned=i == 2, last_sync_tick=7) for i in (1, 2)}
+        endpoint = SimpleNamespace(clients=clients, send=Mock())
+        updates = (AddressedPayload(1, b'pending equipment'), AddressedPayload(2, b'live equipment'))
+        step = Result(1, b'', updates, arena_id='arena')
+        leave = Result(2, b'', (*updates, AddressedPayload(1, b'\x04\0')), arena_id='arena')
+        route = SimpleNamespace(arena_id='arena', close=AsyncMock(),
+                                request=AsyncMock(side_effect=(step, leave)))
+        transport = ArenaOwnerTransport(endpoint, route)
+        self.addAsyncCleanup(transport.close)
+
+        await transport.submit_nowait(Command('step', 10., 0))
+        endpoint.send.assert_called_once_with(2, clients[2], b'live equipment')
+
+        endpoint.send.reset_mock()
+        await transport.submit_client(1, clients[1], Command('leave', 11., 1))
+        self.assertEqual([call.args for call in endpoint.send.call_args_list],
+                         [(2, clients[2], b'live equipment'), (1, clients[1], b'\x04\0')])
+
     async def test_step_delivers_events_before_motion_and_checks_session_after_reply(self):
         clients = {i: SimpleNamespace(arena_id='arena', account_id=i, phase='battle',
                     account_created=True, battle_spawned=True, last_sync_tick=7) for i in (1, 2)}

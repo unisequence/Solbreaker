@@ -18,7 +18,11 @@ base capture, supremacy and battle results. Run a local server for yourself,
 host a LAN game, or connect to another server. Tanks, maps and bot settings
 are selected inside the game.
 
-Solbreaker is in public alpha. Expect bugs, incomplete mechanics and changes
+Choose **Proving Ground** in the hangar to drive the suspension circuit, test
+shots or try Gravity and Mad Games abilities together. You can also select the
+map in a training room.
+
+Solbreaker is in public prerelease. Expect bugs, incomplete mechanics and changes
 between versions. Back up server data before updating. The project does not
 include the game client or its assets; you need your own compatible copy.
 Setup creates a separate client and applies build-pinned executable and UI

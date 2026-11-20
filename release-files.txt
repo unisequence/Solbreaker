@@ -310,6 +310,11 @@ solbreaker/assets/build-11.21.0.1235_7376187-files.json.gz
 solbreaker/assets/icon-source.json
 solbreaker/assets/launcher-cover-source.json
 solbreaker/assets/launcher-cover.png
+solbreaker/assets/proving-ground-structures.webp
+solbreaker/assets/proving-ground-surfaces.webp
+solbreaker/assets/proving-ground.json.gz
+solbreaker/assets/solbreaker-github.packed.webp
+solbreaker/assets/solbreaker-github@2x.packed.webp
 solbreaker/assets/solbreaker-spread.packed.webp
 solbreaker/assets/solbreaker-spread@2x.packed.webp
 solbreaker/assets/solbreaker.ico
@@ -364,6 +369,7 @@ solbreaker/connection.py
 solbreaker/consumables.py
 solbreaker/crew.py
 solbreaker/datagram.py
+solbreaker/dava_proving_scene.py
 solbreaker/dava_scene.py
 solbreaker/desktop.py
 solbreaker/desktop_depot.py
@@ -455,6 +461,12 @@ solbreaker/platform_runtime.py
 solbreaker/practice_catalog.py
 solbreaker/profile.py
 solbreaker/progression.py
+solbreaker/proving_ground_horizon.py
+solbreaker/proving_ground_landscape_detail.py
+solbreaker/proving_ground_layout.py
+solbreaker/proving_ground_map.py
+solbreaker/proving_ground_rules.py
+solbreaker/proving_ground_signs.py
 solbreaker/rapier_dynamic.py
 solbreaker/recon.py
 solbreaker/recon_binding.py
@@ -464,8 +476,10 @@ solbreaker/recon_snapshot.py
 solbreaker/recon_target.py
 solbreaker/recon_transport.py
 solbreaker/recon_wire.py
+solbreaker/replay_inspector.py
 solbreaker/replay_patch.py
 solbreaker/replay_ui.py
+solbreaker/replay_viewer.py
 solbreaker/resource_copy.py
 solbreaker/resource_source.py
 solbreaker/results.py
@@ -530,6 +544,10 @@ tests/test_native_windows.py
 tests/test_navigation_cache.py
 tests/test_packaging.py
 tests/test_profile_redirects.py
+tests/test_proving_ground_foliage.py
+tests/test_proving_ground_hangar.py
+tests/test_proving_ground_map.py
+tests/test_proving_ground_rules.py
 tests/test_registration.py
 tests/test_runtime_flags.py
 tests/test_sandbox.py
@@ -549,6 +567,7 @@ tests/test_windows_python.py
 tools/audit_repository.py
 tools/build_contact_queries.py
 tools/build_native.py
+tools/build_proving_ground.py
 tools/build_release.py
 tools/build_support_checks.py
 tools/create-shortcut.vbs
@@ -556,6 +575,7 @@ tools/install_dependencies.py
 tools/launch_gui.pyw
 tools/package_source.py
 tools/refresh_wsl_network.py
+tools/render_proving_ground.py
 tools/server_depot.py
 tools/setup.py
 tools/setup_state.py

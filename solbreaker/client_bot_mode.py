@@ -8,7 +8,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from copy import deepcopy
 
-from .profile import TRAINING_RETURN
+from .profile import BOTS_TITLE, TRAINING_RETURN, PROVING_GROUND_DESCRIPTION
 
 _CURRENT_HANGAR = ContextVar('tfs_bot_mode_current_hangar', default=True)
 _APPEARANCE = ContextVar('tfs_bot_mode_appearance', default='native')
@@ -30,6 +30,9 @@ def _bot_mode(prefix):
 
 
 CARD_BOT_MODE = _bot_mode('mode')
+CARD_PROVING_GROUND = ('mode.gameMode == eGameMode.Arcade and '
+                       + _mode_description('mode', PROVING_GROUND_DESCRIPTION))
+PROVING_GROUND_COVER = '~res:/Gfx/UI/Hangar/GameTypes/battle-type_solbreaker_proving_ground'
 SELECTED_BOT_MODE = _bot_mode('session.gameModesAccountModel.mode')
 SELECTED_POLYGON_MODE = ('session.gameModesAccountModel.mode.gameMode == eGameMode.Regular and '
                          + _mode_description('session.gameModesAccountModel.mode', POLYGON_DESCRIPTION))
@@ -245,6 +248,16 @@ def patch_card(document):
         # The raw description key is the server's existing local-mode marker.
         # A genuine Rating mode7 from another server keeps its original icon.
         matches[0][2] = ('when '+CARD_BOT_MODE+' -> "'+after+'", '+matches[0][2][5:])
+    if _APPEARANCE.get() == 'native':
+        sprite, = [row for row in values if row[:2] == ['string', 'sprite']]
+        sprite[2] = 'when '+CARD_PROVING_GROUND+' -> "'+PROVING_GROUND_COVER+'", '+sprite[2][5:]
+        # Keep the picker label short. The queue reads the rules-specific title.
+        title_node, = [node for node in _walk(root)
+                       if ['UITextComponent.text', 'mode.gameModeOptions.title'] in node.get('bindings', ())]
+        title_node['components']['SizePolicy']['horizontalPolicy'] = 'PercentOfParent'
+        title_node['components']['UITextComponent']['fitting'] = 'FITTING_REDUCE'
+        title, = title_node['bindings']
+        title[1] = f'when {CARD_BOT_MODE} -> localize("{BOTS_TITLE}"), mode.gameModeOptions.title'
     content, = [child for child in root['children'] if child.get('name') == 'GameTypeContent']
     icon, = [child for child in content['children'] if child.get('name') == 'Icon']
     if any(row[0] == 'visible' for row in icon.get('bindings', [])):

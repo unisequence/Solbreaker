@@ -21,6 +21,7 @@ CHANGE_TANK = 65536
 TIME_STOP = 1 << 17
 REMOVE_TARGET = 1 << 18
 PICK_TARGET = 1 << 19
+USE_ABILITY = 1 << 21  # input only, separate from capability announcements
 TARGET_AI = 1 << 22
 TOGGLE_MAP_BORDER = 1 << 25
 TANK_STATS = 1 << 29
@@ -161,6 +162,25 @@ def preset_advertisement(arena, account_id):
     return b'\x13' + variable8(96, b'\x06TFS1STAT' + struct.pack('<I', token(arena)) + data + b'\0')
 
 
+def ability_slot_message(arena, slot, state, remaining):
+    return b'\x13' + variable8(96, b'\x04TFS1ABIL' + struct.pack(
+        '<IBBH', token(arena), slot, state, remaining) + b'\0')
+
+
+def ability_slot_snapshot(arena, vehicle):
+    specs = getattr(arena, 'range_abilities', ())
+    if not specs:
+        return b''
+    installed = {state.spec: state for state in vehicle.consumables if state}
+    result = bytearray()
+    for slot, spec in enumerate(specs):
+        state = installed.get(spec)
+        view = state.state_at(arena.simulation_time) if state else None
+        result += ability_slot_message(arena, slot, view.state if view else 0,
+                                       view.remaining if view else 0)
+    return bytes(result)
+
+
 def target_ai_available(arena):
     return arena.sandbox_enabled and (getattr(arena, 'practice', False) or bool(getattr(arena, 'training_bots', ())))
 
@@ -185,7 +205,8 @@ def change_tank_message(arena):
 
 
 def training_reentry_enabled(arena):
-    if (getattr(arena, 'room_settings', None) is None or not arena.started or arena.finished_at or arena.closed or arena.retiring):
+    if ((getattr(arena, 'room_settings', None) is None and not getattr(arena, 'proving_ground', None))
+            or not arena.started or arena.finished_at or arena.closed or arena.retiring):
         return False
     if getattr(arena, 'owner_backed', False):
         return getattr(arena, 'owner_training_reentry', False)
@@ -239,7 +260,8 @@ def receive(endpoint, addr, client, arena, body, now):
         distance = (control.sequence-previous[1]) & 0xffffffff
         if not 0 < distance < (1 << 31):
             return True
-    flags = previous[3] if control.flags in (PICK_TARGET, TARGET_AI, TOGGLE_MAP_BORDER, TANK_STATS, PRACTICE_MENU) else control.flags
+    flags = previous[3] if control.flags in (PICK_TARGET, TARGET_AI, TOGGLE_MAP_BORDER,
+                                            TANK_STATS, PRACTICE_MENU, USE_ABILITY) else control.flags
     client.sandbox_input = (current, control.sequence, now, flags)
     if (flags ^ previous[3]) & (BOOST | FLIGHT | MISSILE_VIEW | FAST_RELOAD | GOD_MODE):
         endpoint.server.event('sandbox_controls', account_id=client.account_id,
@@ -274,6 +296,8 @@ class Control:
         if control.flags == PICK_TARGET and not length and control.shot & 0xffff:
             return control
         if control.flags == TANK_STATS and not length and (control.shot >> 8) < len(TANK_STAT_NAMES) and (control.shot & 255) <= 100:
+            return control
+        if control.flags == USE_ABILITY and not length and control.shot < 3:
             return control
         if control.flags == PRACTICE_MENU and not length and control.shot <= MENU_RETURN_FIRE:
             return control
@@ -335,15 +359,25 @@ def flight_velocity(flight, pose, velocity, spin, ground, drive, flags, gravity,
     desired = (_approach(vx, target_x, 10., dt),
                _approach(vy, vertical, 13., dt)+gravity*dt,
                _approach(vz, target_z, 10., dt))
+    return desired, flight_attitude(pose, velocity, spin, thrust, turn, dt)
+
+
+def flight_attitude(pose, velocity, spin, thrust, turn, dt, *, angular_acceleration=5., landing=None):
+    """Steer and level the hull with angular velocity only."""
+    fx, fz = math.sin(pose.yaw), math.cos(pose.yaw)
+    vx, _, vz = velocity
     ax, ay, az = spin
     pitch = math.remainder(pose.pitch, math.tau)
     roll = math.remainder(pose.roll, math.tau)
     forward_speed = vx*fx+vz*fz
     desired_pitch = .19*thrust if abs(forward_speed) < 8. else .14*thrust
     desired_roll = -.27*turn
+    if landing is not None:
+        pitch_on_ground, roll_on_ground, blend = landing
+        desired_pitch += (pitch_on_ground - desired_pitch) * blend
+        desired_roll += (roll_on_ground - desired_roll) * blend
     pitch_rate = 3.5*(desired_pitch-pitch) - .25*(ax*fz-az*fx)
     roll_rate = 3.5*(desired_roll-roll) - .25*(ax*fx+az*fz)
     angular = (pitch_rate*fz+roll_rate*fx, .87*turn, -pitch_rate*fx+roll_rate*fz)
-    rotation = tuple(_approach(rate, max(-1.5, min(1.5, goal)), 5., dt)
-                     for rate, goal in zip(spin, angular))
-    return desired, rotation
+    return tuple(_approach(rate, max(-1.5, min(1.5, goal)), angular_acceleration, dt)
+                 for rate, goal in zip(spin, angular))

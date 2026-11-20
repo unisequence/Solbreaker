@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "solbreaker-server"
-version = "0.1.0rc1"
+version = "0.1.0rc2"
 description = "Solbreaker multiplayer tank server compatible with build 11.21.0.1235_7376187"
 requires-python = ">=3.11"
 license = "AGPL-3.0-only"
@@ -30,4 +30,4 @@ include = ["solbreaker*"]
 namespaces = false
 
 [tool.setuptools.package-data]
-solbreaker = ["native/*/Cargo.toml", "native/*/Cargo.lock", "native/*/abi.h", "native/*/src/*.rs", "native/support_checks/*.pyx", "native/*.c", "native/*.h", "native/*.S", "native/*.inc", "assets/*.png", "assets/*.ico", "assets/*.json", "assets/*.json.gz", "assets/solbreaker-spread*.packed.webp", "assets/time-stop-clock.packed.webp"]
+solbreaker = ["native/*/Cargo.toml", "native/*/Cargo.lock", "native/*/abi.h", "native/*/src/*.rs", "native/support_checks/*.pyx", "native/*.c", "native/*.h", "native/*.S", "native/*.inc", "assets/*.png", "assets/*.ico", "assets/*.json", "assets/*.json.gz", "assets/proving-ground-surfaces.webp", "assets/proving-ground-structures.webp", "assets/solbreaker-github*.packed.webp", "assets/solbreaker-spread*.packed.webp", "assets/time-stop-clock.packed.webp"]

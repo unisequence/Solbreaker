@@ -94,9 +94,12 @@ STRINGS = {
 }
 
 
-for _key in tuple(STRINGS):
-    if _key.startswith('Stats') and _key != 'StatsHelp':
-        STRINGS[_key] = tuple(text.upper() for text in STRINGS[_key])
+_MENU_HELP = {'StatsHelp', 'PickHint', 'PickEmpty', 'PickHow', 'PickUnavailable'}
+for _key, _texts in STRINGS.items():
+    if (_key not in _MENU_HELP
+            and (_key.startswith(('Picker', 'Target', 'Sandbox', 'Stats', 'Pick'))
+                 or _key in ('Borders', 'Ai', 'AiTarget', 'AiAll', 'AiOff', 'AiEasy', 'AiNormal', 'AiHard'))):
+        STRINGS[_key] = tuple(text.upper() for text in _texts)
 
 
 def search_index(game):
@@ -175,7 +178,10 @@ def _button(name, caption, x, y, width, command, *, height=46., color='gray'):
             'classes': f'button button-color-{color}', 'position': [x, y], 'size': [width, height],
             'components': {'UIInputEventComponent': {'onTouchUpInside': f'SolTarget{command}'}},
             'children': [{'path': 'Caption', 'classes': 'text2 text-color-white',
-                          'components': {'UITextComponent': {'text': caption}}}]}
+                          'components': {
+                              'Anchor': {'leftAnchor': 7., 'rightAnchor': 7.},
+                              'UITextComponent': {'text': caption, 'fitting': 'FITTING_REDUCE'},
+                          }}]}
 
 
 def _mark(name, x, y, width, *, visible=True):

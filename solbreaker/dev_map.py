@@ -119,7 +119,7 @@ def _load_dev_map(manifest, lab, descriptor_path) -> MapSpec:
         document = json.load(stream)
     if (not isinstance(document, dict) or document.get("format") not in
             ("solbreaker-dev-map/v1", "blitz-dev-map/v1")
-            or document.get("name") not in ("physics_lab", "user_map")):
+            or document.get("name") not in ("physics_lab", "user_map", "solbreaker_proving_ground")):
         raise ValueError("Unsupported development map manifest")
     base_key = document.get("base_key")
     if not isinstance(base_key, str):
@@ -158,8 +158,11 @@ def _load_dev_map(manifest, lab, descriptor_path) -> MapSpec:
 
 def dev_map_specs_for_lab(manifest, lab) -> tuple[MapSpec, ...]:
     """Load every hash-checked development map opted into this isolated lab."""
-    specs = tuple(_load_dev_map(manifest, lab, path)
-                  for path in _dev_map_paths(manifest))
+    from .proving_ground_map import DESCRIPTOR
+    paths = _dev_map_paths(manifest)
+    if DESCRIPTOR not in paths and (Path(lab)/DESCRIPTOR).exists():
+        paths = (*paths, DESCRIPTOR)
+    specs = tuple(_load_dev_map(manifest, lab, path) for path in paths)
     ids = [spec.map_id for spec in specs]
     keys = [spec.key for spec in specs]
     if len(set(ids)) != len(ids) or len(set(keys)) != len(keys):

@@ -12,12 +12,16 @@ import numpy as np
 
 from solbreaker import mad_games
 from solbreaker.arena import Arena
+from solbreaker.armor import ArmorHit, ShotResult
+from solbreaker.ballistics import Impact
 from solbreaker.big_boss import BigBoss, GravityTrap
 from solbreaker.collision import CollisionWorld, Destructible, Motion, Pose, matrix
+from solbreaker.consumables import GRAVITY_JUMP_SPEC, ConsumableState
 from solbreaker.mesh_files import MeshFiles
 from solbreaker.native_physics import SensorState, StepInput, StepOutput, library_path, load_library
 from solbreaker.physics_proxy import vehicle_proxies
 from solbreaker.terrain import MapTerrain
+from solbreaker.vehicle_data import MissileFlight, Shell
 
 
 def box(low, high):
@@ -126,6 +130,12 @@ class NativeLibraryTests(unittest.TestCase):
 
 @unittest.skipUnless(LIBRARY.exists(), 'Build the physics_core library first')
 class NativePhysicsTests(unittest.TestCase):
+    @staticmethod
+    def flight_center_velocity(world, entity):
+        pose = world.poses[entity]
+        offset = matrix(pose.yaw, pose.pitch, pose.roll) @ world.dynamic_bodies[entity].center_of_mass
+        return world._center_velocity(world.motion[entity].velocity, world.flight_spin(entity), offset)
+
     def world(self, assets, enabled=None, *, gravity=CollisionWorld.GRAVITY):
         with patch.dict(os.environ):
             if enabled is None:
@@ -180,35 +190,183 @@ class NativePhysicsTests(unittest.TestCase):
         slow = drive(2., 10., 8)
         fast = drive(4., 120., 8)
         mirrored = drive(6., 120., 4)
-        self.assertLess(max(map(abs, slow)), 1.)
+        self.assertGreater(fast[35], 1.5 * max(map(abs, slow)))
         self.assertGreater(fast[35], 10.)
         self.assertGreater(fast[35], fast[17] + 1.)
         self.assertGreater(fast[36], 1.)
         self.assertAlmostEqual(fast[35], -mirrored[35], delta=.2)
-        self.assertLess(abs(fast[-1]), 1.)
+        self.assertLess(abs(fast[-1]), .25 * fast[35])
 
-    def test_gravity_recoil_slides_on_flat_ground_and_air_control_adds_no_lift(self):
+    def test_gravity_rearward_shot_pushes_hull_forward_and_air_control_preserves_velocity(self):
         assets = self.assets('flat')
         world = self.world(assets, gravity=2.5)
         arena = SimpleNamespace(world=world)
         vehicle = SimpleNamespace(entity_id=200, definition=assets.definition, pose=world.poses[200])
         shell = SimpleNamespace(caliber=100.)
 
-        Arena._gravity_shell_impulse(arena, vehicle, shell, (0., 0., 1.), recoil=True)
-        self.assertTrue(world.motion[200].grounded)
-        self.assertAlmostEqual(world.ground_motion[200].velocity[1], -4.2)
+        Arena._gravity_shell_impulse(arena, vehicle, shell, (0., 0., -1.), recoil=True)
+        self.assertFalse(world.motion[200].grounded)
+        self.assertGreater(world.motion[200].velocity[2], 4.)
+        for _ in range(18):
+            world.dynamic_commit(1/60)
+        self.assertGreater(world.poses[200].position[2], 1.)
 
         self.assertTrue(world.add_flight_velocity(200, (0., 4., 5.)))
         vehicle.pose = world.poses[200]
-        vx, vy, _ = world.motion[200].velocity
+        velocity = self.flight_center_velocity(world, 200)
         Arena._gravity_air_control(arena, vehicle, 1 | 8, 1/60)
-        self.assertGreater(world.motion[200].velocity[0], vx)
-        self.assertAlmostEqual(world.motion[200].velocity[1], vy)
+        np.testing.assert_allclose(self.flight_center_velocity(world, 200), velocity, atol=1e-9)
         pitch_rate, yaw_rate, _ = world.flight_spin(200)
         self.assertGreater(pitch_rate, 0.)
         self.assertGreater(yaw_rate, 0.)
         world.dynamic_commit(1/60)
-        self.assertLess(world.motion[200].velocity[1], vy)
+        self.assertLess(self.flight_center_velocity(world, 200)[1], velocity[1])
+
+    def test_gravity_holding_forward_levels_a_tumbling_tank_without_thrust(self):
+        world = self.world(self.assets('flat'), gravity=2.5)
+        arena = SimpleNamespace(world=world)
+        entity = 200
+        world.relocate_training_body(entity, Pose((0., 20., 0.), 0., .9, -.8))
+        self.assertTrue(world.set_flight_velocity(entity, (0., 0., 6.), (2., 0., -.8)))
+        vehicle = SimpleNamespace(entity_id=entity, pose=world.poses[entity])
+
+        for _ in range(120):
+            vehicle.pose = world.poses[entity]
+            velocity = self.flight_center_velocity(world, entity)
+            Arena._gravity_air_control(arena, vehicle, 1, 1/60)
+            np.testing.assert_allclose(self.flight_center_velocity(world, entity), velocity, atol=1e-9)
+            world.dynamic_commit(1/60)
+
+        pose = world.poses[entity]
+        self.assertLess(abs(pose.pitch), .25)
+        self.assertLess(abs(pose.roll), .1)
+        self.assertLess(self.flight_center_velocity(world, entity)[1], -4.)
+        self.assertLess(pose.position[1], 16.)
+
+    def test_gravity_side_shot_rolls_away_and_scales_with_caliber_and_mass(self):
+        assets = self.assets('flat')
+        world = self.world(assets, gravity=2.5)
+        arena = SimpleNamespace(world=world)
+        entity = 200
+        pose = world.poses[entity]
+        vehicle = SimpleNamespace(entity_id=entity, pose=pose, definition=assets.definition)
+
+        def roll_rate(direction, caliber, mass):
+            world.relocate_training_body(entity, pose)
+            vehicle.definition.mass = mass
+            Arena._gravity_shell_impulse(arena, vehicle, SimpleNamespace(caliber=caliber),
+                                         direction, recoil=True)
+            return world.flight_spin(entity)[2]
+
+        right = roll_rate((1., 0., 0.), 100., 40_000.)
+        left = roll_rate((-1., 0., 0.), 100., 40_000.)
+        self.assertGreater(right, 0.)
+        self.assertAlmostEqual(left, -right)
+        self.assertGreater(roll_rate((1., 0., 0.), 152., 40_000.), right)
+        self.assertLess(roll_rate((1., 0., 0.), 100., 65_000.), right)
+        self.assertAlmostEqual(roll_rate((0., 0., 1.), 100., 40_000.), 0.)
+
+    def test_gravity_descent_aligns_to_terrain_without_changing_linear_momentum(self):
+        world = self.world(self.assets('flat'), gravity=2.5)
+        arena = SimpleNamespace(world=world)
+        entity = 200
+        vehicle = SimpleNamespace(entity_id=entity)
+        world.relocate_training_body(entity, Pose((0., 2., 0.), 0.))
+        self.assertTrue(world.set_flight_velocity(entity, (0., -.6, 0.), (0., 0., 0.)))
+
+        with patch.object(world.terrain, 'height', side_effect=lambda x, z: .12*x + .2*z):
+            pitch, roll, _ = world.landing_attitude(entity, world.poses[entity], 3.)
+            self.assertLess(pitch, 0.)
+            self.assertGreater(roll, 0.)
+            self.assertIsNone(world.landing_attitude(entity, Pose((0., 6., 0.), 0.), 3.))
+            for _ in range(40):
+                vehicle.pose = world.poses[entity]
+                velocity = self.flight_center_velocity(world, entity)
+                Arena._gravity_air_control(arena, vehicle, 1, 1/60)
+                np.testing.assert_allclose(self.flight_center_velocity(world, entity), velocity, atol=1e-9)
+                world.dynamic_commit(1/60)
+
+        pose = world.poses[entity]
+        self.assertAlmostEqual(pose.pitch, pitch, delta=.07)
+        self.assertAlmostEqual(pose.roll, roll, delta=.05)
+
+    def test_gravity_thruster_adds_to_airborne_momentum_and_obeys_cooldown(self):
+        for rigid in (False, True):
+            with self.subTest(rigid=rigid):
+                assets = self.assets('flat')
+                world = self.world(assets, gravity=2.5)
+                arena = Arena([dict(id=1, nickname='Pilot'), dict(id=2, nickname='Opponent')],
+                              b'', world.terrain, now=1., solo=False, room_mode='gravity')
+                self.addCleanup(arena.close)
+                arena.ready(1, 1.)
+                arena.ready(2, 1.)
+                arena.world = world
+                vehicle = arena.vehicle_for(1)
+                entity = vehicle.entity_id
+                vehicle.pose = Pose((0., 12., 0.), 0.)
+                vehicle.definition = assets.definition
+                state = ConsumableState(GRAVITY_JUMP_SPEC)
+                vehicle.consumables = (state,)
+                velocity, spin = (2., -4., 7.), (.2, .1, .3)
+                world.relocate_training_body(entity, vehicle.pose, motion=Motion(velocity, False))
+                if rigid:
+                    self.assertTrue(world.set_flight_velocity(entity, velocity, spin))
+                else:
+                    world.short_flight_spins[entity] = spin
+                arena.drain_events()
+
+                self.assertTrue(arena.use_consumable(1, state.spec.ident, now=1.))
+                delta = next(event.data['velocity'] for event in arena.drain_events()
+                             if event.kind == 'gravity_jump')
+                boosted = tuple(before + added for before, added in zip(velocity, delta))
+                self.assertEqual(world.motion[entity].velocity, boosted)
+                self.assertEqual(entity in world.dynamic_bodies, rigid)
+                actual_spin = world.flight_spin(entity) if rigid else world.short_flight_spins[entity]
+                np.testing.assert_allclose(actual_spin, spin, atol=1e-9)
+                self.assertFalse(arena.use_consumable(1, state.spec.ident, now=1.))
+                self.assertEqual(world.motion[entity].velocity, boosted)
+
+    def test_gravity_incoming_shell_and_guided_rocket_move_a_braked_tank(self):
+        assets = self.assets('flat')
+        assets.definition.mass = 60_000.
+        world = self.world(assets, gravity=2.5)
+        arena = Arena([dict(id=1, nickname='Player'), dict(id=2, nickname='Enemy')],
+                      b'', world.terrain, now=1., solo=False, room_mode='gravity')
+        self.addCleanup(arena.close)
+        arena.ready(1, 1.)
+        arena.ready(2, 1.)
+        arena.world = world
+        target, shooter = (arena.vehicle_for(i) for i in (1, 2))
+        target.definition = assets.definition
+        entity = target.entity_id
+        pose = world.poses[entity]
+        hit_point = (0., .55, -1.8)
+        contact = ArmorHit(0., hit_point, (0., 0., -1.), 'hull', 1, 200., 1.)
+        result = ShotResult('not_penetrated', contact)
+        health = target.health
+
+        distances = []
+        for shot, missile in enumerate((None, MissileFlight(400., 20., 2., 0.)), 1):
+            world.relocate_training_body(entity, pose)
+            shell = Shell(1, 152., 500., (150., 200.), None, None, 200., 0., 500., missile=missile)
+            if missile is not None:
+                shooter.definition = assets.definition
+                with patch.object(arena, 'shot_dispersion', return_value=0.):
+                    arena._launch(shooter, shell, 1.9)
+                self.assertTrue(world.motion[shooter.entity_id].grounded)
+                self.assertEqual(world.motion[shooter.entity_id].velocity, (0., 0., 0.))
+                self.assertFalse(world.ground_motion[shooter.entity_id].active)
+            arena._impact(Impact(2., shot, result, hit_point, None, (0., -.3, 1.),
+                                 shooter.entity_id, entity, shell, collision=True))
+            self.assertFalse(world.motion[entity].grounded)
+            self.assertGreater(world.motion[entity].velocity[1], 0.)
+            for _ in range(18):
+                world.dynamic_commit(1/60)
+            distances.append(world.poses[entity].position[2] - pose.position[2])
+            self.assertEqual(target.health, health)
+
+        self.assertGreater(distances[0], .7)
+        self.assertGreater(distances[1], 1.7 * distances[0])
 
     def test_graviton_damps_fast_tanks_and_retains_ground_controls(self):
         assets = self.assets('flat')
@@ -271,9 +429,9 @@ class NativePhysicsTests(unittest.TestCase):
                 dt = 1/60
                 for _ in range(48):
                     vehicle.pose = world.poses[entity]
-                    velocity = world.motion[entity].velocity
+                    velocity = self.flight_center_velocity(world, entity)
                     Arena._gravity_air_control(arena, vehicle, 0, dt)
-                    self.assertEqual(world.motion[entity].velocity, velocity)
+                    np.testing.assert_allclose(self.flight_center_velocity(world, entity), velocity, atol=1e-9)
                     world.dynamic_commit(dt)
                 self.assertFalse(world.motion[entity].grounded)
                 self.assertLess(abs(world.poses[entity].roll), .08)
@@ -743,6 +901,26 @@ class NativePhysicsTests(unittest.TestCase):
         self.assertGreater(vx, 3.)
         self.assertGreater(vz, 7.)
 
+    def test_released_sandbox_flight_clears_buried_tracks_without_braking(self):
+        world = self.world(self.assets('flat'))
+        entity = 200
+        ground = world.terrain.height(0., 0.)
+        pose = Pose((0., ground - .263, 0.), 0.)
+        velocity = (1., -4., 20.)
+        rotation = matrix(0.)
+        self.assertTrue(world.set_flight_velocity(entity, velocity, (0., 0., 0.),
+                                                 sandbox_landing=True))
+
+        corrected, corrected_velocity = world._constrain_dynamic_pose(
+            entity, pose, velocity, rotation)
+
+        self.assertAlmostEqual(corrected.position[1], ground - world.SKIN)
+        self.assertEqual(corrected_velocity, (1., 0., 20.))
+        self.assertTrue(world.set_flight_velocity(entity, velocity, (0., 0., 0.),
+                                                 sandbox_landing=False))
+        self.assertEqual(world._constrain_dynamic_pose(entity, pose, velocity, rotation),
+                         (pose, velocity))
+
     def test_dynamic_terrain_guard_ignores_empty_space_below_a_bevelled_nose(self):
         from solbreaker.collision import bullet, matrix, quaternion
         assets = self.assets('flat')
@@ -767,6 +945,23 @@ class NativePhysicsTests(unittest.TestCase):
 
         self.assertLess(world.poses[200].position[1], 1.2)
         self.assertLess(world.motion[200].velocity[1], 0.)
+
+    def test_low_gravity_catches_track_penetration_during_a_nose_down_landing(self):
+        world = self.world(self.assets('flat'), gravity=2.5)
+        self.assertTrue(world.set_flight_velocity(200, (0., -3., 6.), (0., 0., 0.)))
+        pitch = .30
+        pose = Pose((0., .30, 0.), 0., pitch)
+        rotation = matrix(0., pitch, 0.)
+
+        corrected, velocity = world._constrain_dynamic_pose(200, pose, (0., -3., 6.), rotation)
+
+        self.assertGreater(corrected.position[1], pose.position[1])
+        self.assertAlmostEqual(corrected.pitch, pitch)
+        self.assertEqual(velocity, (0., 0., 6.))
+        tracks = np.concatenate([vertices for name, vertices in world.assets_for(200).tank_shapes
+                                 if name.startswith('chassis_track_')])
+        self.assertGreaterEqual((tracks @ rotation.T)[:, 1].min() + corrected.position[1],
+                                -world.LOW_GRAVITY_TERRAIN_OVERLAP)
 
     def test_native_tracks_cross_a_low_riser_but_stop_at_a_wall(self):
         for height, can_cross in ((.18, True), (.20, True), (.27, True), (.50, False), (1., False)):

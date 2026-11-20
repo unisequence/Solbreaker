@@ -283,6 +283,12 @@ class ArenaOwnerService:
             if getattr(arena, 'practice', False):
                 arena.practice_spawned = set(state['practice_spawned'])
                 arena.practice_client_ids = dict(state.get('practice_client_ids', {}))
+                if getattr(arena, 'proving_ground', None):
+                    arena.proving_ground.score = dict(state['range_score'])
+                    for entity, number, nickname, descriptor in state['range_targets']:
+                        arena.practice_numbers[entity] = number
+                        arena.vehicles[entity].nickname = nickname
+                        arena.vehicles[entity].descriptor = descriptor
             capture = getattr(arena, 'base_capture', None)
             view = state.get('base_capture')
             if capture is not None and view is not None:

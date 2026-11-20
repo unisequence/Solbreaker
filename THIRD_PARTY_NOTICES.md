@@ -64,6 +64,8 @@ Applicable official terms are linked in [Blitz and Steam terms](licenses/BLITZ.m
 
 ## Research, interface adaptation and artwork
 
+The community link to the Solbreaker repository uses GitHub’s white Invertocat mark. GitHub and Invertocat are trademarks of GitHub, Inc. [GitHub Brand Toolkit](https://brand.github.com/foundations/logo).
+
 The project records client-interface research against the pinned local client. It also contains an experimental internal-geometry loader developed during private Armor Inspector investigations. Imported viewer geometry is external to the source release. WOTInspector's own terms govern its service and content.
 
 The icon uses AI-assisted artwork based on a supplied emblem. On 10 November 2026, the project owner confirmed that this supplied logo was also AI-generated. The launcher cover was generated from a text-only prompt. Prompts, reference descriptions and output hashes are preserved in solbreaker/assets.

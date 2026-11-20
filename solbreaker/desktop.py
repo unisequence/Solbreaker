@@ -17,6 +17,9 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog, QFil
 from . import __version__, discovery, updates
 from .management import PROJECT, Manager, Settings, read_log
 from .build_info import COMPATIBILITY
+from .connection import atomic_write
+from .replay_inspector import ReplayError, load_replay
+from .replay_viewer import ViewerError, build_viewer_html, resolve_map
 from .desktop_i18n import tr
 
 ASSETS = Path(__file__).with_name('assets')
@@ -664,6 +667,19 @@ class SetupWizard(QDialog):
             super().closeEvent(event)
 
 
+def write_replay_preview(path, roots, target):
+    replay = load_replay(path)
+    games = [root for root in roots if (root/'Data/maps.yaml.dvpl').is_file()]
+    for game in games or (None,):
+        context = resolve_map(replay, game_dir=game)
+        if context.mode == 'terrain':
+            break
+    page = build_viewer_html(replay, context)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write(target, page.encode('utf-8'))
+    return target
+
+
 class Window(QMainWindow):
     update_progress = Signal(str, object, object, object)
 
@@ -673,6 +689,7 @@ class Window(QMainWindow):
         self.manager = Manager(Settings.load(config))
         self.update_kind = updates.package_kind(PROJECT)
         self.update_task = None
+        self.replay_view_task = None
         self.update_detail = ''
         self.update_progress.connect(self.show_update_progress, Qt.QueuedConnection)
         self.update_result = os.environ.pop('SOLBREAKER_UPDATE_RESULT', '')
@@ -886,8 +903,13 @@ class Window(QMainWindow):
         column.addLayout(preparation)
         replay_actions = QHBoxLayout()
         self.open_replay_button = button(tr('Открыть реплей…'), self.select_replay)
+        self.replay_view_button = button(tr('Посмотреть траекторию…'), self.select_replay_view)
+        if self.replay_view_task is not None:
+            self.replay_view_button.setText(tr('Готовим траекторию…'))
+            self.replay_view_button.setEnabled(False)
         self.replay_folder_button = button(tr('Папка реплеев'), self.open_replay_folder)
         replay_actions.addWidget(self.open_replay_button)
+        replay_actions.addWidget(self.replay_view_button)
         replay_actions.addWidget(self.replay_folder_button)
         replay_actions.addStretch()
         column.addLayout(replay_actions)
@@ -1162,6 +1184,37 @@ class Window(QMainWindow):
             self.error(error)
         self.poll()
 
+    def select_replay_view(self):
+        if self.replay_view_task is not None:
+            return
+        directory = self.replay_directory()
+        path, _ = QFileDialog.getOpenFileName(self, tr('Посмотреть траекторию…'),
+            str(directory if directory.is_dir() else Path.home()), tr('Реплеи Blitz (*.wotbreplay)'))
+        if not path:
+            return
+        settings = self.manager.settings
+        client = Path(settings.client).expanduser()/'client' if settings.client else None
+        game = Path(settings.game).expanduser() if settings.game else None
+        roots = tuple(root for root in (client, game) if root is not None)
+        target = self.config.expanduser().absolute().with_name('replay-preview.html')
+        self.replay_view_button.setText(tr('Готовим траекторию…'))
+        self.replay_view_button.setEnabled(False)
+        executor = ThreadPoolExecutor(max_workers=1)
+        self.replay_view_task = executor.submit(write_replay_preview, path, roots, target)
+        executor.shutdown(wait=False)
+
+    def finish_replay_view(self):
+        task, self.replay_view_task = self.replay_view_task, None
+        self.replay_view_button.setText(tr('Посмотреть траекторию…'))
+        self.replay_view_button.setEnabled(True)
+        try:
+            target = task.result()
+        except (OSError, ValueError, ReplayError, ViewerError) as error:
+            self.error(tr('Не удалось построить траекторию. {detail}').format(detail=error))
+            return
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(target))):
+            self.error(tr('Не удалось открыть просмотрщик реплеев.'))
+
     def open_replay_folder(self):
         directory = self.replay_directory()
         try:
@@ -1295,6 +1348,8 @@ class Window(QMainWindow):
         starting = self.manager.server is not None and self.manager.server.running and not self.manager.server.started
         if self.update_task is not None and self.update_task.done():
             self.finish_update()
+        if self.replay_view_task is not None and self.replay_view_task.done():
+            self.finish_replay_view()
         if self.update_result:
             self.manager.notice = ('Solbreaker обновлён.' if self.update_result == 'success'
                                    else 'Установка обновления не удалась. См. runtime/launcher-update.log.')
@@ -1335,6 +1390,7 @@ class Window(QMainWindow):
         wizard_open = self.wizard is not None and self.wizard.isVisible()
         self.language_picker.setEnabled(not self.manager.busy and not wizard_open and self.update_task is None)
         self.play_button.setEnabled(not self.manager.busy)
+        self.replay_view_button.setVisible(states[1])
         self.open_replay_button.setVisible(states[1])
         self.open_replay_button.setEnabled(not self.manager.busy)
         self.replay_folder_button.setVisible(states[1])

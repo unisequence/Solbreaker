@@ -7,10 +7,13 @@ ROOM_CAPACITY = 20
 WAITING = 17
 
 
-def validate_teams(teams):
-    if (not 2 <= len(teams) <= 2*TEAM_SIZE
+def validate_teams(teams, *, practice=False):
+    minimum = 0 if practice else 1
+    if (not teams or len(teams) > 2*TEAM_SIZE
             or any(type(t) is not int or t not in TEAMS for t in teams)
-            or any(not 1 <= teams.count(t) <= TEAM_SIZE for t in TEAMS)):
+            or any(not minimum <= teams.count(t) <= TEAM_SIZE for t in TEAMS)):
+        if practice:
+            raise ValueError('The proving ground requires a player and allows up to 7 per team')
         raise ValueError('A shared battle requires 1 to 7 participants on each team')
 
 

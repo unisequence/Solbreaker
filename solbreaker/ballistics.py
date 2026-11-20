@@ -521,7 +521,7 @@ def _missile_velocity(projectile, position, velocity, target, dt):
 
 
 def advance(projectile, world, before, after, dt, rng, *, sweep_cache=None, missile_target=None,
-            prop_contact=None):
+            prop_contact=None, segment_limit=None):
     """Advance one shell over this world step; return only an actual contact/end."""
     # A free rigid body can rotate far faster than a tracked hull.  Keep the
     # same time cap for gravity and translational sweep, plus a strictly bound
@@ -556,6 +556,12 @@ def advance(projectile, world, before, after, dt, rng, *, sweep_cache=None, miss
             continue
         remaining = projectile.shell.max_distance-projectile.distance
         range_fraction = min(1.,max(0.,remaining/length))
+        boundary = segment_limit(projectile.shot, start, delta) if segment_limit else None
+        boundary_end = boundary is not None and boundary <= range_fraction
+        if boundary_end:
+            range_fraction = boundary
+            if not boundary:
+                return projectile.impact(start, delta / length, at=projectile.time)
         end = start+delta*range_fraction
         body,wall_fraction,point = world.static_segment(tuple(start),tuple(end)) if world else (None,1.,tuple(end))
         limit = wall_fraction*range_fraction
@@ -627,11 +633,11 @@ def advance(projectile, world, before, after, dt, rng, *, sweep_cache=None, miss
                 segment_after = {entity:interpolate(old,after[entity],(i+1)/count)
                                  for entity,old in before.items() if entity in after}
                 impact = advance(projectile,world,segment_before,segment_after,remainder,rng,
-                                 missile_target=missile_target, prop_contact=prop_contact)
+                                 missile_target=missile_target, prop_contact=prop_contact, segment_limit=segment_limit)
                 if impact is not None:
                     return impact
             continue
-        if body is not None or remaining <= length+1e-9:
+        if body is not None or boundary_end or remaining <= length+1e-9:
             tangent = velocity+acceleration*(h*limit)
             tangent /= np.linalg.norm(tangent)
             return projectile.impact(point,tangent,at=projectile.time+h*limit,

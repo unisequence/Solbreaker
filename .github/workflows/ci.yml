@@ -46,6 +46,10 @@ jobs:
           export CARGO_TARGET_DIR="$RUNNER_TEMP/cargo-target"
           RUSTUP_TOOLCHAIN=1.85.0 "$RUNNER_TEMP/solbreaker-ci/bin/python" tools/build_native.py --jobs 2
       - name: Run tests
-        run: '"$RUNNER_TEMP/solbreaker-ci/bin/python" -m unittest discover -s tests'
+        run: |
+          # The proving-ground art tests render generated textures with Pillow.
+          echo 'Pillow==13.0.0 --hash=sha256:42d63be3af4f9b951b199b0a9d23365d37ab14687e6d77b74940432c8515c4ca' > "$RUNNER_TEMP/map-test-dependencies.txt"
+          "$RUNNER_TEMP/solbreaker-ci/bin/python" -m pip install --only-binary=:all: --require-hashes -r "$RUNNER_TEMP/map-test-dependencies.txt"
+          "$RUNNER_TEMP/solbreaker-ci/bin/python" -m unittest discover -s tests
       - name: Check the source package
         run: python tools/package_source.py --output "$RUNNER_TEMP/Solbreaker-source.zip"

@@ -27,6 +27,7 @@
 #define GOD_MODE 32768u
 #define REMOVE_TARGET (1u << 18)
 #define PICK_TARGET (1u << 19)
+#define USE_ABILITY (1u << 21)
 #define TARGET_SELECTED (1u << 20)
 #define TARGET_UNAVAILABLE (1u << 21)
 #define TARGET_AI (1u << 22)
@@ -44,7 +45,7 @@
 #define ONE_SHOT_ACTIONS (SPAWN_TARGET | GRAVITY_JUMP | TELEPORT | PRACTICE_ACTIONS | RESTORE_HP)
 /* The pinned keyboard registry uses 0 through 0x32 for stock actions. */
 #define FIRST_SANDBOX_ACTION 0x33u
-#define SANDBOX_ACTION_COUNT 13u
+#define SANDBOX_ACTION_COUNT 15u
 #define TELEPORT_KEY (1u << 5)
 #define RESTORE_HP_KEY (1u << 9)
 #define GOD_MODE_KEY (1u << 10)
@@ -52,6 +53,9 @@
 #define JUMP_KEY (1u << 12)
 #define SANDBOX_KEYS (JUMP_KEY - 1u)
 #define ABILITY_ONE_ACTION 7u /* Native Consumables4 / ABILITY 1. */
+#define ABILITY_TWO_ACTION (FIRST_SANDBOX_ACTION + 13u)
+#define ABILITY_SHIFT 26u
+#define ABILITY_KEYS (7u << ABILITY_SHIFT)
 
 typedef struct { char text[16]; uint32_t size, capacity; } NativeString;
 typedef struct { uint32_t device, key, modifiers, phase; } KeyBinding;
@@ -65,6 +69,8 @@ typedef struct { uint32_t magic; SavedKey keys[SANDBOX_ACTION_COUNT]; } SavedBin
 /* The launcher runs the executable from the prepared client's client/ directory. */
 static const char bindings_path[] = "..\\documents\\solbreaker-keybinds.bin";
 static const char blur_path[] = "..\\documents\\solbreaker-motion-blur.bin";
+static const char fov_path[] __attribute__((section(".boss_rodata"))) = "..\\documents\\solbreaker-fov.bin";
+static const char fov_temp[] __attribute__((section(".boss_rodata"))) = "..\\documents\\solbreaker-fov.tmp";
 static const char blur_temp[] = "..\\documents\\solbreaker-motion-blur.tmp";
 static const char bindings_temp[] = "..\\documents\\solbreaker-keybinds.tmp";
 __attribute__((section(".boss_rodata")))
@@ -79,6 +85,7 @@ static const NativeString binding_names[] = {
     {"SolTeleport", 11, 15},
     {"SolNextTank", 11, 15}, {"SolTargetFire", 13, 15}, {"SolClear", 8, 15},
     {"SolHeal", 7, 15}, {"SolGod", 6, 15}, {"SolRemove", 9, 15},
+    {"SolAbility2", 11, 15}, {"SolAbility3", 11, 15},
 };
 __attribute__((section(".boss_rodata")))
 static const NativeString binding_captions[][2] = {
@@ -95,9 +102,11 @@ static const NativeString binding_captions[][2] = {
     {{"Local/SbHeal", 12, 15}, {"", 0, 15}},
     {{"Local/SbGod", 11, 15}, {"", 0, 15}},
     {{"Local/SbRemove", 14, 15}, {"", 0, 15}},
+    {{"Local/SbAbl2", 12, 15}, {"", 0, 15}},
+    {{"Local/SbAbl3", 12, 15}, {"", 0, 15}},
 };
-static const uint8_t visible_bindings[] = {1, 2, 6, 10, 11};
-#define VISIBLE_SANDBOX_ACTIONS (sizeof(visible_bindings)/sizeof(*visible_bindings))
+static const uint8_t visible_bindings[] = {1, 2, 6, 10, 11, 13, 14};
+#define VISIBLE_SANDBOX_ACTIONS (sizeof(visible_bindings) - 2u)
 
 typedef struct { float x, y, z; } Vector;
 typedef struct { Vector origin, velocity; } AimRay;
@@ -107,6 +116,10 @@ typedef struct { Vector position, target; } CameraPose;
 typedef struct { void *control, *hidden_row; } TeamPanel;
 typedef struct { uint32_t effect, entity, renderer; } ParticleIdentity;
 typedef struct { void **begin, **end; } ParticleVector;
+typedef struct {
+    void *row, *time, *dim, *key;
+    uint32_t state, ends, shown;
+} AbilitySlot;
 enum { PICKER_RECORDS = 1024, PICKER_ROWS = 8, PICKER_MODULES = 8192, PICKER_SLOTS = 4, MODULE_COLUMNS = 5, TANK_STAT_COUNT = 11 };
 #define PICKER_MAGIC 0x33544253u  /* SBT3 */
 typedef struct {
@@ -167,7 +180,8 @@ typedef struct {
     uint32_t score_active, ally_kills, enemy_kills;
     void *score_panel;
     uint32_t blur_percent, blur_tick, blur_camera, blur_scene;
-    uint32_t graphics_thread;
+    uint32_t settings_thread;
+    uint8_t fov, saved_fov;
     Vector blur_direction;
     float blur_offset[4];
     void *bindings_layout;
@@ -207,6 +221,8 @@ typedef struct {
     uint8_t stats[TANK_STAT_COUNT];
     TargetPicker picker;
     SetupEditor setup;
+    AbilitySlot abilities[3];
+    uint32_t ability_token, pending_abilities;
 } Sandbox;
 
 extern uint32_t sandbox_delta(void);
@@ -257,7 +273,7 @@ static int read_setting(uint32_t delta, const char *path, void *data, uint32_t s
 }
 
 static int read_bindings(uint32_t delta, SavedBindings *data) {
-    static const uint8_t saved_counts[] = {SANDBOX_ACTION_COUNT, 12, 11, 10, 7, 6, 5};
+    static const uint8_t saved_counts[] = {SANDBOX_ACTION_COUNT, 13, 12, 11, 10, 7, 6, 5};
     for (unsigned index = 5; index < SANDBOX_ACTION_COUNT; index++)
         data->keys[index] = (SavedKey){0};
     for (unsigned index = 0; index < sizeof(saved_counts); index++) {
@@ -294,7 +310,7 @@ static int write_setting(uint32_t delta, const char *path, const char *temp,
 
 static int save_bindings(uint32_t delta, void *layout) {
     SavedBindings data = {.magic = BINDINGS_MAGIC};
-    for (unsigned index = 0; index < VISIBLE_SANDBOX_ACTIONS; index++) {
+    for (unsigned index = 0; index < sizeof(visible_bindings); index++) {
         uint32_t binding = visible_bindings[index];
         KeyBinding key = get_binding(delta, layout, FIRST_SANDBOX_ACTION + binding);
         if (key.device == 0x400) data.keys[binding] = (SavedKey){key.key, key.modifiers};
@@ -362,13 +378,14 @@ static void seed_bindings(uint32_t delta, void *layout, int restore) {
             bind(layout, action, binding_names[binding], &unbound);
     }
 
-    for (uint32_t index = 0; index < VISIBLE_SANDBOX_ACTIONS; index++) {
+    for (uint32_t index = 0; index < sizeof(visible_bindings); index++) {
         uint32_t binding = visible_bindings[index];
         uint32_t action = FIRST_SANDBOX_ACTION + binding;
         if (!get_binding(delta, layout, action).device) {
             /* Native keyboard device, Numpad 1 through 9 then 0. */
             KeyBinding key = {0x400, binding == 10 ? 0x49 : 0x4a + binding - (binding > 4), 0, 9};
             if (binding == 11) key = (KeyBinding){0x400, 0x53, 0, 9};
+            if (binding >= 13) key = (KeyBinding){0x400, 34 + binding - 13, 0, 9};
             if (have_saved && saved.keys[binding].key && saved.keys[binding].key < 0x7f
                     && saved.keys[binding].modifiers < 16) {
                 key.key = saved.keys[binding].key;
@@ -433,6 +450,7 @@ int THISCALL sandbox_set_binding(void *layout, uint32_t action, NativeString nam
     return 2;
 }
 
+__attribute__((section(".late_sandbox"), noinline))
 static uint32_t binding_keys(uint32_t delta, Sandbox *s) {
     typedef void *(*Context)(void);
     typedef void *(THISCALL *GetKeyboard)(void *);
@@ -465,6 +483,16 @@ static uint32_t binding_keys(uint32_t delta, Sandbox *s) {
         if (key.device == 0x400 && key.modifiers == modifiers && key.key
                 && (uint8_t)*down(keyboard, &value, key.key)) pressed |= bit;
     }
+    if (s->ability_token == s->token) {
+        for (unsigned slot = 0; slot < 3; slot++) {
+            if (!s->abilities[slot].state) continue;
+            unsigned action = slot ? ABILITY_TWO_ACTION + slot - 1 : ABILITY_ONE_ACTION;
+            KeyBinding key = get_binding(delta, layout, action);
+            if (key.device == 0x400 && key.modifiers == modifiers && key.key
+                    && (uint8_t)*down(keyboard, &value, key.key))
+                pressed |= 1u << (ABILITY_SHIFT + slot);
+        }
+    }
     return pressed;
 }
 
@@ -476,7 +504,7 @@ void THISCALL sandbox_binding_menu(void *controller, void *page, const ActionVec
     Original original = (Original)(0x01c0c700u + delta);
     uint32_t ids[64];
     unsigned count = actions->end - actions->begin;
-    if (device != 0x400 || columns != 3 || count > 64-VISIBLE_SANDBOX_ACTIONS) {
+    if (device != 0x400 || columns != 3 || count > 64 - sizeof(visible_bindings)) {
         original(controller, page, actions, device, columns);
         return;
     }
@@ -484,8 +512,16 @@ void THISCALL sandbox_binding_menu(void *controller, void *page, const ActionVec
     if (layout) seed_bindings(delta, layout, 1);
     for (unsigned index = 0; index < VISIBLE_SANDBOX_ACTIONS; index++)
         ids[index] = FIRST_SANDBOX_ACTION + visible_bindings[index];
-    for (unsigned index = 0; index < count; index++) ids[VISIBLE_SANDBOX_ACTIONS+index] = actions->begin[index];
-    ActionVector combined = {ids, ids+VISIBLE_SANDBOX_ACTIONS+count, ids+64};
+    unsigned length = VISIBLE_SANDBOX_ACTIONS;
+    for (unsigned index = 0; index < count; index++) {
+        unsigned action = actions->begin[index];
+        ids[length++] = action;
+        if (action == ABILITY_ONE_ACTION) {
+            ids[length++] = ABILITY_TWO_ACTION;
+            ids[length++] = ABILITY_TWO_ACTION + 1;
+        }
+    }
+    ActionVector combined = {ids, ids+length, ids+64};
     original(controller, page, &combined, device, columns);
 }
 
@@ -511,6 +547,9 @@ static Sandbox *state(uint32_t delta, int allocate) {
             uint8_t percent;
             if (read_setting(delta, blur_path, &percent, sizeof(percent)) && percent <= 100)
                 value->blur_percent = percent;
+            value->fov = value->saved_fov =
+                read_setting(delta, fov_path, &percent, sizeof(percent)) && percent >= 40 && percent <= 100
+                ? percent : 54;
             *slot = value;
         }
     }
@@ -549,6 +588,9 @@ static void clear_view(Sandbox *s) {
 static void boss_picker_update(uint32_t delta, Sandbox *s);
 static void boss_picker_message(uint32_t delta, const uint32_t *message);
 static void boss_respawn_menu(void *menu, uint32_t delta);
+static void range_ability_message(uint32_t delta, const uint32_t *words);
+static void range_ability_hud(uint32_t delta, Sandbox *s, uint32_t now);
+static void send_range_abilities(uint32_t delta, Sandbox *s, uint32_t changes, uint32_t now);
 static void *find_control(void *root, const char *name, uint32_t delta);
 static void bind_battle_controls(uint32_t delta, Sandbox *s, void *root);
 static void boss_visible(void *control, uint32_t visible, uint32_t delta);
@@ -570,6 +612,8 @@ static void reset(uint32_t delta, Sandbox *s) {
     s->owner = s->avatar = s->scene = s->token = s->sequence = 0;
     s->previous_keys = s->toggles = s->last_report = s->sent_flags = s->shot = 0;
     s->pending_actions = s->allowed_keys = 0;
+    s->ability_token = s->pending_abilities = 0;
+    for (unsigned slot = 0; slot < 3; slot++) s->abilities[slot].state = 0;
     __builtin_memset(s->stats, 0, sizeof(s->stats));
     s->picker.menu = 0;
     s->bindings_layout = 0;
@@ -1099,6 +1143,10 @@ int sandbox_message(uint32_t delta, const uint32_t *first, const uint32_t *end,
         }
         return 1;
     }
+    if (first && end == first+4 && first[0] == 0x31534654u && first[1] == 0x4c494241u) {
+        range_ability_message(delta, first);
+        return 1;
+    }
     if (first && end >= first+4 && first[0] == 0x31534654u && first[1] == 0x594d5544u) {
         Sandbox *s = state(delta, 0);
         if (s && s->thread == thread_id() && s->token && first[2] == s->token
@@ -1254,6 +1302,7 @@ void sandbox_reset(uint32_t delta, uint32_t *layer) {
         s->role_token = s->role_state = s->role_keys = 0;
         s->swap_token = 0;
         s->battle_controls_root = 0;
+        __builtin_memset(s->abilities, 0, sizeof(s->abilities));
         s->aim_time_label = 0;
         s->temporal_panel = s->temporal_label = 0;
         s->peer_root = s->peer_clock = s->peer_hand = s->peer_hour = s->peer_opacity = 0;
@@ -1280,9 +1329,11 @@ static Sandbox *battle_state(uint32_t delta, uint32_t avatar) {
 }
 
 static void poll_controls(uint32_t delta, Sandbox *s, uint32_t now) {
+    range_ability_hud(delta, s, now);
     if (!foreground(delta, s) || !s->key_state || !battle_input_active(delta)) {
-        s->previous_keys = SANDBOX_KEYS | JUMP_KEY;
+        s->previous_keys = SANDBOX_KEYS | JUMP_KEY | ABILITY_KEYS;
         s->pending_actions = 0;
+        s->pending_abilities = 0;
         clear_view(s);
         return;
     }
@@ -1302,7 +1353,7 @@ static void poll_controls(uint32_t delta, Sandbox *s, uint32_t now) {
         return;
     }
     s->temporal_key = temporal_pressed;
-    uint32_t pressed = binding_keys(delta, s) & s->allowed_keys;
+    uint32_t pressed = binding_keys(delta, s) & (s->allowed_keys | ABILITY_KEYS);
     uint32_t changes = pressed & ~s->previous_keys;
     s->previous_keys = pressed;
     if (changes & 2) {
@@ -1351,6 +1402,7 @@ static void poll_controls(uint32_t delta, Sandbox *s, uint32_t now) {
             s->pending_actions = 0;
         }
     }
+    send_range_abilities(delta, s, changes, now);
 }
 
 void sandbox_frame(uint32_t delta, uint32_t *rotator) {
@@ -1537,6 +1589,31 @@ static uint32_t battle_camera(uint32_t delta, uint32_t scene) {
     return 0;
 }
 
+/* The battle camera keeps the undistorted native angle at +0x32c.
+ * Feed the adjusted angle to the native projection setter so world markers,
+ * frustum culling and pointer projection all use the same camera. */
+__attribute__((section(".late_sandbox"), noinline))
+static void set_battle_fov(uint32_t delta, Sandbox *s, uint32_t camera, float stock) {
+    typedef void (THISCALL *Set)(void *, float);
+    float angle = stock;
+    if (s && FIELD(camera, 0x320) != 0 && stock >= 40.f &&
+            !__atomic_load_n(&s->active_view, __ATOMIC_RELAXED))
+        angle += (float)s->fov - *(const float *)(camera+0x334);
+    ((Set)(0x15eaf10u + delta))((void *)camera, angle);
+}
+
+__attribute__((section(".late_sandbox"), noinline))
+void THISCALL sandbox_battle_fov(void *camera, float stock) {
+    uint32_t delta = sandbox_delta();
+    set_battle_fov(delta, state(delta, 0), (uint32_t)camera, stock);
+}
+
+__attribute__((section(".late_sandbox"), noinline))
+static void refresh_battle_fov(uint32_t delta, Sandbox *s, uint32_t camera) {
+    if (camera && FIELD(camera, 0) == 0x0382da70u+delta)
+        set_battle_fov(delta, s, camera, *(const float *)(camera+0x32c));
+}
+
 static CameraPose swap_pose(uint32_t camera, CameraPose pose) {
     CameraPose *current = (CameraPose *)(camera+0x38);
     CameraPose previous = *current;
@@ -1608,6 +1685,19 @@ static void temporal_clock(uint32_t delta, Sandbox *s, uint32_t camera, uint32_t
     visible(s->peer_clock, 1);
 }
 
+/* MarkerSystem already hides the control when this predicate is false.
+ * The client's world transform uses XY for the ground plane. A parked
+ * enemy copy (battle.chameleon_pose) has both coordinates set to -4096. */
+__attribute__((section(".late_sandbox"), noinline))
+uint8_t THISCALL sandbox_marker_visible(void *marker) {
+    if (!*(const uint8_t *)((uintptr_t)marker + 0x1d)) return 0;
+    uint32_t entity = FIELD(marker, 8);
+    uint32_t transform = entity ? FIELD(entity, 0x3c) : 0;
+    if (!transform) return 1;
+    const Vector *position = (const Vector *)(transform + 0x38);
+    return position->x != -4096.f || position->y != -4096.f;
+}
+
 /* MarkerSystem projects the world positions during the scene update, before
  * the draw hook runs. Use the same pose in both passes. */
 void THISCALL sandbox_project_markers(void *system, float elapsed) {
@@ -1617,10 +1707,10 @@ void THISCALL sandbox_project_markers(void *system, float elapsed) {
     Sandbox *s = state(delta, 0);
     uint32_t scene = FIELD(system, 0x28);
     uint32_t camera = 0;
-    if (s && s->thread == thread_id() && scene && scene == s->scene &&
-            __atomic_load_n(&s->active_view, __ATOMIC_RELAXED))
+    if (s && s->thread == thread_id() && scene && scene == s->scene)
         camera = battle_camera(delta, scene);
-    if (!camera) {
+    refresh_battle_fov(delta, s, camera);
+    if (!camera || !__atomic_load_n(&s->active_view, __ATOMIC_RELAXED)) {
         update(system, elapsed);
         return;
     }
@@ -1781,6 +1871,7 @@ void THISCALL sandbox_draw(void *scene) {
     }
     if (s->peer_hidden_entity) temporal_roster(delta, s, s->peer_hidden_entity);
     uint32_t camera = battle_camera(delta, (uint32_t)scene);
+    refresh_battle_fov(delta, s, camera);
     int missile_view = camera && __atomic_load_n(&s->active_view, __ATOMIC_RELAXED);
     CameraPose previous;
     if (missile_view) {
@@ -1817,10 +1908,10 @@ void THISCALL sandbox_boss_menu_open(void *menu, uint32_t action) {
     void *logic = context ? ((Get)FIELD(FIELD(context, 0), 0xa0))(context) : 0;
     void *avatar = logic && FIELD(logic, 0) == 0x03801fc4u + delta
                    ? ((Get)FIELD(FIELD(logic, 0), 4))(logic) : 0;
-    /* These stock event modes hide Exit to Hangar during the battle. */
+    /* Preserve Exit to Hangar in local battles that use stock PvP modes. */
     if (avatar) {
         uint8_t mode = *(const uint8_t *)((uintptr_t)avatar + 0xd9);
-        if (mode == 8 || mode == 23 || mode == 27)
+        if (mode == 1 || mode == 8 || mode == 23 || mode == 27 || mode == 42)
             ((ShowExit)(0x01df6db0u + delta))(menu);
     }
     boss_respawn_menu(menu, delta);
@@ -2049,6 +2140,76 @@ BOSS_UI static unsigned picker_value(void *field, uint32_t delta) {
 BOSS_UI static void boss_visible(void *control, uint32_t visible, uint32_t delta) {
     typedef void (THISCALL *Visible)(void *, uint32_t);
     if (control) ((Visible)(0xd05020u + delta))(control, visible);
+}
+
+__attribute__((section(".late_sandbox"), noinline))
+static void range_ability_message(uint32_t delta, const uint32_t *words) {
+    Sandbox *s = state(delta, 0);
+    unsigned slot = words[3] & 255u;
+    unsigned status = (words[3] >> 8) & 255u;
+    unsigned remaining = words[3] >> 16;
+    if (!s || s->thread != thread_id() || !words[2] || slot >= 3 || status > 3) return;
+    if (s->token && s->token != words[2]) return;
+    s->ability_token = words[2];
+    AbilitySlot *item = &s->abilities[slot];
+    item->state = status;
+    item->ends = clock_ms(delta) + 1000u * remaining;
+    item->shown = UINT32_MAX;
+}
+
+__attribute__((section(".late_sandbox"), noinline))
+static void range_ability_hud(uint32_t delta, Sandbox *s, uint32_t now) {
+    typedef void (THISCALL *SetText)(void *, const NativeString *);
+    SetText set_text = (SetText)(0xb8e900u + delta);
+    if (!s->abilities[0].row) return;
+    unsigned active = s->token && s->ability_token == s->token;
+    for (unsigned slot = 0; slot < 3; slot++) {
+        AbilitySlot *item = &s->abilities[slot];
+        unsigned status = active ? item->state : 0;
+        int32_t duration = item->ends-now;
+        unsigned seconds = status > 1 && duration > 0 ? ((unsigned)duration+999u)/1000u : 0;
+        unsigned update = (seconds << 8) | status;
+        if (item->shown == update) continue;
+        item->shown = update;
+        boss_visible(item->row, !!status, delta);
+        boss_visible(item->dim, status == 3, delta);
+        if (item->time) {
+            NativeString text = {{0}, 0, 15};
+            if (seconds && seconds <= 99) {
+                if (seconds >= 10) text.text[text.size++] = '0' + seconds/10;
+                text.text[text.size++] = '0' + seconds%10;
+            }
+            set_text(item->time, &text);
+        }
+        if (status && item->key) {
+            void *layout = keyboard_layout(delta);
+            unsigned action = slot ? ABILITY_TWO_ACTION + slot - 1 : ABILITY_ONE_ACTION;
+            KeyBinding key = layout ? get_binding(delta, layout, action) : (KeyBinding){0};
+            NativeString text = {{0}, 0, 15};
+            if (key.device == 0x400 && !key.modifiers && key.key >= 26 && key.key <= 35)
+                text.text[text.size++] = '0' + key.key-26u;
+            set_text(item->key, &text);
+        }
+    }
+}
+
+__attribute__((section(".late_sandbox"), noinline))
+static void send_range_abilities(uint32_t delta, Sandbox *s, uint32_t changes, uint32_t now) {
+    s->pending_abilities |= (changes & ABILITY_KEYS) >> ABILITY_SHIFT;
+    if (!s->pending_abilities || (s->last_report && now-s->last_report < 35)) return;
+    for (unsigned slot = 0; slot < 3; slot++) {
+        unsigned mask = 1u << slot;
+        if (!(s->pending_abilities & mask)) continue;
+        if (s->abilities[slot].state != 1) {
+            s->pending_abilities &= ~mask;
+            continue;
+        }
+        if (send_control_value(delta, s, USE_ABILITY, (Vector){0, 0, 0}, slot)) {
+            s->pending_abilities &= ~mask;
+            s->last_report = now ? now : 1;
+        }
+        break;
+    }
 }
 
 BOSS_UI static void target_text(uint32_t delta, void *label, const char *text, int localize) {
@@ -2549,6 +2710,17 @@ BOSS_UI static void temporal_roster(uint32_t delta, Sandbox *s, uint32_t entity)
 BOSS_UI static void bind_battle_controls(uint32_t delta, Sandbox *s, void *root) {
     if (s->battle_controls_root == root) return;
     s->battle_controls_root = root;
+    void *abilities = find_control(root, "SolRangeAbilities", delta);
+    for (unsigned slot = 0; slot < 3; slot++) {
+        char name[] = "Slot0";
+        name[4] += slot;
+        AbilitySlot *item = &s->abilities[slot];
+        item->row = abilities ? find_control(abilities, name, delta) : 0;
+        item->time = item->row ? find_control(item->row, "Time", delta) : 0;
+        item->dim = item->row ? find_control(item->row, "Dim", delta) : 0;
+        item->key = item->row ? find_control(item->row, "Key", delta) : 0;
+        item->shown = UINT32_MAX;
+    }
     s->aim_time_label = find_control(root, "SolAimTime", delta);
     s->aim_tenths = 0;
     s->temporal_panel = find_control(root, "SolTimeHUD", delta);
@@ -2680,6 +2852,19 @@ BOSS_UI static void boss_picker_update(uint32_t delta, Sandbox *s) {
     }
 }
 
+__attribute__((section(".late_sandbox"), noinline))
+static void update_fov_label(void *label, uint8_t fov, uint32_t delta) {
+    typedef void (THISCALL *Set)(void *, const NativeString *);
+    NativeString text = {{0}, 0, 15};
+    text.text[text.size++] = ' ';
+    if (fov == 100) text.text[text.size++] = '1';
+    text.text[text.size++] = '0' + (fov / 10) % 10;
+    text.text[text.size++] = '0' + fov % 10;
+    text.text[text.size++] = (char)0xc2;
+    text.text[text.size++] = (char)0xb0;
+    ((Set)(0xb8e900u + delta))(label, &text);
+}
+
 void *THISCALL sandbox_graphics_page(void *package, const NativeString *name) {
     typedef void *(THISCALL *Get)(void *, const NativeString *);
     typedef void (THISCALL *Refresh)(void *);
@@ -2691,7 +2876,7 @@ void *THISCALL sandbox_graphics_page(void *package, const NativeString *name) {
     void *label = slider ? find_control(slider, "SolbreakerBlurPercent", delta) : 0;
     Sandbox *s = state(delta, 1);
     if (slider && label && s) {
-        s->graphics_thread = thread_id();
+        s->settings_thread = thread_id();
         *(float *)((uintptr_t)slider + 0x15c) = (float)s->blur_percent;
         ((Refresh)(0xb85e10u + delta))(slider);
         update_blur_label(label, s->blur_percent, delta);
@@ -2699,17 +2884,59 @@ void *THISCALL sandbox_graphics_page(void *package, const NativeString *name) {
     return page;
 }
 
+__attribute__((section(".late_sandbox"), noinline))
+void *THISCALL sandbox_controls_page(void *package, const NativeString *name) {
+    typedef void *(THISCALL *Get)(void *, const NativeString *);
+    typedef void (THISCALL *Refresh)(void *);
+    uint32_t delta = sandbox_delta();
+    void *page = ((Get)(0xce3490u + delta))(package, name);
+    if (!page) return page;
+    void *row = find_control(page, "ScrollView/scrollContainerControl/SolbreakerFieldOfView", delta);
+    void *slider = row ? find_control(row, "Slider", delta) : 0;
+    void *label = row ? find_control(row, "ValueAndCaption/Value", delta) : 0;
+    Sandbox *s = state(delta, 1);
+    if (slider && label && s) {
+        s->settings_thread = thread_id();
+        *(float *)((uintptr_t)slider + 0x15c) = (float)s->fov;
+        ((Refresh)(0xb85e10u + delta))(slider);
+        update_fov_label(label, s->fov, delta);
+    }
+    return page;
+}
+
+__attribute__((section(".late_sandbox"), noinline))
+static int fov_input(uint32_t delta, Sandbox *s, void *slider, unsigned phase) {
+    if (!find_control(slider, "SolbreakerFovValue", delta)) return 0;
+    void *row = (void *)FIELD(slider, 0x38);
+    void *label = row ? find_control(row, "ValueAndCaption/Value", delta) : 0;
+    if (!label) return 1;
+    float value = *(float *)((uintptr_t)slider + 0x15c);
+    if (!(value >= 40 && value <= 100)) return 1;
+    uint8_t fov = (uint8_t)(value+.5f);
+    if (phase == 3) {
+        if (write_setting(delta, fov_path, fov_temp, &fov, sizeof(fov))) s->saved_fov = fov;
+        else fov = s->saved_fov;
+    }
+    s->fov = fov;
+    update_fov_label(label, fov, delta);
+    return 1;
+}
+
+static void save_mouse_sensitivity(uint32_t delta, void *slider);
+
 void THISCALL sandbox_blur_slider(void *slider, void *event) {
     typedef void (THISCALL *Input)(void *, void *);
     uint32_t delta = sandbox_delta();
     ((Input)(0xb7dd20u + delta))(slider, event);
     if (!event || (FIELD(event, 0x38) != 1 && FIELD(event, 0x38) != 2 &&
                    FIELD(event, 0x38) != 3)) return;
+    if (FIELD(event, 0x38) == 3) save_mouse_sensitivity(delta, slider);
     if (setup_slider(delta, slider, FIELD(event, 0x38))) return;
     Sandbox *s = state(delta, 0);
     if (stats_slider(delta,s,slider,FIELD(event, 0x38))) return;
+    if (!s || s->settings_thread != thread_id() || fov_input(delta, s, slider, FIELD(event, 0x38))) return;
     void *label = find_control(slider, "SolbreakerBlurPercent", delta);
-    if (!label || !s || s->graphics_thread != thread_id()) return;
+    if (!label) return;
     float value = *(float *)((uintptr_t)slider + 0x15c);
     if (!(value >= 0 && value <= 100)) return;
     uint8_t percent = (uint8_t)(value+.5f);
@@ -3185,51 +3412,104 @@ __asm__(
     ".text\n");
 
 
-/* SmartZoom is a native keyboard/mouse preference, saved per prepared client. */
+/* Keep the stock PC controls local even if the account options are rebuilt. */
+#define CONTROL_TOGGLES 4
+#define CONTROL_SLIDERS 2
+#define CONTROLS_MAGIC 0x31434253u /* SBC1 */
+typedef struct {
+    uint32_t magic, valid, toggles;
+    float sensitivity[CONTROL_SLIDERS];
+} SavedControls;
+
+static const char controls_path[] BOSS_DATA = "..\\documents\\solbreaker-controls.bin";
+static const char controls_temp[] BOSS_DATA = "..\\documents\\solbreaker-controls.tmp";
 static const char zoom_path[] BOSS_DATA = "..\\documents\\solbreaker-sniper-zoom.bin";
-static const char zoom_temp[] BOSS_DATA = "..\\documents\\solbreaker-sniper-zoom.tmp";
+static const char control_names[][30] BOSS_DATA = {
+    "SmartZoom", "InvertedZoom", "InvertedMouse", "BackwardZoom",
+    "MouseSensitivity", "MouseSensitivityInSnipperMode",
+};
+
+__attribute__((section(".late_sandbox"), noinline))
+static int control_index(void *control) {
+    for (unsigned depth = 0; control && depth < 5; depth++, control = (void *)FIELD(control, 0x38)) {
+        const char *name = (const char *)FIELD(control, 0x30);
+        if (!name) continue;
+        for (unsigned index = 0; index < CONTROL_TOGGLES+CONTROL_SLIDERS; index++) {
+            const char *expected = control_names[index];
+            unsigned i = 0;
+            while (expected[i] && expected[i] == name[i]) i++;
+            if (!expected[i] && !name[i]) return (int)index;
+        }
+    }
+    return -1;
+}
+
+__attribute__((section(".late_sandbox"), noinline))
+static void load_controls(uint32_t delta, SavedControls *settings) {
+    if (read_setting(delta, controls_path, settings, sizeof(*settings)) &&
+            settings->magic == CONTROLS_MAGIC) return;
+    *settings = (SavedControls){.magic = CONTROLS_MAGIC};
+    uint8_t value;
+    if (read_setting(delta, zoom_path, &value, sizeof(value)) && value <= 1) {
+        settings->valid = 1;
+        settings->toggles = value;
+    }
+}
+
+__attribute__((section(".late_sandbox"), noinline))
+static void save_mouse_sensitivity(uint32_t delta, void *slider) {
+    int index = control_index(slider);
+    if (index < CONTROL_TOGGLES) return;
+    float value = *(const float *)((uintptr_t)slider + 0x15c);
+    if (!(value >= .049f && value <= 1.501f)) return;
+    SavedControls settings;
+    load_controls(delta, &settings);
+    settings.valid |= 1u << index;
+    settings.sensitivity[index-CONTROL_TOGGLES] = value;
+    write_setting(delta, controls_path, controls_temp, &settings, sizeof(settings));
+}
 
 __attribute__((section(".late_sandbox"), noinline))
 void THISCALL sandbox_zoom_changed(void *toggle, unsigned event, void *input) {
     uint32_t delta = sandbox_delta();
     typedef void (THISCALL *SendEvent)(void *, unsigned, void *);
-    void *parent = (void *)FIELD(toggle, 0x38);
-    void *row = parent ? (void *)FIELD(parent, 0x38) : 0;
-    if (row) {
-        const char *name = (const char *)FIELD(row, 0x30);
-        const char key[] = "SmartZoom";
-        unsigned i = 0;
-        if (name) {
-            while (key[i] && name[i] == key[i]) ++i;
-            if (!key[i] && !name[i]) {
-                uint8_t value = *(uint8_t *)((uintptr_t)toggle + 0x14c);
-                /* The checkbox uses the inverse of the stored SmartZoom option. */
-                if (value <= 1) {
-                    value ^= 1;
-                    write_setting(delta, zoom_path, zoom_temp, &value, sizeof(value));
-                }
-            }
-        }
+    int index = control_index(toggle);
+    uint8_t value = *(const uint8_t *)((uintptr_t)toggle + 0x14c);
+    if (index >= 0 && index < CONTROL_TOGGLES && value <= 1) {
+        SavedControls settings;
+        load_controls(delta, &settings);
+        uint32_t bit = 1u << index;
+        settings.valid |= bit;
+        /* Native switch position is the inverse of its boolean option. */
+        settings.toggles = (settings.toggles & ~bit) | (value ? 0 : bit);
+        write_setting(delta, controls_path, controls_temp, &settings, sizeof(settings));
     }
     ((SendEvent)(0xb84750u + delta))(toggle, event, input);
 }
 
 __attribute__((section(".late_sandbox"), used, noinline))
-static unsigned zoom_restore(unsigned fallback) {
-    uint8_t value;
-    return read_setting(sandbox_delta(), zoom_path, &value, sizeof(value)) && value <= 1
-           ? value : fallback;
-}
-
-__attribute__((section(".late_sandbox"), used, noinline))
 static int zoom_migrate(void *options) {
-    unsigned value = zoom_restore(2);
-    if (value > 1) return 0;
     uint32_t delta = sandbox_delta();
-    NativeString key = {"SmartZoom", 9, 15};
-    typedef void (THISCALL *Set)(void *, const NativeString *, unsigned);
-    ((Set)(0x123cbb0u + delta))(options, &key, value);
-    return 1;
+    SavedControls settings;
+    load_controls(delta, &settings);
+    typedef void (THISCALL *SetBool)(void *, const NativeString *, unsigned);
+    typedef void (THISCALL *SetFloat)(void *, const NativeString *, float);
+    typedef void (THISCALL *String)(NativeString *, const char *);
+    typedef void (THISCALL *Destroy)(NativeString *);
+    for (unsigned i = 0; i < CONTROL_TOGGLES+CONTROL_SLIDERS; i++) {
+        if (!(settings.valid & (1u << i))) continue;
+        NativeString key;
+        ((String)(0x69a7d0u + delta))(&key, control_names[i]);
+        if (i < CONTROL_TOGGLES) {
+            ((SetBool)(0x123cbb0u + delta))(options, &key, (settings.toggles >> i) & 1);
+        } else {
+            float value = settings.sensitivity[i-CONTROL_TOGGLES];
+            if (value >= .05f && value <= 1.5f)
+                ((SetFloat)(0x123d780u + delta))(options, &key, value);
+        }
+        ((Destroy)(0x69a720u + delta))(&key);
+    }
+    return settings.valid & 1;
 }
 
 __asm__(
@@ -3247,5 +3527,48 @@ __asm__(
     "cmpb $0, -0x5d(%ebp)\n"
     "movl $0, -0x18(%ebp)\n"
     "jmp 0x1237313\n"
+    ".text\n"
+);
+
+/* The HUD passes a fixed 600 m world size to MinimapObjectsViewImpl.
+ * At this call site the parent frame supplies AvatarContextBattle through
+ * its +0x120 field. Substitute the larger extent only for the local range. */
+__asm__(
+    ".section .late_sandbox,\"ax\"\n"
+    ".globl sandbox_minimap_extent\n"
+    "sandbox_minimap_extent:\n"
+    "pushfl\n"
+    "pushal\n"
+    "call sandbox_delta\n"
+    "leal 0x174eab5(%eax), %ecx\n"
+    "cmpl %ecx, 4(%ebp)\n"
+    "jne 2f\n"
+    "movl (%ebp), %edx\n"
+    "movl -0x50(%edx), %edx\n"
+    "testl %edx, %edx\n"
+    "jz 2f\n"
+    "movl 0x120(%edx), %edx\n"
+    "testl %edx, %edx\n"
+    "jz 2f\n"
+    "leal 0x37f86d0(%eax), %ecx\n"
+    "cmpl %ecx, (%edx)\n"
+    "jne 2f\n"
+    "movl 0x2c(%edx), %edx\n"
+    "testl %edx, %edx\n"
+    "jz 2f\n"
+    "leal 0x3844a04(%eax), %ecx\n"
+    "cmpl %ecx, (%edx)\n"
+    "jne 2f\n"
+    "cmpw $107, 0x14c(%edx)\n"
+    "jne 2f\n"
+    "call 1f\n"
+    "1: popl %edx\n"
+    "addl $(3f-1b), %edx\n"
+    "movl %edx, 52(%esp)\n"
+    "2: popal\n"
+    "popfl\n"
+    "jmp 0x1da4350\n"
+    ".balign 4\n"
+    "3: .float 1024.0, 1024.0\n"
     ".text\n"
 );

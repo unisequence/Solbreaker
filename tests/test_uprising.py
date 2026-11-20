@@ -33,7 +33,8 @@ from solbreaker.uprising import BattleState, CHOICE_SECONDS, CLIENT_GAME_MODE, M
 
 class UprisingTests(TestCase):
     def test_hangar_advertises_selected_ability_catalog(self):
-        for rules, catalog in ((MODE, 'hellgames'), ('mad_games', 'arcade'), ('regular', '')):
+        for rules, catalog in ((MODE, 'hellgames'), ('mad_games', 'arcade'),
+                               ('gravity', 'lunar'), ('regular', '')):
             with self.subTest(rules=rules):
                 garage = game_mode_descriptions(False, rules)
                 room = game_mode_descriptions(True, rules)

@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.1.0-rc.2
+
+- Added the Proving Ground, a 1 km² map with a shooting range, a suspension
+  circuit, stunt ramps, a quarry, a runway, a demolition zone and an arena
+  for PvP. Open it from its own hangar card or create a training room on it.
+  Solbreaker builds the map from its bundled layout and the player's local
+  compatible game files.
+- The solo Proving Ground has three rebindable ability slots. Use **7** for
+  the Gravity thruster, **8** for Mad Games Dash and **9** for High-Octane
+  Fuel. Each slot has its own timer, and Dash works during a jump.
+- Added a field-of-view slider. Keyboard and mouse bindings and the sniper
+  zoom setting persist across sessions. Graphics settings can be opened
+  during battle.
+- Battle queues and loading screens show the selected mode's name. The
+  hangar shows eligible Gravity abilities, and bots take routes and choose
+  positions according to their vehicle class.
+- Improved low-gravity contacts and recoil, and fixed tracks sinking into
+  the ground when landing after sandbox flight. High-Octane Fuel lets tanks
+  turn faster and slide farther.
+- Camouflage can be set separately for summer, winter and desert. Added a
+  replay viewer to the launcher and a link to GitHub in the hangar.
+- Improved Windows and Linux handling of paths in setup and local data.
+
 ## 0.1.0-rc.1
 
 - Set up bot teams before battle or in a training room. Pick a tank and its

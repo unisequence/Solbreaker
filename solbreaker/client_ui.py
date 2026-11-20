@@ -8,11 +8,14 @@ import json
 import os
 from pathlib import Path
 import tempfile
+from xml.etree import ElementTree
 
 import yaml
 
 from . import dvpl, client_branding, client_provisions, client_recon, client_bot_mode, client_battle_settings
 from .client_practice_picker import STRINGS as PRACTICE_PICKER_STRINGS
+from .consumables import GRAVITY_JUMP_SPEC
+from .profile import BOT_QUEUE_TITLES, PROVING_GROUND_DESCRIPTION, PROVING_GROUND_TITLE
 
 
 BASE_HEADER = "UI/Screens3/Lobby/Common/Headers/BaseHeader.yaml.dvpl"
@@ -28,10 +31,16 @@ TANKS_PANEL = "UI/Screens3/Lobby/Hangar/TanksPanel/TanksPanel.yaml.dvpl"
 OWNED_TANK_CELL = "UI/Screens3/Lobby/Hangar/TanksPanel/OwnedTankCell.yaml.dvpl"
 INVENTORY = "UI/Screens3/Lobby/Inventory/Inventory.yaml.dvpl"
 SIDEBAR = "UI/Screens3/Lobby/Common/Sidebar/SidebarHangarMenu.yaml.dvpl"
+COMMUNITY_LIST = "UI/Screens3/Lobby/Hangar/Sidebar/CommunityPanel/CommunityList.yaml.dvpl"
+COMMUNITY_ICON = "Gfx/Lobby/icons/solbreaker-github"
 ACCOUNT_OPTIONS = "UI/Screens/Common/Settings/PrimaryTab/PrimaryOptionsPage.yaml.dvpl"
 KEYBOARD_OPTIONS = "UI/Screens/Common/Settings/KeyboardMouseControlOptionsPage.yaml.dvpl"
 GAME_TYPES = "UI/Screens/Lobby/Hangar/GameTypeScreen.yaml.dvpl"
 GAME_TYPE_CARD = "UI/Screens/Lobby/Hangar/GameTypeSelector.yaml.dvpl"
+BATTLE_LOADING = "UI/Screens/Battle/BattleLoadingScreen.yaml.dvpl"
+BATTLE_LOADING_STYLES = "UI/Screens/Battle/Styles/BattleLoadingScreenStyles.yaml.dvpl"
+BATTLE_LOADING_RESOURCES = (BATTLE_LOADING, BATTLE_LOADING_STYLES)
+GRAVITY_ABILITIES = "XML/item_defs/vehicles/common/consumables/lunar.xml.dvpl"
 AVATAR_RATING = "UI/Screens3/Lobby/Hangar/PlayerAvatarWithRating.yaml.dvpl"
 CALIBRATION_POPUP = "UI/Screens3/Lobby/Hangar/CalibrationPopup.yaml.dvpl"
 NOTIFICATION_7X7 = "UI/Screens3/Lobby/Hangar/Notification7x7Enabled.yaml.dvpl"
@@ -46,19 +55,25 @@ SETTINGS_CASE_RESOURCES = (
         'PersonalizedOptionsPage', 'PersonalizedWithdrawResetContent')),
 )
 HIDDEN_SECTIONS = ("crew_skills", "clans", "tournaments")
-LOCAL_MAP_STRING_PREFIX = "#maps:user_map:"
+PROVING_GROUND_MAP_NAME = '#maps:solbreaker_proving_ground:06_rudniki_rd/solbreaker_proving_ground.sc2'
+LOCAL_MAP_STRING_PREFIXES = ("#maps:user_map:", "#maps:solbreaker_proving_ground:")
 UI_RESOURCES = (BASE_HEADER, BASE_LOBBY, BASE_LOBBY_ACTIONS, STATS_ITEM, INVENTORY_PANEL, INVENTORY_ACTIONS,
                 HANGAR, HANGAR_ACTIONS, BATTLE_BUTTON, TANKS_PANEL, OWNED_TANK_CELL, INVENTORY,
-                SIDEBAR, ACCOUNT_OPTIONS, KEYBOARD_OPTIONS, GAME_TYPES, GAME_TYPE_CARD,
+                SIDEBAR, COMMUNITY_LIST, ACCOUNT_OPTIONS, KEYBOARD_OPTIONS, GAME_TYPES, GAME_TYPE_CARD,
                 AVATAR_RATING, CALIBRATION_POPUP, NOTIFICATION_7X7, *SETTINGS_CASE_RESOURCES,
-                LOGIN_ENTRY, SERVER_SELECTION, SERVER_MAP_ELEMENT,
+                LOGIN_ENTRY, SERVER_SELECTION, SERVER_MAP_ELEMENT, *BATTLE_LOADING_RESOURCES,
                 client_battle_settings.FORM, client_battle_settings.ROOM,
                 client_battle_settings.BATTLE_MENU, *client_recon.MARKER_OPACITY)
 STRINGS_EN = "Strings/en.yaml.dvpl"
 STRINGS_RU = "Strings/ru.yaml.dvpl"
-SANDBOX_BINDINGS_VERSION = 30
+SANDBOX_BINDINGS_VERSION = 41
+COMMUNITY_STRINGS = {
+    STRINGS_EN: {'#community:Viber/OpenPage/Notification': 'Open Solbreaker on GitHub?'},
+    STRINGS_RU: {'#community:Viber/OpenPage/Notification': 'Открыть Solbreaker на GitHub?'},
+}
 SANDBOX_BINDING_STRINGS = {
-    STRINGS_EN: {'Title': 'Solbreaker Sandbox',
+    STRINGS_EN: {'Title': 'Solbreaker Sandbox', 'Fov': 'FIELD OF VIEW (FOV)',
+                 'Abl2': 'ABILITY 2', 'Abl3': 'ABILITY 3',
                  'Boost': 'Toggle boost', 'Flight': 'Toggle flight',
                  'Missile': 'Toggle missile camera', 'Target': 'Place training target',
                  'Reload': 'Fast reload and cooldowns',
@@ -79,7 +94,8 @@ SANDBOX_BINDING_STRINGS = {
                  'KV1': 'Target tank: KV-1', 'PzIV': 'Target tank: Pz. IV',
                  'Fire0': 'New targets hold fire', 'Fire1': 'New targets return fire',
                  'Clean': 'Training targets cleared', 'Full': 'No target slot is available for this tank'},
-    STRINGS_RU: {'Title': 'Песочница Solbreaker',
+    STRINGS_RU: {'Title': 'Песочница Solbreaker', 'Fov': 'ПОЛЕ ЗРЕНИЯ (FOV)',
+                 'Abl2': 'СПОСОБНОСТЬ 2', 'Abl3': 'СПОСОБНОСТЬ 3',
                  'Boost': 'Включить или выключить форсаж', 'Flight': 'Взлететь или сесть',
                  'Missile': 'Переключить камеру ПТУР', 'Target': 'Поставить мишень на Полигоне',
                  'Reload': 'Быстрая перезарядка и откат',
@@ -178,15 +194,50 @@ UPRISING_PROVISION_STRINGS = {
 }
 LOCAL_MODE_STRINGS = {
     STRINGS_EN: {'Local PoC': 'Solbreaker',
-                 'Local/BotsTitle': 'Battle with bots',
+                 'Local/BotsTitle': 'BATTLE WITH BOTS',
                  'Local/BotsDescription': 'Fight alongside allied bots against enemy bots.',
-                 'Local/TargetTitle': 'Training ground',
+                 PROVING_GROUND_TITLE: 'PROVING GROUND',
+                 PROVING_GROUND_MAP_NAME: 'Proving Ground',
+                 PROVING_GROUND_DESCRIPTION: 'Explore the proving ground solo. To play together, select Proving Ground when creating a training room.',
+                 'Local/TargetTitle': 'TRAINING GROUND',
                  'Local/TargetDescription': 'Drive freely and practice against stationary targets.'},
     STRINGS_RU: {'Local PoC': 'Solbreaker',
-                 'Local/BotsTitle': 'Бой с ботами',
+                 'Local/BotsTitle': 'БОЙ С БОТАМИ',
                  'Local/BotsDescription': 'Бой вместе с союзными ботами против команды противника.',
-                 'Local/TargetTitle': 'Полигон',
+                 PROVING_GROUND_TITLE: 'ИСПЫТАТЕЛЬНЫЙ ПОЛИГОН',
+                 PROVING_GROUND_MAP_NAME: 'Испытательный полигон',
+                 PROVING_GROUND_DESCRIPTION: 'Свободные испытания на отдельной карте. Чтобы играть с друзьями, выбери «Испытательный полигон» при создании тренировочной комнаты.',
+                 'Local/TargetTitle': 'ПОЛИГОН',
                  'Local/TargetDescription': 'Свободная езда и стрельба по неподвижным мишеням.'},
+}
+BOT_QUEUE_STRINGS = {
+    relative: {
+        title: f'{client_battle_settings.STRINGS[mode_locale][name_key].upper()} ({suffix})'
+        for (mode, title), name_key in zip(
+            BOT_QUEUE_TITLES.items(), client_battle_settings.MODE_KEYS, strict=True)
+        for mode_locale in ('en' if mode == 'mad_games' else locale,)
+    }
+    for relative, locale, suffix in (
+        (STRINGS_EN, 'en', 'Battles with bots'), (STRINGS_RU, 'ru', 'Бои с ботами'))
+}
+BATTLE_LOADING_MODES = {
+    'regular': 'Encounter',
+    'arcade': 'MadGames',
+    'hellgames': 'Uprising',
+    'bossmode': 'BigBoss',
+    'gravitizing': 'Gravity',
+}
+BATTLE_LOADING_STRINGS = {
+    relative: {
+        'Local/BattleLoading/Elimination': elimination,
+        **{
+            f'Local/BattleLoading/{key}': client_battle_settings.STRINGS[
+                'en' if key == 'MadGames' else locale][key].upper()
+            for key in (*BATTLE_LOADING_MODES.values(), 'Supremacy')
+        },
+    }
+    for relative, locale, elimination in (
+        (STRINGS_EN, 'en', 'ELIMINATION'), (STRINGS_RU, 'ru', 'УНИЧТОЖЕНИЕ'))
 }
 # The native HUD shows the duration, including modifiers from installed equipment.
 CONSUMABLE_STRINGS = {
@@ -265,7 +316,24 @@ def _sandbox_controls(document):
                                      'fontSize': 22., 'color': [1., 1., 1., 1.],
                                      'colorInheritType': 'COLOR_IGNORE_PARENT',
                                      'align': ['HCENTER', 'VCENTER']}}}
-    controls[:] = [node for node in controls if node['name'] != title['name']]
+    fov = {
+        'prototype': 'SettingsCommon/SliderWithCaption', 'name': 'SolbreakerFieldOfView',
+        'components': {
+            'Anchor': {'leftAnchorEnabled': True, 'leftAnchor': 5.,
+                       'rightAnchorEnabled': True, 'rightAnchor': 5.},
+            'LinearLayout': {'spacing': 15., 'dynamicSpacing': False},
+        },
+        'children': [
+            {'path': 'ValueAndCaption', 'components': {'SizePolicy': {'horizontalPolicy': 'PercentOfParent'}}},
+            {'path': 'ValueAndCaption/GroupCaption', 'components': {'UITextComponent': {'text': 'Local/SbFov'}}},
+            {'path': 'ValueAndCaption/Value', 'components': {'UITextComponent': {'text': '54°'}}},
+            {'path': 'Slider', 'minValue': 40., 'maxValue': 100., 'value': 54., 'children': [
+                {'class': 'UIControl', 'name': 'SolbreakerFovValue', 'input': False, 'visible': False},
+            ]},
+        ],
+    }
+    controls[:] = [node for node in controls if node['name'] not in (title['name'], fov['name'])]
+    controls.insert(2, fov)
     controls.insert(controls.index(bindings), title)
 
 
@@ -302,6 +370,8 @@ def patched_strings(source, relative, *, navigation_enabled=True):
     document.update(LOCAL_PROVISION_STRINGS.get(relative, {}))
     _fill_uprising_provisions(document, relative)
     document.update(LOCAL_MODE_STRINGS.get(relative, {}))
+    document.update(BOT_QUEUE_STRINGS[relative])
+    document.update(BATTLE_LOADING_STRINGS[relative])
     document.update(_sandbox_binding_strings(relative))
     _settings_parameter_case(document)
     _weather_map_strings(document, relative)
@@ -353,9 +423,62 @@ def _settings_label_bindings(document):
                 binding[1] = binding[1][11:-1]
 
 
+def _battle_loading_labels(document):
+    container, = (node for node in walk_dicts(document) if node.get('name') == 'battle-type-container')
+    container['components']['LinearLayout']['skipInvisible'] = True
+    chips = {chip['name']: chip for chip in container['children']}
+    for mode_class in BATTLE_LOADING_MODES:
+        name = f'solbreaker-loading-{mode_class}'
+        chips[name] = {'prototype': 'battle-type', 'name': name}
+        container['children'].append(chips[name])
+    labels = {
+        'battle-type-basic': 'Elimination',
+        'battle-type-supremacy': 'Supremacy',
+        **{f'solbreaker-loading-{mode_class}': key for mode_class, key in BATTLE_LOADING_MODES.items()},
+    }
+    for name, key in labels.items():
+        chips[name]['children'] = [{
+            'path': 'value',
+            'components': {'UITextComponent': {'text': f'Local/BattleLoading/{key}'}},
+        }]
+
+
+def _battle_loading_styles(document):
+    styles = document['StyleSheets']
+    styles.extend([
+        {'selectors': [f'#solbreaker-loading-{mode_class}' for mode_class in BATTLE_LOADING_MODES],
+         'properties': {'visible': False}},
+        {'selectors': [f'.{mode_class} * #solbreaker-loading-{mode_class}'
+                       for mode_class in BATTLE_LOADING_MODES],
+         'properties': {'visible': True}},
+        {'selectors': [f'.{mode_class} * #battle-type-container #battle-type-basic'
+                       for mode_class in BATTLE_LOADING_MODES],
+         'properties': {'visible': False}},
+        # Event names take precedence over round rules. In a regular
+        # Supremacy replay, the Supremacy flag takes precedence over Encounter.
+        {'selectors': [f'.{mode_class} * #battle-type-container #battle-type-supremacy'
+                       for mode_class in BATTLE_LOADING_MODES if mode_class != 'regular']
+                      + ['.supremacyMode * #battle-type-container #solbreaker-loading-regular'],
+         'properties': {'visible': False}},
+    ])
+
+
 def patched_resource(source, relative, *, navigation_enabled=True):
     if relative in CONSUMABLE_STRINGS:
         return patched_strings(source, relative, navigation_enabled=navigation_enabled)
+    if relative == GRAVITY_ABILITIES:
+        root = ElementTree.fromstring(dvpl.read(source))
+        jump = root.find('gravityJump')
+        if jump is None or jump.findtext('id') != str(GRAVITY_JUMP_SPEC.ident):
+            raise ValueError('Unsupported Lunar ability catalog')
+        # Match the thruster offered in battle. Blitz has four vehicle classes.
+        vehicle_filter = jump.find('vehicleFilter')
+        vehicle_filter.clear()
+        exclude = ElementTree.SubElement(vehicle_filter, 'exclude')
+        vehicle = ElementTree.SubElement(exclude, 'vehicle')
+        ElementTree.SubElement(vehicle, 'tags').text = 'heavyTank'
+        jump.find('script/cooldown').text = f'{GRAVITY_JUMP_SPEC.cooldown:g}'
+        return dvpl.encode(ElementTree.tostring(root, encoding='utf-8'))
     if relative not in UI_RESOURCES:
         raise ValueError(f"Unsupported UI resource: {relative}")
     if relative == BASE_LOBBY_ACTIONS:
@@ -394,6 +517,10 @@ action SolbreakerSettingsSaved(int arg1)
     document = yaml.safe_load(dvpl.read(source))
     if relative == KEYBOARD_OPTIONS:
         _sandbox_controls(document)
+    elif relative == BATTLE_LOADING:
+        _battle_loading_labels(document)
+    elif relative == BATTLE_LOADING_STYLES:
+        _battle_loading_styles(document)
     elif relative == BASE_LOBBY:
         root, = [n for n in document['Prototypes'] if n.get('name') == 'BaseLobby']
         root['components']['UIDataLocalVarsComponent']['data'].append(
@@ -491,6 +618,20 @@ action SolbreakerSettingsSaved(int arg1)
         local_data = root['components']['UIDataLocalBindingsComponent']['data']
         camo_gate, = (row for row in local_data if row[1] == 'camoHasLock')
         camo_gate[2] = 'panel.camo.isUniqueInvisExist or isNull(tank)'
+    elif relative == COMMUNITY_LIST:
+        container, = (node for node in walk_dicts(document)
+                      if node.get('name') == 'scrollContainerControl')
+        children = container['children']
+        slot, = (node for node in children if node.get('name') == 'Viber')
+        footer, = (node for node in children if node.get('name') == 'WargamingNet')
+        item = slot['components']['UIChildComponent0']
+        if item['eventActions'] != [['COMMUNITY_SELECT', 'COMMUNITY_SELECT', '"VIBER"']]:
+            raise ValueError('Unsupported community link dispatcher')
+        item['args'].update(text='"GITHUB SOLBREAKER"', frame='0',
+                            sprite=f'"~res:/{COMMUNITY_ICON}"')
+        slot['position'] = [0., 708.]
+        children.remove(slot)
+        children.insert(children.index(footer) + 1, slot)
     elif relative == SIDEBAR:
         for name in ("Clans", "Tournaments"):
             matches = [item for item in walk_dicts(document) if item.get("name") == name]
@@ -515,7 +656,8 @@ action SolbreakerSettingsSaved(int arg1)
         if root.get('name') != 'GameType':
             raise ValueError('Unsupported game type card')
         root.setdefault('bindings', []).append(['visible',
-            'mode.gameMode == eGameMode.Regular or mode.gameMode == eGameMode.Rating'])
+            'mode.gameMode == eGameMode.Regular or mode.gameMode == eGameMode.Rating or ('
+            + client_bot_mode.CARD_PROVING_GROUND + ')'])
         client_bot_mode.patch_card(document)
     elif relative == GAME_TYPES:
         panes = [item for item in walk_dicts(document) if item.get('name') == 'Pane'
@@ -618,6 +760,15 @@ def local_directory(path, pinned_game):
         raise
 
 
+def community_icon_patches():
+    assets = Path(__file__).with_name('assets')
+    return {
+        f'{COMMUNITY_ICON}{suffix}.packed.webp.dvpl':
+        dvpl.encode((assets / f'solbreaker-github{suffix}.packed.webp').read_bytes())
+        for suffix in ('', '@2x')
+    }
+
+
 def install_ui_guards(lab):
     lab = lab.resolve(strict=True)
     manifest_path = lab / "manifest.json"
@@ -626,10 +777,12 @@ def install_ui_guards(lab):
     # Prepare every resource before changing the existing overlay.
     patches = {name: patched_resource(game / "Data" / name, name)
                for name in (*UI_RESOURCES, *CONSUMABLE_STRINGS)}
+    patches.update(community_icon_patches())
     from .server_identity import server_name
     for relative in CONSUMABLE_STRINGS:
         document = yaml.load(dvpl.decode(patches[relative]), Loader=_StringsLoader)
         document.update({'Local PoC': server_name(manifest), 'Solbreaker': server_name(manifest)})
+        document.update(COMMUNITY_STRINGS[relative])
         patches[relative] = dvpl.encode(yaml.safe_dump(
             document, sort_keys=False, allow_unicode=True, width=1 << 30).encode())
     patches[SKIP_7X7] = dvpl.encode(b'animation CONFIRM_7X7\n{\n    Event("CLOSE_NOTIFICATION");\n}\n')
@@ -640,9 +793,13 @@ def install_ui_guards(lab):
     if GAME_TYPES in patches and not navigation_enabled:
         patches[GAME_TYPES] = patched_resource(game/'Data'/GAME_TYPES, GAME_TYPES,
                                                navigation_enabled=False)
-    provision_source = Path(manifest.get('source_game', game)).resolve(strict=True) / 'Data' / client_provisions.RESOURCE
+    source = Path(manifest.get('source_game', game)).resolve(strict=True) / 'Data'
+    provision_source = source / client_provisions.RESOURCE
     if provision_source.is_file():
         patches[client_provisions.RESOURCE] = client_provisions.patched_resource(provision_source)
+    gravity_source = source / GRAVITY_ABILITIES
+    if gravity_source.is_file():
+        patches[GRAVITY_ABILITIES] = patched_resource(gravity_source, GRAVITY_ABILITIES)
     patches.update(client_branding.patches())
     patches.update(client_battle_settings.extra_resources())
     # Custom-vehicle game views can expose client/Data/3d as their source.
@@ -660,7 +817,7 @@ def install_ui_guards(lab):
         current = yaml.load(dvpl.read(target), Loader=_StringsLoader)
         local_map_strings = {key: value for key, value in current.items()
                              if isinstance(key, str)
-                             and key.startswith(LOCAL_MAP_STRING_PREFIX)
+                             and key.startswith(LOCAL_MAP_STRING_PREFIXES)
                              and isinstance(value, str)}
         if not local_map_strings:
             continue
@@ -714,14 +871,21 @@ def install_sandbox_bindings(lab, manifest):
     patches = {
         KEYBOARD_OPTIONS: patched_resource(data/KEYBOARD_OPTIONS, KEYBOARD_OPTIONS),
         INVENTORY_PANEL: patched_resource(source/'Data'/INVENTORY_PANEL, INVENTORY_PANEL),
+        GAME_TYPE_CARD: patched_resource(source/'Data'/GAME_TYPE_CARD, GAME_TYPE_CARD),
     }
-    for relative in SETTINGS_CASE_RESOURCES:
+    for relative in (*SETTINGS_CASE_RESOURCES, *BATTLE_LOADING_RESOURCES, GRAVITY_ABILITIES, COMMUNITY_LIST):
         original = source/'Data'/relative
         if original.is_file():
             patches[relative] = patched_resource(original, relative)
+    if COMMUNITY_LIST in patches:
+        patches.update(community_icon_patches())
     for relative in SANDBOX_BINDING_STRINGS:
         strings = yaml.load(dvpl.read(data/relative), Loader=_StringsLoader)
         strings.update(CONSUMABLE_STRINGS[relative])
+        strings.update(LOCAL_MODE_STRINGS[relative])
+        strings.update(BOT_QUEUE_STRINGS[relative])
+        strings.update(BATTLE_LOADING_STRINGS[relative])
+        strings.update(COMMUNITY_STRINGS[relative])
         _fill_vehicle_names(strings, relative)
         _fill_uprising_provisions(strings, relative)
         strings.update(_sandbox_binding_strings(relative))
@@ -737,7 +901,7 @@ def install_sandbox_bindings(lab, manifest):
             if parent.resolve(strict=True) != parent:
                 raise ValueError(f'Expected a private client UI directory: {parent}')
         target = data/relative
-        if target.is_symlink() or target.read_bytes() != content:
+        if target.is_symlink() or not target.is_file() or target.read_bytes() != content:
             atomic_write(target, content, replace_symlink=True)
         overrides[relative] = hashlib.sha256(content).hexdigest()
     updated = dict(manifest, ui_overrides=overrides, sandbox_bindings_version=SANDBOX_BINDINGS_VERSION)

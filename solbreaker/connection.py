@@ -59,6 +59,10 @@ def regions_config(regions,network):
     local['wgnwn']=network.advertise_http
     local['hosts']={'LOCAL':dict(clusterID=0,url=str(network.advertise_login))}
     local['preferredHost']='LOCAL'
+    # The pinned client's community dispatcher has a fixed set of link IDs.
+    # The Viber slot is unused in the isolated Solbreaker region.
+    local.setdefault('communityUrls', {}).setdefault('http', {})['viber'] = (
+        'https://github.com/unisequence/Solbreaker')
     regions['Common']['additionalLocalizationBaseUrl']=network.advertise_http+'/localizations'
     configure_market(regions,network.advertise_http)
     return regions

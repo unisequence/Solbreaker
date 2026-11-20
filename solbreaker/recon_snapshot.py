@@ -72,6 +72,14 @@ def build_team_spotting_snapshot(arena, observer_id, *, battle_id, sequence):
 
 
 def encode_arena_recon_snapshot(arena, snapshot, observer_id):
+    boss = getattr(arena, 'big_boss', None)
+    if boss is not None:
+        observer = arena.vehicles[observer_id]
+        phase = getattr(getattr(arena, 'time_stop', None), 'entity', None)
+        tracked = {entity for entity in boss.bosses if entity != phase
+                   and arena.vehicles[entity].account_id is None
+                   and arena.vehicles[entity].alive and arena.vehicles[entity].team != observer.team}
+        snapshot = replace(snapshot, markers=tuple(sorted(tracked.union(snapshot.markers))))
     if getattr(arena, 'practice', False):
         observer = arena.vehicles[observer_id]
         markers = set(snapshot.markers)

@@ -60,6 +60,8 @@ class LocalServer:
         from .tls import server_context
         self.http_tls_context = server_context(lab, self.manifest, self.network)
         validate_snapshot(self.manifest)
+        from .proving_ground_map import install as install_proving_ground
+        install_proving_ground(lab, self.manifest)
         from .sim_native import backend_status
         from .drive_workers import configured_workers
         self.simulation_backend = backend_status()

@@ -12,7 +12,7 @@ import stat
 import sys
 
 
-LOCK_NAMES = frozenset(('server.lock', 'client-config.lock', 'dependencies.lock'))
+LOCK_NAMES = frozenset(('server.lock', 'client-config.lock', 'dependencies.lock', 'proving-ground.lock'))
 
 
 class PrivateFileBusy(ValueError):
