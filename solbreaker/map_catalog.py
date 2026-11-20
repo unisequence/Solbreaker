@@ -40,6 +40,7 @@ _SUPPORTED = {
     # Registered in the private lab's maps.yaml overlay. The installed game
     # catalog does not contain this artist map.
     "user_map": 100,
+    "solbreaker_proving_ground": 107,
 }
 MAP_CATALOG_RESOURCE = "maps.yaml.dvpl"
 _HIDDEN_MAPS = frozenset(key for key, ident in _SUPPORTED.items() if 44 <= ident <= 72)
@@ -54,14 +55,41 @@ WEATHER_MAPS = {
 }
 
 
+_WINTER_MAPS = frozenset(_SUPPORTED[key] for key in (
+    'medvedkovo', 'medvedkovo_02', 'medvedkovo_03', 'himmelsdorf', 'idle',
+    'malinovka', 'faust', 'iceworld',
+))
+_DESERT_MAPS = frozenset(_SUPPORTED[key] for key in (
+    'desert_train', 'desert_train_02', 'desert_train_03', 'savanna', 'savanna_old',
+    'canyon', 'holmeisk',
+))
+
+
+def map_camouflage_slot(map_id):
+    """Return the native winter, summer or desert paint slot for the arena."""
+    if map_id in _WINTER_MAPS:
+        return 0
+    if map_id in _DESERT_MAPS:
+        return 2
+    return 1
+
+
 def map_team_capacity(map_id):
     return 5 if map_id in (_SUPPORTED["rudniki_01"], _SUPPORTED["rudniki_02"]) else 7
 
-# Local training placement, shared by solo and room runtimes. The source map
-# tree stays intact: its canopy obscured the native camera behind this slot.
+# Local training placement shared by solo and room runtimes.
 _LOCAL_SPAWN_ADJUSTMENTS = {
     "pliego": {(1, 3): ((69.106453, 239.036133), (61.106453, 239.036133))},
-    "milbase_04": {(1, 5): ((-213.999298, -49.183872), (-213.999298, -50.183872))},
+    # Move the west team from the passage under the ship to the open quay.
+    "milbase_04": {
+        (1, 0): ((-218.560623, 19.568991), (-211., -85.)),
+        (1, 1): ((-214.430908, 12.721676), (-197., -82.)),
+        (1, 2): ((-210.396851, 4.501037), (-197., -90.)),
+        (1, 3): ((-208.742813, -27.149055), (-197., -98.)),
+        (1, 4): ((-209.853561, -35.581841), (-211., -94.)),
+        (1, 5): ((-213.999298, -49.183872), (-227., -89.)),
+        (1, 6): ((-216.256027, -57.354511), (-227., -98.)),
+    },
 }
 
 

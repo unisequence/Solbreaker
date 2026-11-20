@@ -7,7 +7,7 @@ import time
 from .battle_setup import RoomLineup
 from .roster import TEAMS, TEAM_SIZE, ROOM_CAPACITY, WAITING
 from .map_catalog import map_team_capacity
-from .training_config import BATTLE_MODES, RoomBattleSettings
+from .training_config import BATTLE_MODES, PROVING_GROUND_ID, RoomBattleSettings
 
 
 @dataclass
@@ -38,6 +38,13 @@ class Room:
     battle_settings: RoomBattleSettings = field(default_factory=RoomBattleSettings)
     # Only result IDs are retained, never worlds or departed player objects.
     _counted_results: set[str] = field(default_factory=set,repr=False)
+
+    def apply_map_rules(self):
+        if self.map_id == PROVING_GROUND_ID:
+            self.battle_settings = RoomBattleSettings(unlimited_lives=True, minutes=0, unlimited_ammo=True)
+            self.battle_mode = 'encounter'
+            self.bot_counts = (0, 0)
+            self.lineup = RoomLineup()
 
     @property
     def active_bot_counts(self):
@@ -122,6 +129,7 @@ class RoomManager:
             if ident!='000000' and ident not in self.rooms:break
         room=Room(ident,account,{account:Member(account,team)},map_id=map_id,bot_counts=bot_counts,
                   battle_mode=battle_mode,battle_settings=battle_settings,lineup=lineup or RoomLineup())
+        room.apply_map_rules()
         self.rooms[ident]=room;self.memberships[account]=ident
         return room
 
@@ -179,6 +187,7 @@ class RoomManager:
         self.validate_settings(map_id, room.battle_mode, room.members.values())
         if room.map_id!=map_id:
             room.map_id=map_id
+            room.apply_map_rules()
             self.reset_ready(room)
         return room
 
@@ -188,7 +197,7 @@ class RoomManager:
         capacity = map_team_capacity(map_id)
         if any(sum(member.team == team for member in members) > capacity for team in TEAMS):
             raise ValueError(f'This map supports up to {capacity} participants per team')
-        if battle_mode == 'supremacy' and not self.endpoint.resolve_map_spec(map_id).strategic_points:
+        if map_id != PROVING_GROUND_ID and battle_mode == 'supremacy' and not self.endpoint.resolve_map_spec(map_id).strategic_points:
             raise ValueError('This map has no Supremacy capture points')
 
     def move(self,account,target,roster):
@@ -231,6 +240,7 @@ class RoomManager:
             room.battle_settings=battle_settings
         if lineup is not None:
             room.lineup=lineup
+        room.apply_map_rules()
         room.title,room.description=title,description
         self.reset_ready(room)
         return room
@@ -238,6 +248,8 @@ class RoomManager:
     def set_bots(self,account,counts):
         room=self.owned(account)
         counts=room_bot_counts(counts)
+        if room.map_id == PROVING_GROUND_ID and any(counts):
+            raise ValueError('Place targets from the proving ground menu during the session')
         if room.bot_counts!=counts or room.lineup.custom:
             room.bot_counts=counts
             room.lineup=RoomLineup()
@@ -253,7 +265,8 @@ class RoomManager:
         bot_counts=room.active_bot_counts
         if not members:
             raise ValueError('At least one player must join a team')
-        validate_teams(teams + [team for team, count in zip(TEAMS, bot_counts) for _ in range(count)])
+        validate_teams(teams + [team for team, count in zip(TEAMS, bot_counts) for _ in range(count)],
+                       practice=room.map_id == PROVING_GROUND_ID)
         if not all(m.ready for m in members):
             raise ValueError('Every participant on both teams must be ready')
         # Endpoint validates both sessions before creating or attaching anything.

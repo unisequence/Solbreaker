@@ -23,6 +23,8 @@ from .account import account_update, account_sync_response
 from .mercury import packed_blob, read_blob
 from .profile import account_snapshot, game_mode_descriptions
 from .catalog import synchronized_catalog, maps_configuration
+from .camouflage import ALL_MAPS_SLOT, battle_paint, compatible_paints
+from .garage import CAMOUFLAGE_SLOTS
 from .battle import (initial_messages, spawn_batches, reconnect_batches, motion_messages, event_messages,
                      battle_hints_message, ammo_message, avatar_method)
 from .arena import ArenaManager
@@ -31,6 +33,7 @@ from .vehicle_data import VehicleConfiguration
 from .terrain import MapTerrain
 from .map_catalog import WEATHER_MAPS, load_map_spec, training_map_catalog
 from .dev_map import dev_map_specs_for_lab
+from .training_config import PROVING_GROUND_ID, PROVING_GROUND_KEY, PROVING_GROUND_MODE, TrainingConfig
 from .motion import UPDATE_HZ, SIMULATION_INTERVAL, game_tick, tick_sync
 
 
@@ -596,6 +599,10 @@ class BaseEndpoint(asyncio.DatagramProtocol):
             self.server.event('training_map_ready', map_id=map_id, map_key=spec.key, **detail)
         return context
 
+    @property
+    def proving_ground_available(self):
+        return getattr(self, 'map_catalog', {}).get(PROVING_GROUND_ID) == PROVING_GROUND_KEY
+
     def resolve_map_spec(self, map_id):
         if type(map_id) is not int or map_id not in self.map_catalog:
             raise ValueError('Unsupported training map ID')
@@ -1122,6 +1129,9 @@ class BaseEndpoint(asyncio.DatagramProtocol):
             elif event.kind == 'ground_impact':
                 self.server.event('training_ground_impact', arena_id=arena.result_id,
                     entity_a=event.actor, entity_b=event.target, **event.data)
+            elif event.kind in ('proving_range_series', 'proving_sector_restored'):
+                self.server.event(event.kind, arena_id=arena.result_id,
+                                  entity_id=event.actor, **event.data)
             elif event.kind == 'drive_trace':
                 self.server.event('training_drive_trace', arena_id=arena.result_id,
                                   entity_id=event.actor, **event.data)
@@ -1180,7 +1190,7 @@ class BaseEndpoint(asyncio.DatagramProtocol):
         outgoing, failures = [], []
         for addr,client in list(self.clients.items()):
             if (self.clients.get(addr) is not client or client.arena_id != arena.result_id
-                    or client.phase != 'battle' or client.reconnect_replay):
+                    or client.phase != 'battle' or not client.battle_spawned or client.reconnect_replay):
                 continue
             try:
                 body = event_messages(arena,arena.players[client.account_id],events)
@@ -1484,21 +1494,26 @@ class BaseEndpoint(asyncio.DatagramProtocol):
                 store = getattr(self.server.accounts, 'store', None)
                 if store is not None:
                     training = store.training_config(client.account_id, training)
-            if game_mode is not None:
-                from .training_config import TrainingConfig
+            if game_mode == PROVING_GROUND_MODE:
+                if not self.proving_ground_available:
+                    raise ValueError('Proving ground is not installed')
+                map_id = PROVING_GROUND_ID
+            elif game_mode is not None:
                 training = (training or TrainingConfig()).for_game_mode(game_mode)
             if training is not None and map_id in (None, -1, 0):
                 if training.bots_enabled and training.map is None:
                     from secrets import choice
                     available = tuple(ident for ident, key in self.map_catalog.items()
-                        if key not in WEATHER_MAPS and (training.battle_mode != 'supremacy'
-                            or self.resolve_map_spec(ident).strategic_points))
+                        if key != PROVING_GROUND_KEY and key not in WEATHER_MAPS
+                        and (training.battle_mode != 'supremacy' or self.resolve_map_spec(ident).strategic_points))
                     if not available:
                         raise ValueError('No available maps support this battle mode')
                     map_id = choice(available)
                 else:
                     map_id = training.map_id(self.map_catalog)
             spec = self.selected_map(map_id)
+            if spec.key == PROVING_GROUND_KEY:
+                training = TrainingConfig().for_game_mode(PROVING_GROUND_MODE)
             if (training is not None and training.bots_enabled and training.battle_mode == 'supremacy'
                     and not getattr(spec, 'strategic_points', ())):
                 raise ValueError('This map has no Supremacy capture points')
@@ -1531,7 +1546,7 @@ class BaseEndpoint(asyncio.DatagramProtocol):
                                               stored.get('loadout'), **crew)
                 from .consumables import resolve_loadout
                 account.update(inventory_id=stored['id'],shells=tuple(stored['shells']),
-                               camouflage=stored.get('camouflage', 0),
+                               camouflage=battle_paint(stored, spec.map_id),
                                consumables=resolve_loadout(self.server.manifest['game'], definition, stored.get('loadout'),
                                                            **crew))
                 options.update(collision_scene=self.scene_for_vehicle(definition, spec.map_id),
@@ -1541,12 +1556,14 @@ class BaseEndpoint(asyncio.DatagramProtocol):
             if setup and setup.active:
                 account['sandbox_preset'] = setup.preset.values
             bots = training.bots_enabled if training is not None else bot_enabled
-            if not bots and definition is not None and self.arenas.sandbox_enabled:
+            if spec.key == PROVING_GROUND_KEY:
+                options.update(bot_game=self.game, bot_roster=(), bot_enabled=False)
+                bots = False
+            elif not bots and definition is not None and self.arenas.sandbox_enabled:
                 options['bot_game'] = self.game
             if bots and definition is not None:
                 import uuid
                 from .bot_roster import custom_bot_roster, select_bot_roster
-                from .training_config import TrainingConfig
                 config = training or TrainingConfig(mode='bots')
                 training = config
                 identity = uuid.uuid4().hex
@@ -1610,7 +1627,12 @@ class BaseEndpoint(asyncio.DatagramProtocol):
         if room_mode not in BATTLE_MODES:
             raise ValueError('Choose a supported room battle mode')
         bot_counts = room_bot_counts(bot_counts)
-        validate_teams([*teams, *([1]*bot_counts[0]), *([2]*bot_counts[1])])
+        spec = self.selected_map(map_id)
+        practice = spec.key == PROVING_GROUND_KEY
+        if practice:
+            room_mode = 'encounter'
+            bot_counts = (0, 0)
+        validate_teams([*teams, *([1]*bot_counts[0]), *([2]*bot_counts[1])], practice=practice)
         if not account_ids or len(account_ids)!=len(teams) or len(set(account_ids))!=len(account_ids):
             raise ValueError('Every battle participant must have a distinct account and a team')
         selected = []
@@ -1625,7 +1647,6 @@ class BaseEndpoint(asyncio.DatagramProtocol):
                 raise ValueError('Participant channel is stalled')
             selected.append((addr,client))
         accounts = [dict(self.server.accounts.get(a).identity(), team=t) for a,t in zip(account_ids,teams)]
-        spec = self.selected_map(map_id)
         capacity = map_team_capacity(spec.map_id)
         if any(teams.count(team) + bots > capacity for team, bots in enumerate(bot_counts, 1)):
             raise ValueError(f'This map supports up to {capacity} participants per team')
@@ -1639,6 +1660,8 @@ class BaseEndpoint(asyncio.DatagramProtocol):
                        prebattle_seconds=big_boss.COUNTDOWN_SECONDS if room_mode == big_boss.MODE else 7.,
                        room_mode=room_mode, room_settings=room_settings,
                        bot_game=self.game if room_mode in ('gravity', big_boss.MODE, mad_games.MODE, uprising.MODE) else None)
+        if practice:
+            options.update(bot_game=self.game, bot_roster=())
         owners = getattr(self, 'arena_owners_enabled', False)
         definitions = ({account_id: self.definition for account_id in account_ids}
                        if owners and getattr(self, 'progression', None) is None else {})
@@ -1658,7 +1681,7 @@ class BaseEndpoint(asyncio.DatagramProtocol):
                 stored = self.progression.selected_inventory(account_id)
                 self.require_vehicle_available(account_id, stored['id'])
                 account.update(inventory_id=stored['id'],shells=tuple(stored['shells']),
-                               camouflage=stored.get('camouflage', 0))
+                               camouflage=battle_paint(stored, spec.map_id))
                 definition = self.progression.battle_definition(stored['descriptor'], stored['shells'])
                 from .loadout_effects import apply_definition
                 crew = self.crew_metadata(definition)
@@ -1717,7 +1740,8 @@ class BaseEndpoint(asyncio.DatagramProtocol):
         update = account_snapshot(client.account_revision,self.server.manifest['game'],
                                   progress, garage=state,
                                   training_return=self.choosing_training_tank(client.account_id),
-                                  bot_rules=self.garage_bot_rules(client.account_id))
+                                  bot_rules=self.garage_bot_rules(client.account_id),
+                                  proving_ground=self.proving_ground_available)
         # AccountData's recursive delta merge (146eab0) removes a key for None
         # (146edb8 -> 1481230); omission alone leaves old inventory entries intact.
         # A full snapshot already excludes removed vehicles; tombstones are
@@ -1893,21 +1917,23 @@ class BaseEndpoint(asyncio.DatagramProtocol):
             revision, inventory_id, slot, compact_id = struct.unpack_from('<q3i', body, 4)
             if revision != self.progression_catalog['rev']:
                 raise ValueError('Camouflage catalog has changed')
-            if slot not in (0, 1, 2):
+            if slot != ALL_MAPS_SLOT and slot not in CAMOUFLAGE_SLOTS:
                 raise ValueError('Unsupported camouflage slot')
+            season = None if slot == ALL_MAPS_SLOT else slot
             self.require_vehicle_available(client.account_id, inventory_id)
             state = self.progression.prepare(client.account_id)
             vehicle = next((v for v in state['vehicles'] if v['id'] == inventory_id), None)
             if vehicle is None:
                 raise ValueError('Vehicle is not in your garage')
-            from .camouflage import compatible_paints
-            paints = compatible_paints(Path(self.server.manifest['game']), vehicle['type_cd'])
-            if compact_id and compact_id not in paints.values():
-                raise ValueError('This paint is incompatible with the vehicle')
-            # Solbreaker stores one paint for all map seasons per vehicle.
-            self.progression.garage.set_camouflage(client.account_id, inventory_id, compact_id)
+            if compact_id:
+                paints = compatible_paints(Path(self.server.manifest['game']), vehicle['type_cd'],
+                                           slot=season)
+                if compact_id not in paints.values():
+                    raise ValueError('This paint is incompatible with the vehicle')
+            self.progression.garage.set_camouflage(client.account_id, inventory_id, compact_id,
+                                                   slot=season)
             self.server.event('vehicle_camouflage_changed', account_id=client.account_id,
-                              inventory_id=inventory_id, camouflage=compact_id)
+                              inventory_id=inventory_id, slot=slot, camouflage=compact_id)
             return self.progression_update(client) + command_response(request_id, 0)
         except (KeyError, ValueError) as exc:
             self.server.event('vehicle_camouflage_rejected', account_id=client.account_id, reason=str(exc))
@@ -2129,7 +2155,7 @@ class BaseEndpoint(asyncio.DatagramProtocol):
         loadout = stored.get('loadout')
         definition = apply_definition(self.game, definition, loadout, **crew)
         consumables = resolve_loadout(self.game, definition, loadout, **crew)
-        camouflage = stored.get('camouflage', 0)
+        camouflage = battle_paint(stored, arena.map_id)
         if owner:
             self.owner_service.training_swap(addr, client, arena, lease, stored['id'],
                                              definition, tuple(stored['shells']), tuple(consumables),
@@ -2419,7 +2445,7 @@ class BaseEndpoint(asyncio.DatagramProtocol):
                             map_id, queue, requested_inventory, flags, game_mode = struct.unpack_from('<5i', body, 4)
                             self.server.event('solo_queue_requested', account_id=client.account_id,
                                               map_id=map_id, queue=queue, flags=flags, mode=game_mode)
-                            if ((queue, flags) != (0, 0) or game_mode not in (1, 7)
+                            if ((queue, flags) != (0, 0) or game_mode not in (1, 7, PROVING_GROUND_MODE)
                                     or map_id not in (-1, 0, *self.map_catalog)):
                                 raise ValueError('Unsupported solo queue options')
                             # Legacy profiles retain their fixed vehicle; the
@@ -2456,7 +2482,8 @@ class BaseEndpoint(asyncio.DatagramProtocol):
                             snapshot = account_snapshot(None if full_sync else previous,
                                 self.server.manifest["game"], progress, inventory, garage=garage,
                                 training_return=self.choosing_training_tank(client.account_id),
-                                bot_rules=self.garage_bot_rules(client.account_id))
+                                bot_rules=self.garage_bot_rules(client.account_id),
+                                proving_ground=self.proving_ground_available)
                             if garage is not None:
                                 from .camouflage import unlocked_paints
                                 snapshot['unlocks'] = {

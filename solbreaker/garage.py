@@ -3,6 +3,7 @@ import re
 from .economy import STARTING_FREE_XP
 
 MAX_INT = 2**31 - 1
+CAMOUFLAGE_SLOTS = (0, 1, 2)
 
 
 def _int(value, name, *, low=0):
@@ -367,6 +368,12 @@ class GarageStore:
                 PRIMARY KEY(account_id,inventory_id),
                 FOREIGN KEY(account_id,inventory_id) REFERENCES garage_vehicles(account_id,inventory_id)
                     ON DELETE CASCADE)''',
+            '''CREATE TABLE IF NOT EXISTS garage_camouflage_slots (
+                account_id INTEGER NOT NULL, inventory_id INTEGER NOT NULL,
+                slot INTEGER NOT NULL CHECK(slot BETWEEN 0 AND 2), camouflage INTEGER NOT NULL,
+                PRIMARY KEY(account_id,inventory_id,slot),
+                FOREIGN KEY(account_id,inventory_id) REFERENCES garage_vehicles(account_id,inventory_id)
+                    ON DELETE CASCADE)''',
             # Native ammunition preferences. A row also marks the inventory as using the paid
             # exchange: `free` tracks trusted grants for configuration-conservation
             # checks only. All owned shells retain their native cash resale value.
@@ -443,6 +450,11 @@ class GarageStore:
             'SELECT * FROM garage_ammo_prefs WHERE account_id=?', (account_id,))}
         paints = dict(self.db.execute(
             'SELECT inventory_id,camouflage FROM garage_camouflage WHERE account_id=?', (account_id,)))
+        paint_slots = {}
+        for inventory_id, slot, compact_id in self.db.execute(
+                'SELECT inventory_id,slot,camouflage FROM garage_camouflage_slots WHERE account_id=?',
+                (account_id,)):
+            paint_slots.setdefault(inventory_id, {})[slot] = compact_id
         for v in vehicles:
             if v['id'] in loadouts:
                 v['loadout'] = loadouts[v['id']]
@@ -451,8 +463,12 @@ class GarageStore:
             if row is not None:
                 v.update(ammo_layouts=json.loads(row['layouts']),
                          ammo_free=json.loads(row['free']))
-            if v['id'] in paints:
-                v['camouflage'] = paints[v['id']]
+            if v['id'] in paints or v['id'] in paint_slots:
+                baseline = paints.get(v['id'], 0)
+                overrides = paint_slots.get(v['id'], {})
+                slots = [overrides.get(slot, baseline) for slot in CAMOUFLAGE_SLOTS]
+                v['camouflage_slots'] = slots
+                v['camouflage'] = slots[1]
         type_xp = {v['type_cd']: v['xp'] for v in vehicles}
         for r in self.db.execute('SELECT type_cd,xp FROM garage_type_xp WHERE account_id=?', (account_id,)):
             if r['type_cd'] in type_xp:
@@ -462,19 +478,41 @@ class GarageStore:
                     researched=research, vehicles=vehicles,
                     type_xp=[dict(type_cd=k, xp=type_xp[k]) for k in sorted(type_xp)])
 
-    def set_camouflage(self, account_id, inventory_id, camouflage):
+    def set_camouflage(self, account_id, inventory_id, camouflage, *, slot=None):
         _int(camouflage, 'camouflage')
+        if slot is not None and (type(slot) is not int or slot not in CAMOUFLAGE_SLOTS):
+            raise ValueError('Unsupported camouflage slot')
 
         def action(ctx):
             self._vehicle(ctx, inventory_id)
-            # Keep an explicit zero after removal so inventory deltas can
-            # clear a paint in an existing native cache.
-            changed = self.db.execute(
-                'INSERT INTO garage_camouflage VALUES (?,?,?) '
-                'ON CONFLICT(account_id,inventory_id) DO UPDATE SET camouflage=excluded.camouflage '
-                'WHERE camouflage != excluded.camouflage',
-                (account_id, inventory_id, camouflage))
-            ctx.changed = bool(changed.rowcount)
+            vehicle_key = (account_id, inventory_id)
+            baseline = self.db.execute(
+                'SELECT camouflage FROM garage_camouflage WHERE account_id=? AND inventory_id=?',
+                vehicle_key).fetchone()
+            default = baseline[0] if baseline is not None else 0
+            overrides = dict(self.db.execute(
+                'SELECT slot,camouflage FROM garage_camouflage_slots WHERE account_id=? AND inventory_id=?',
+                vehicle_key))
+            if slot is None:
+                if all(overrides.get(season, default) == camouflage for season in CAMOUFLAGE_SLOTS):
+                    return
+                self.db.execute(
+                    'INSERT INTO garage_camouflage VALUES (?,?,?) '
+                    'ON CONFLICT(account_id,inventory_id) DO UPDATE SET camouflage=excluded.camouflage',
+                    (*vehicle_key, camouflage))
+                self.db.execute(
+                    'DELETE FROM garage_camouflage_slots WHERE account_id=? AND inventory_id=?',
+                    vehicle_key)
+            else:
+                if overrides.get(slot, default) == camouflage:
+                    return
+                # Keep a zero override to clear a season without losing the baseline
+                # or leaving stale paint in a connected client's inventory.
+                self.db.execute(
+                    'INSERT INTO garage_camouflage_slots VALUES (?,?,?,?) '
+                    'ON CONFLICT(account_id,inventory_id,slot) DO UPDATE SET camouflage=excluded.camouflage',
+                    (*vehicle_key, slot, camouflage))
+            ctx.changed = True
 
         self._run(account_id, None, {}, action)
 

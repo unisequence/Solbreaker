@@ -40,6 +40,10 @@ STRINGS = {
     'SaveHint': ('Use Save in Battle settings to apply your changes.', 'Нажми «Сохранить» в настройках боя.'),
 }
 
+for _key, _texts in STRINGS.items():
+    if _key != 'SaveHint':
+        STRINGS[_key] = tuple(text.upper() for text in _texts)
+
 
 def _key(name):
     return 'Local/SbSetup'+name

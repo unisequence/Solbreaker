@@ -18,6 +18,10 @@ from .roster import TEAM_SIZE
 
 SCHEMA_VERSION = 1
 FILE_NAME = 'training.json'
+# The native client registers the arcade queue as ID 8 in its eGameMode registry.
+PROVING_GROUND_MODE = 8
+PROVING_GROUND_ID = 107
+PROVING_GROUND_KEY = 'solbreaker_proving_ground'
 MAX_BYTES = 4096
 MODES = ('target', 'bots')
 BATTLE_MODES = ('elimination', 'encounter', 'supremacy', 'gravity', 'big_boss', 'mad_games', 'uprising')
@@ -121,12 +125,10 @@ class TrainingConfig:
         return matches[0]
 
     def for_game_mode(self, mode):
-        """Map the two native picker IDs to TFS solo rules, per request.
-
-        The pinned client already transmits mode 1/7 in command 700. TFS
-        labels these cards Training ground / Battle with bots; no ranked
-        match or shared server setting is created by selecting either card.
-        """
+        """Apply the selected hangar card without changing the saved recipe."""
+        if type(mode) is int and mode == PROVING_GROUND_MODE:
+            return TrainingConfig(mode='target', map=PROVING_GROUND_KEY,
+                                  unlimited_lives=True, minutes=0, unlimited_ammo=True)
         if type(mode) is not int or mode not in (1, 7):
             raise ValueError('Unsupported TFS solo game mode')
         return replace(self, mode='bots' if mode == 7 else 'target')

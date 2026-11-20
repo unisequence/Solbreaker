@@ -16,6 +16,43 @@ RECEIPT = 'motion_blur_shader_sha256'
 LABEL_KEY = '#solbreaker:MotionBlur'
 
 
+def _range_ability_hud():
+    icon_root = '~res:/Gfx/Shared/tank-supply/consumables'
+    icons = (
+        '2021_Lunar/normal/consumable_jump_s',
+        '2020_Mad-games/normal/consumable_dash_s',
+        '2020_Mad-games/normal/consumable_forsage_s',
+    )
+
+    def label(name, position, size, font, *, text=''):
+        return {'class': 'UIStaticText', 'name': name, 'input': False,
+                'position': position, 'size': size, 'components': {'UITextComponent': {
+                    'text': text, 'fontPath': '~res:/Fonts/WarHeliosCondCBold.ttf', 'fontSize': font,
+                    'color': [1., 1., 1., 1.], 'colorInheritType': 'COLOR_IGNORE_PARENT',
+                    'align': ['HCENTER', 'VCENTER'], 'shadowColor': [0., 0., 0., .9],
+                    'shadowOffset': [1., 1.]}}}
+
+    rows = []
+    for i, icon in enumerate(icons):
+        rows.append({'class': 'UIControl', 'name': f'Slot{i}', 'input': False, 'visible': False,
+                     'position': [i * 53., 0.], 'size': [48., 48.],
+                     'components': {'Background': {'drawType': 'DRAW_FILL', 'color': [.07, .11, .14, .85]}},
+                     'children': [
+                         {'class': 'UIControl', 'name': 'Icon', 'input': False,
+                          'position': [4., 4.], 'size': [40., 40.], 'components': {'Background': {
+                              'drawType': 'DRAW_SCALE_PROPORTIONAL_ONE', 'sprite': f'{icon_root}/{icon}'}}},
+                         {'class': 'UIControl', 'name': 'Dim', 'input': False, 'visible': False,
+                          'size': [48., 48.], 'components': {'Background': {
+                              'drawType': 'DRAW_FILL', 'color': [.02, .03, .04, .64]}}},
+                         label('Time', [0., 0.], [48., 48.], 23.),
+                         label('Key', [0., 48.], [48., 15.], 13., text=str(7 + i)),
+                     ]})
+    return {'class': 'UIControl', 'name': 'SolRangeAbilities', 'input': False, 'size': [154., 63.],
+            'components': {'Anchor': {'rightAnchorEnabled': True, 'rightAnchor': 15.,
+                                      'bottomAnchorEnabled': True, 'bottomAnchor': 100.}},
+            'children': rows}
+
+
 def battle_framebuffer(source):
     from .client_time_stop import patch_hud
 
@@ -23,6 +60,7 @@ def battle_framebuffer(source):
     patch_boss_screen(document)
     root, = document['Prototypes']
     patch_hud(root)
+    root['children'].insert(-1, _range_ability_hud())
     root['children'].insert(-1, {
         'class': 'UIStaticText', 'name': 'SolAimTime', 'input': False, 'visible': False,
         'size': [64., 26.],
@@ -161,7 +199,7 @@ def install_motion_blur(lab, manifest):
                 for key, row in changes.items()}
     if BATTLE.as_posix() in overrides:
         overrides[BATTLE.as_posix()] = receipts[BATTLE.as_posix()]
-    for relative, label in ((STRINGS_EN, 'Motion Blur'), (STRINGS_RU, 'Размытие в движении')):
+    for relative, label in ((STRINGS_EN, 'MOTION BLUR'), (STRINGS_RU, 'РАЗМЫТИЕ В ДВИЖЕНИИ')):
         target = data/relative
         document = yaml.load(dvpl.read(target), Loader=_StringsLoader)
         if document.get(LABEL_KEY) != label:

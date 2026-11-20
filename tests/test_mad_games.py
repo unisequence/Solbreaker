@@ -60,6 +60,27 @@ class MadGamesTests(TestCase):
             with self.subTest(mode=mode):
                 self.check_team_spotting_transport(mode)
 
+    def test_bot_boss_remains_spotted_outside_range(self):
+        from uuid import UUID
+        from solbreaker.recon_snapshot import build_team_spotting_snapshot
+
+        terrain = SimpleNamespace(height=lambda x, z: 0.)
+        arena = Arena([dict(id=1, nickname='Pilot')], b'', terrain, now=1.,
+                      training=TrainingConfig(mode='bots', allies=0, enemies=2, battle_mode='big_boss'))
+        self.addCleanup(arena.close)
+        observer = arena.vehicle_for(1)
+        boss, ordinary = sorted((v for v in arena.vehicles.values() if v.team != observer.team),
+                                key=lambda v: not arena._is_boss(v))
+        for vehicle in boss, ordinary:
+            vehicle.pose = replace(vehicle.pose, position=(2000., 0., 2000.))
+        for now in (2., 40.):
+            arena._update_team_spotting(now)
+            self.assertFalse(mad_games.concealed(boss, observer.team))
+            self.assertTrue(mad_games.concealed(ordinary, observer.team))
+            snapshot = build_team_spotting_snapshot(
+                arena, observer.entity_id, battle_id=UUID(arena.result_id), sequence=int(now))
+            self.assertEqual(snapshot.markers, (boss.entity_id,))
+
     def check_team_spotting_transport(self, mode):
         from solbreaker.arena_owner_game import GameArenaHandler
         from solbreaker.base import ClientSession
@@ -174,7 +195,7 @@ class MadGamesTests(TestCase):
         bot.flags = 1
         arena._training_bot_mad_mobility(bot, None, 2.)
         self.assertEqual(state.state_at(2.).state, ACTIVE)
-        self.assertEqual(bot.engine_factor, 4.)
+        self.assertEqual(bot.engine_factor, 6.)
 
     def test_vehicle_loadout_reads_pinned_arcade_role(self):
         with TemporaryDirectory() as temporary:
@@ -207,8 +228,8 @@ class MadGamesTests(TestCase):
         arena.started = 1.
         arena.simulation_time = 2.
         self.assertTrue(arena._activate_consumable(owner, state, 2.))
-        self.assertEqual((owner.engine_factor, owner.rotation_factor), (4., 1.10))
-        self.assertEqual(arena._drive_speed_factor(owner), 2.)
+        self.assertEqual((owner.engine_factor, owner.rotation_factor), (6., 1.60))
+        self.assertEqual(arena._drive_speed_factor(owner), 3.)
         self.assertEqual(arena._terrain_mobility(owner).resistance, .4)
         self.assertEqual(arena.equipment_state(owner)[0][:2], (24, ACTIVE))
         # Opponents receive the native state ID, while the owner uses raw24.

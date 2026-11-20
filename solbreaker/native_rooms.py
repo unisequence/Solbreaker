@@ -15,6 +15,7 @@ from .battle_settings_wire import GET_TITLE, GET_TITLE_V2, GET_TITLE_V3, SETUP_R
 from .battle_setup import ROOM_MARKER, ROOM_HEADER, RoomLineup, split_room_lineup
 from .mercury import packed_blob
 from .map_catalog import map_team_capacity
+from .training_config import PROVING_GROUND_ID
 from .roster import TEAMS
 from .training_config import BATTLE_MODES, RoomBattleSettings
 
@@ -244,7 +245,7 @@ class NativeRooms:
         roles=b''.join(field(1,field(1,m.account_id)+field(2,field(1,field(1,
             OWNER_ROLE if m.account_id==room.owner else 0)))) for m in room.members.values())
         occupied = {member.team for member in room.members.values()}
-        limits = {team: dict(minCount=0 if bots and team not in occupied else 1,
+        limits = {team: dict(minCount=0 if map_id == PROVING_GROUND_ID or (bots and team not in occupied) else 1,
                              maxCount=(map_team_capacity(map_id),)*3, level=(1,10))
                   for team, bots in zip(TEAMS, room.active_bot_counts)}
         minutes = room.battle_settings.minutes

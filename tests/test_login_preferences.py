@@ -63,3 +63,14 @@ class LoginPreferencesTests(unittest.TestCase):
         configured = regions_config(original, network)
         self.assertEqual(set(configured['Regions']), {'Local PoC'})
         self.assertEqual(original['Regions']['Local PoC']['wgnwn'], 'http://127.0.0.1:1')
+
+    def test_github_uses_the_unused_community_slot(self):
+        urls = {'discord': 'https://example.org/discord'}
+        original = {'Common': {}, 'Regions': {'Local PoC': {
+            'wgnwn': 'http://127.0.0.1:1', 'communityUrls': {'http': urls}}}}
+        network = SimpleNamespace(advertise_http='http://127.0.0.1:18080',
+                                  advertise_login='127.0.0.1:20016')
+        region = regions_config(original, network)['Regions']['Local PoC']
+        self.assertEqual(region['communityUrls']['http'], {
+            **urls, 'viber': 'https://github.com/unisequence/Solbreaker'})
+        self.assertNotIn('viber', urls)

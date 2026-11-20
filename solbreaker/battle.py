@@ -10,10 +10,11 @@ from . import big_boss, mad_games, uprising
 from .mercury import packed_blob, read_blob, variable8
 from .motion import vehicle_snapshot
 from .destructibles import DestructibleState
-from .consumables import ACTIVE, READY, COOLDOWN
+from .consumables import ACTIVE, READY, COOLDOWN, GRAVITY_JUMP_SPEC
 from .sandbox import (BRANCH_SHOT_BASE, reload_limit, HP_RESTORED, PRACTICE_NOTICE,
                       TARGET_PLACED, TARGET_SELECTED, TARGET_UNAVAILABLE, TELEPORTED,
-                      advertisement as sandbox_advertisement, boss_picker_message, vehicle_wire_id)
+                      ability_slot_message, ability_slot_snapshot, advertisement as sandbox_advertisement,
+                      boss_picker_message, vehicle_wire_id)
 
 
 AVATAR_ID = 101
@@ -186,6 +187,7 @@ def provision_effect_message(entity_id, compact_id, *, argument=0):
     """
     if (type(entity_id) is not int or not 0 < entity_id <= 0xffffffff
             or (compact_id not in (26109, big_boss.BLAST_WAVE.compact_id,
+                                   GRAVITY_JUMP_SPEC.compact_id,
                                    mad_games.URANIUM_SHIELD.compact_id, mad_games.CHAMELEON.compact_id,
                                    mad_games.REFLECTOR.compact_id, mad_games.DISCHARGE.compact_id,
                                    mad_games.REGENERATOR_EFFECT, uprising.CURSE.compact_id,
@@ -421,8 +423,11 @@ def supremacy_messages(arena, player, state=None, previous=None):
 
 def team_kill_score(arena, player):
     totals = [0, 0]
-    for vehicle in arena.vehicles.values():
-        totals[vehicle.team != player.team] += vehicle.kills
+    if getattr(arena, 'proving_ground', None):
+        totals = [arena.proving_ground.score[player.team], arena.proving_ground.score[3 - player.team]]
+    else:
+        for vehicle in arena.vehicles.values():
+            totals[vehicle.team != player.team] += vehicle.kills
     # Avatar37 vector sentinel for the Solbreaker HUD. Supremacy retains its
     # native capture points, which are independent of the kill totals.
     return b'\x13' + variable8(96, b'\x04TFS1FRAG' + struct.pack('<II', *totals) + b'\0')
@@ -453,11 +458,17 @@ def battle_hints_message():
     return arena_update(23, pb_blob(20, pb_int(1, 0)))
 
 
+# The loading screen styles distinguish the pinned client's regular,
+# training, and gravitizing modes. Supremacy uses the map's gameplay flag.
+BATTLE_CLIENT_MODES = {'encounter': 1, 'gravity': 42}
+
+
 def initial_messages(arena, player):
     boss = getattr(arena, 'big_boss', None)
     arcade = getattr(arena, 'mad_games_mode', False)
     resurrection = getattr(arena, 'uprising', None)
-    game_mode, lives = 2, 1
+    game_mode = BATTLE_CLIENT_MODES.get(getattr(arena, 'battle_mode', None), 2)
+    lives = 1
     if boss is not None:
         game_mode = big_boss.CLIENT_GAME_MODE
         lives = boss.lives.get(player.vehicle_id, 1)
@@ -481,6 +492,12 @@ def initial_messages(arena, player):
         mode = pb_int(4, big_boss.LIVES) + pb_blob(5, b'bossmode') + pb_blob(7, b'bossmode')
         if boss.tickets:
             mode += pb_int(10, big_boss.TICKETS) + pb_int(11, big_boss.TICKETS)
+        result += arena_update(18, pb_blob(17, mode))
+    elif getattr(arena, 'gravity_mode', False):
+        # The native ShortClientEffect handler for consumable 44 is installed
+        # only for gameplayBehavior lunar (3). Keep the Gravity lobby mode.
+        mode = (pb_blob(5, b'gravitizing') + pb_blob(7, b'lunar') + pb_blob(8, b'lunar')
+                + pb_int(9, arena.supremacy is not None) + pb_int(12, arena.base_capture is not None))
         result += arena_update(18, pb_blob(17, mode))
     elif arcade:
         # Native mode table 0x707771 maps arcade to 8. GameModeData's
@@ -708,6 +725,9 @@ def ammo_message(vehicle):
 
 
 def _can_view_reload(arena, player, vehicle):
+    if (vehicle.entity_id in getattr(arena, 'practice_slots', ())
+            and vehicle.entity_id not in arena.practice_spawned):
+        return False
     if vehicle.entity_id == player.vehicle_id:
         return False
     if vehicle.team == player.team:
@@ -737,7 +757,8 @@ def allied_reload_message(arena, player, vehicle):
         state, value = 6, vehicle.pump_at-now
     else:
         state, value = 0, 0.
-    row = (pb_int(1,vehicle.entity_id) + pb_int(2,state)
+    entity = vehicle_wire_id(arena, vehicle.entity_id)
+    row = (pb_int(1,entity) + pb_int(2,state)
            + varint((3 << 3) | 5) + struct.pack('<f',value) + pb_int(4,vehicle.clip))
     return arena_update(15,pb_blob(14,pb_blob(1,row)))
 
@@ -1329,7 +1350,8 @@ def event_messages(arena, player, events):
                         result += enemy_reload_visibility_message(True)
                 result += uprising_respawn_time_message(0.)
             for state in actor.consumables:
-                if state and state.spec is uprising.RESPAWN_CLOAK:
+                if state and (state.spec is uprising.RESPAWN_CLOAK
+                              or state.spec in getattr(arena, 'range_abilities', ())):
                     continue
                 if state:
                     view = state.state_at(arena.simulation_time)
@@ -1338,6 +1360,7 @@ def event_messages(arena, player, events):
                     # Preserve empty slot positions: CD0 increments the native
                     # consumable slot cursor at AvatarGameLogic+0x5b4.
                     result += consumable_message(0, 0)
+            result += ability_slot_snapshot(arena, actor)
             result += mad_games_passive_message(actor)
             if resurrection is not None:
                 result += uprising_passive_message(resurrection, actor.entity_id)
@@ -1521,7 +1544,12 @@ def event_messages(arena, player, events):
                                                    argument=0 if actor is healer else healer.entity_id)
         elif event.kind=='consumable_state':
             if own:
-                result += consumable_message(d['compact_id'], d['state'], d['remaining'], d['total'])
+                slot = next((i for i, spec in enumerate(getattr(arena, 'range_abilities', ()))
+                             if spec.ident == d['ident']), None)
+                if slot is None:
+                    result += consumable_message(d['compact_id'], d['state'], d['remaining'], d['total'])
+                else:
+                    result += ability_slot_message(arena, slot, d['state'], d['remaining'])
             equipment = d['equipment']
             active = tuple(row for row in equipment if row[1] == ACTIVE)
             stopped = tuple(row for row in equipment if row[0] == d['ident'] and row[1] != ACTIVE)
@@ -1549,6 +1577,8 @@ def event_messages(arena, player, events):
             result += provision_effect_message(client_actor, d['compact_id'])
         elif event.kind=='boss_blast':
             result += provision_effect_message(event.actor, big_boss.BLAST_WAVE.compact_id)
+        elif event.kind == 'gravity_jump':
+            result += provision_effect_message(client_actor, d['compact_id'])
         elif event.kind == 'ram_detonated':
             result += ammo_bay_explosion_message(client_target, client_actor)
         elif event.kind == 'ram_shockwave':
@@ -1758,13 +1788,15 @@ def reconnect_message_parts(arena, player, *, refresh_period=True):
                    or (entity in arena.respawn_at and entity not in arena.boss_pending_roles))
         parts.append(boss_picker_message(arena, 2 if picking else 1))
     for state in own.consumables:
-        if state and state.spec is uprising.RESPAWN_CLOAK:
+        if state and (state.spec is uprising.RESPAWN_CLOAK
+                      or state.spec in getattr(arena, 'range_abilities', ())):
             continue
         if state:
             view = state.state_at(arena.simulation_time)
             parts.append(consumable_message(state.spec.compact_id, view.state, view.remaining, view.total))
         else:
             parts.append(consumable_message(0, 0))
+    parts.append(ability_slot_snapshot(arena, own))
     if passive := mad_games_passive_message(own):
         parts.append(passive)
     if resurrection is not None:

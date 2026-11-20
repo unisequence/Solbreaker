@@ -11,15 +11,16 @@ import numpy as np
 from solbreaker import sandbox
 from solbreaker.battle_settings import decode, packed_recipe
 from solbreaker.battle_settings_wire import RULES_SHIFT, TITLE
-from solbreaker.arena import Arena, GRAVITY_JUMP_SPEC
-from solbreaker.consumables import ACTIVE, COOLDOWN, READY, ConsumableSpec, ConsumableState
+from solbreaker.arena import Arena
+from solbreaker.consumables import ACTIVE, COOLDOWN, GRAVITY_JUMP_SPEC, READY, ConsumableSpec, ConsumableState
 from solbreaker.arena_owner import Command
 from solbreaker.arena_owner_game import GameArenaHandler
 from solbreaker.battle import (VOICE_ENEMY_KILLED, VOICE_TRACK_DESTROYED, aim_time_message, arena_update, avatar_method,
-                               crew_voice_message, event_messages, health_changed, pb_blob, pb_int,
-                               present_vehicles, reconnect_message_parts, team_kill_score,
+                               crew_voice_message, event_messages, health_changed, initial_messages, pb_blob, pb_int,
+                               present_vehicles, provision_effect_message, reconnect_message_parts, team_kill_score,
                                vehicle_info, vehicle_property)
 from solbreaker.collision import CollisionWorld, GroundMotion, Motion, Pose
+from solbreaker.modules import TrackSpec, TrackState
 from solbreaker.practice_catalog import Module, Modules
 from solbreaker.recon_snapshot import build_team_spotting_snapshot, encode_arena_recon_snapshot
 from solbreaker.recon_wire import decode as decode_recon
@@ -482,6 +483,7 @@ class SandboxTests(TestCase):
         arena = Arena([dict(id=1, nickname='Pilot')], b'', terrain, now=1., training=config)
         self.addCleanup(arena.close)
         arena.ready(1, 1.)
+        arena.drain_events()
         vehicle = arena.vehicle_for(1)
         vehicle.definition = SimpleNamespace(mass=25000.)
         world = Mock(motion={vehicle.entity_id: SimpleNamespace(grounded=True)})
@@ -492,9 +494,33 @@ class SandboxTests(TestCase):
         vehicle.consumables = (ConsumableState(GRAVITY_JUMP_SPEC),)
         arena.sandbox_control(1, control)
         arena.sandbox_control(1, control)
-        world.add_flight_velocity.assert_called_once_with(vehicle.entity_id, (0., 4.4, 2.5))
+        world.add_flight_velocity.assert_called_once_with(vehicle.entity_id, (0., 17.4, 15.0))
         self.assertEqual(vehicle.consumables[0].state_at(1.).state, COOLDOWN)
         self.assertEqual(arena.equipment_state(vehicle), ())
+        fx = provision_effect_message(vehicle.entity_id, GRAVITY_JUMP_SPEC.compact_id)
+        self.assertIn(fx, event_messages(arena, arena.players[1], arena.drain_events()))
+        lunar = pb_blob(5, b'gravitizing') + pb_blob(7, b'lunar') + pb_blob(8, b'lunar')
+        self.assertIn(lunar, initial_messages(arena, arena.players[1]))
+
+    def test_gravity_collisions_do_not_damage_hp_or_tracks(self):
+        arena = Arena([dict(id=1, nickname='Pilot'), dict(id=2, nickname='Peer')], b'',
+                      SimpleNamespace(height=lambda x, z: 0.), now=1., solo=False, room_mode='gravity')
+        self.addCleanup(arena.close)
+        first, second = (arena.vehicle_for(i) for i in (1, 2))
+        part = 'chassis_track_L'
+        track = first.tracks[part] = TrackState(TrackSpec(100., 60., 25., 10.))
+        health = (first.health, second.health)
+
+        arena._fall_impacts([dict(entity=first.entity_id, fraction=1., kind='terrain', speed=20.,
+                                  point=(0., 0., 0.), normal=(0., 1., 0.))], 2.)
+        arena._track_fall_impacts([dict(entity=first.entity_id, track=part, speed=20., height=30.)], 2.)
+        arena._ground_impact(dict(entity_a=first.entity_id, entity_b=second.entity_id,
+                                  ram=True, ram_energy_a=500000., ram_energy_b=700000.), 2.)
+
+        self.assertEqual((first.health, second.health), health)
+        self.assertEqual(track.health, track.spec.max_health)
+        impact = next(event for event in arena.drain_events() if event.kind == 'ground_impact')
+        self.assertEqual((impact.data['ram_damage_a'], impact.data['ram_damage_b']), (0, 0))
 
     def test_restore_hp_updates_players_and_requires_sandbox_and_a_living_tank(self):
         terrain = SimpleNamespace(height=lambda x, z: 0.)
@@ -883,7 +909,7 @@ class SandboxTests(TestCase):
         self.assertEqual(arena._sandbox_frame(3.01, 1/60), (set(), set()))
         self.assertEqual(arena._sandbox_frame(3.03, 1/60), (set(), set()))
         arena.world.set_flight_velocity.assert_called_once_with(
-            entity, (1.,-4.,2.), (0.,0.,0.))
+            entity, (1., -4., 2.), (0., 0., 0.), sandbox_landing=True)
 
     def test_big_boss_mode_decodes_in_both_battle_forms(self):
         from solbreaker.native_rooms import room_options

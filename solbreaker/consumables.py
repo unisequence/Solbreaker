@@ -155,6 +155,9 @@ class ConsumableSpec:
             raise ValueError(f'Consumable {self.tag}: automatic requires extinguisher action')
 
 
+GRAVITY_JUMP_SPEC = ConsumableSpec('gravityJump', 44, (44 << 8) | 0xfb, 0., 20.)
+
+
 @dataclass(frozen=True)
 class ConsumableView:
     state: int

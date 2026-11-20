@@ -1,13 +1,17 @@
-"""All-season paint from the player's pinned game resources."""
+"""Seasonal and all-season paint from the player's pinned game resources."""
 from functools import lru_cache
 import json
 from pathlib import Path
 import xml.etree.ElementTree as ET
 
 from .dvpl import read
-from .garage import GarageStore
+from .garage import CAMOUFLAGE_SLOTS, GarageStore
 from .loadouts import vehicle_key
 from .storage import AccountStore, account_access
+
+SEASONS = ('winter', 'summer', 'desert')
+ALL_MAPS_SLOT = 4
+_ALL_SEASONS = frozenset(SEASONS)
 
 _VEHICLE_FIELDS = {'name', 'tags', 'minLevel', 'maxLevel'}
 
@@ -50,39 +54,59 @@ def _paint_catalog(game):
     root = ET.fromstring(read(game / 'Data/XML/item_defs/vehicles/common/camouflages.xml.dvpl'))
     paints = []
     for paint in root.find('camouflages'):
+        seasons = frozenset(paint.findtext('kind', '').split())
         if (paint.findtext('script', '').strip() != 'Camouflage'
-                or set(paint.findtext('kind', '').split()) != {'summer', 'winter', 'desert'}
-                or paint.findtext('notInShop', '').strip() != 'false'):
+                or not seasons or not seasons <= _ALL_SEASONS):
             continue
         restrictions = paint.findall('vehicleFilter/*')
         if any(not _known_filter(block) for block in restrictions):
             continue
+        includes = tuple(block for block in restrictions if block.tag == 'include')
+        shop_hidden = paint.findtext('notInShop', '').strip()
+        if shop_hidden != 'false':
+            # Event skins can be owned even when absent from the shop. Only
+            # grant hidden legendary paints with an explicit tank restriction.
+            if (shop_hidden != 'true' or paint.findtext('group', '').strip() != 'legendary'
+                    or not includes or not all(
+                        (block.findtext('vehicle/name') or '').strip() for block in includes)):
+                continue
         # ItemCompactDescr: kind 8 (camouflage), common nation 15.
         compact_id = (int(paint.findtext('id')) << 8) | 0xf8
-        includes = tuple(block for block in restrictions if block.tag == 'include')
         excludes = tuple(block for block in restrictions if block.tag == 'exclude')
-        paints.append((paint.tag, compact_id, includes, excludes))
+        paints.append((paint.tag, compact_id, seasons, includes, excludes))
     return tuple(sorted(paints, key=lambda paint: paint[0]))
 
 
 def unlocked_paints(game):
-    return [compact_id for _, compact_id, _, _ in _paint_catalog(game)]
+    return [compact_id for _, compact_id, _, _, _ in _paint_catalog(game)]
 
 
-def compatible_paints(game, type_cd):
+def compatible_paints(game, type_cd, *, slot=None):
+    if slot is not None and slot not in CAMOUFLAGE_SLOTS:
+        raise ValueError('Unsupported camouflage slot')
+    required = _ALL_SEASONS if slot is None else {SEASONS[slot]}
     nation, name = vehicle_key(game, type_cd)
     vehicles = game / 'Data/XML/item_defs/vehicles'
     tank = ET.fromstring(read(vehicles / nation / 'list.xml.dvpl')).find(name)
     tags = set(tank.findtext('tags', '').split())
     tier = int(tank.findtext('level'))
     paints = {}
-    for tag, compact_id, includes, excludes in _paint_catalog(game):
+    for tag, compact_id, seasons, includes, excludes in _paint_catalog(game):
+        if not required <= seasons:
+            continue
         if includes and not any(_matches(block, nation, name, tags, tier) for block in includes):
             continue
         if any(_matches(block, nation, name, tags, tier) for block in excludes):
             continue
         paints[tag] = compact_id
     return paints
+
+
+def battle_paint(vehicle, map_id):
+    from .map_catalog import map_camouflage_slot
+
+    slots = vehicle.get('camouflage_slots')
+    return vehicle.get('camouflage', 0) if slots is None else slots[map_camouflage_slot(map_id)]
 
 
 def configure(state, account_id, inventory_id, *, paint=None, clear=False, vehicles=False):

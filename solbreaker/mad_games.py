@@ -15,8 +15,8 @@ CLIENT_GAME_MODE = 8
 CLIENT_GAMEPLAY = b'arcade'
 FUEL_ID = 24
 HIGH_OCTANE = ConsumableSpec('afterburner_ability', FUEL_ID, (FUEL_ID << 8) | 0xfb,
-                             15., 30., engine_factor=4., rotation_factor=1.10)
-HIGH_OCTANE_LATERAL_GRIP = .80
+                             15., 30., engine_factor=6., rotation_factor=1.60)
+HIGH_OCTANE_LATERAL_GRIP = .30
 DASH_ID = 21
 ACCELERATOR = ConsumableSpec('dash', DASH_ID, (DASH_ID << 8) | 0xfb, 1.15, 15.)
 CHAMELEON_ID = 25
@@ -60,7 +60,7 @@ RAM_BLAST_RADIUS = 18.
 RAM_BLAST_SPEED = 16.
 RAM_TURRET_LIFETIME = 8.
 RAM_TURRET_ENTITY_BASE = 1 << 28
-SPEED_FACTOR = 2.
+SPEED_FACTOR = 3.
 TERRAIN_RESISTANCE_FACTOR = .4
 HIGH_OCTANE_CHASSIS_HEALTH = 15.
 RAM_OUTGOING = 1.65

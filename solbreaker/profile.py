@@ -2,10 +2,16 @@
 from functools import lru_cache
 from pathlib import Path
 
+from .training_config import BATTLE_MODES, PROVING_GROUND_MODE
 from .vehicles import stock_m2, stock_ammo
 
 TRAINING_RETURN = 'Local/BattleSettings/ReturnToBattle'
-ARCADE_ABILITIES = {'uprising': 'hellgames', 'mad_games': 'arcade'}
+# The abilities registry uses lunar, while the game-mode filter uses Lunar.
+ARCADE_ABILITIES = {'uprising': 'hellgames', 'mad_games': 'arcade', 'gravity': 'lunar'}
+BOTS_TITLE = 'Local/BotsTitle'
+PROVING_GROUND_TITLE = 'Local/ProvingGround/Title'
+PROVING_GROUND_DESCRIPTION = 'Local/ProvingGround/Description'
+BOT_QUEUE_TITLES = {mode: f'Local/BotQueue/{mode}' for mode in BATTLE_MODES}
 
 
 def game_mode_descriptions(training_return, rules=None):
@@ -13,7 +19,8 @@ def game_mode_descriptions(training_return, rules=None):
     return {
         1: {'description': TRAINING_RETURN if training_return else 'Local/TargetDescription',
             'arcadeAbilities': abilities if training_return else ''},
-        7: {'description': TRAINING_RETURN if training_return else 'Local/BotsDescription',
+        7: {'titleString': BOTS_TITLE if training_return else BOT_QUEUE_TITLES.get(rules, BOTS_TITLE),
+            'description': TRAINING_RETURN if training_return else 'Local/BotsDescription',
             'arcadeAbilities': abilities},
     }
 
@@ -24,7 +31,7 @@ def vehicle_descriptor(game):
 
 
 def account_snapshot(previous_revision, game, progress, inventory=None, *, garage=None,
-                     training_return=False, bot_rules=None):
+                     training_return=False, bot_rules=None, proving_ground=False):
     """Full bootstrap when previous_revision is None; otherwise a cache delta."""
     if garage is not None:
         inventory = next((v for v in garage['vehicles'] if v['id'] == garage['selected_id']), None)
@@ -33,14 +40,18 @@ def account_snapshot(previous_revision, game, progress, inventory=None, *, garag
     # StatsData::Update reads cache.gameModes; its observer creates the
     # GameMode objects before the inventory/hangar asks for mode 1 (regular).
     # The installed eGameMode registry defines 1=regular, 2=training, 6=tutorial.
+    slots = [(1, "regular"), (2, "training"), (6, "tutorial"), (7, "rating")]
+    if proving_ground:
+        slots.append((PROVING_GROUND_MODE, "arcade"))
     modes = {mode: {"name": name, "allowLevels": list(range(1, 11)),
                     "allowSquads": False, "squadCapacity": 1,
                     "activeStartTime": 0, "activeFinishTime": 4102444800,
                     "visibleStartTime": 0, "visibleFinishTime": 4102444800}
-             for mode, name in ((1, "regular"), (2, "training"),
-                                (6, "tutorial"), (7, "rating"))}
+             for mode, name in slots}
+    if proving_ground:
+        modes[PROVING_GROUND_MODE].update(titleString=PROVING_GROUND_TITLE,
+                                          description=PROVING_GROUND_DESCRIPTION)
     modes[1]['titleString'] = 'Local/TargetTitle'
-    modes[7]['titleString'] = 'Local/BotsTitle'
     for mode, fields in game_mode_descriptions(training_return, bot_rules).items():
         modes[mode].update(fields)
     snapshot = {"prevRev": previous_revision, "rev": progress["revision"],
@@ -60,10 +71,8 @@ def account_snapshot(previous_revision, game, progress, inventory=None, *, garag
             'serialized': {v['id']: bytes.fromhex(v['descriptor']) for v in vehicles},
             'shells': {v['id']: v['shells'] for v in vehicles},
             'settings': {v['id']: v['ammo_settings'] for v in vehicles if 'ammo_settings' in v},
-            # The hangar reads the terrain slot when rendering a vehicle.
-            # Publish all-season paint for winter, summer and desert.
-            'camos': {v['id']: [v['camouflage']] * 3 + [0, 0, 0]
-                      for v in vehicles if 'camouflage' in v},
+            'camos': {v['id']: [*v.get('camouflage_slots', [v.get('camouflage', 0)] * 3), 0, 0, 0]
+                      for v in vehicles if 'camouflage_slots' in v or 'camouflage' in v},
             # Native layout keys are typed compact turret/gun descriptors;
             # signed shell CDs retain the per-shell currency choice, even at0.
             'shellsLayout': {v['id']: {

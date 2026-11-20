@@ -85,6 +85,9 @@ class BotOrders:
                 continue
             previous = state.sightings.get(entity)
             if previous is None or stamp > previous.stamp:
+                if previous is not None and self._distance2(previous.goal, point) <= self.ARRIVAL_RADIUS**2:
+                    previous.stamp = stamp
+                    continue
                 state.sightings[entity] = _Sighting(tuple(point), stamp)
         expired = []
         for entity, sighting in state.sightings.items():
@@ -342,3 +345,7 @@ class BotOrders:
             if state.investigating==entity:
                 state.investigating=None
                 if state.last_kind=='investigate':state.last_kind=None
+
+    def respawn(self, entity):
+        self.retired.discard(entity)
+        self.states.pop(entity, None)

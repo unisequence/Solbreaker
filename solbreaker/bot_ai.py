@@ -38,6 +38,15 @@ DIFFICULTIES = {
 }
 DEFAULT_DIFFICULTY = 'normal'
 
+# Progress along the team's attack axis, lateral lane width, and the
+# minimum range at which to stop closing on a visible opponent.
+_TACTICS = {
+    'lightTank': ((.70, .97, .59), 1.55, 34.),
+    'mediumTank': ((.59, .86, .98), 1.2, 45.),
+    'heavyTank': ((.52, .73, .94), .65, 26.),
+    'AT-SPG': ((.38, .57, .81), .95, 95.),
+}
+
 _HULL_VISIBILITY_OFFSETS = np.array(((-1, 0), (1, 0), (0, -1), (0, 1),
                                      (-1, -1), (-1, 1), (1, -1), (1, 1)))
 
@@ -79,12 +88,13 @@ class TrainingBot:
     TRAVEL_LOOK_ENTER_SECONDS = .45
     TRAVEL_LOOK_RELEASE_SECONDS = .65
 
-    def __init__(self, entity_id, difficulty=DEFAULT_DIFFICULTY):
+    def __init__(self, entity_id, difficulty=DEFAULT_DIFFICULTY, *, vehicle_class=None):
         if type(entity_id) is not int or entity_id <= 0:
             raise ValueError('Invalid bot entity')
         if type(difficulty) is not str or difficulty not in DIFFICULTIES:
             raise ValueError('Invalid bot difficulty')
         self.entity_id = entity_id
+        self.vehicle_class = vehicle_class
         self.set_difficulty(difficulty)
         # Per-bot deterministic stream: reproducible tests and replays.
         self.random = random.Random(entity_id)
@@ -151,7 +161,8 @@ class TrainingBot:
     def set_difficulty(self, difficulty):
         self.difficulty = difficulty
         self.profile = DIFFICULTIES[difficulty]
-        self.STOP_DISTANCE = self.profile.stop_distance
+        tactics = _TACTICS.get(self.vehicle_class)
+        self.STOP_DISTANCE = max(self.profile.stop_distance, tactics[2]) if tactics else self.profile.stop_distance
         self.SHOT_CHECK_SECONDS = self.profile.shot_check_seconds
         self.sighted = self.aim = None
         self.next_shot_check = 0.
@@ -277,31 +288,33 @@ class BotDirector:
         self.phases = {eid:i%self.DECISION_TICKS for i,eid in enumerate(arena.training_bots)}
         # Spawn areas are public map objectives, captured once. Patrol never
         # reads the current position of an unseen opponent to follow it.
-        self.objectives = {team:tuple(v.pose.position for v in arena.vehicles.values()
-                                     if v.team!=team) for team in (1,2)}
-        # Match opposite spawn lanes by their lateral position. Orders are
-        # assigned once from public spawn geometry, never unseen live poses.
-        for team,goals in self.objectives.items():
-            bots=[e for e in arena.training_bots if arena.vehicles[e].team==team]
-            own=[v.pose.position for v in arena.vehicles.values() if v.team==team]
-            if not bots or not goals or not own:continue
-            ax=sum(p[0] for p in own)/len(own);az=sum(p[2] for p in own)/len(own)
-            bx=sum(p[0] for p in goals)/len(goals);bz=sum(p[2] for p in goals)/len(goals)
-            dx,dz=bx-ax,bz-az
-            if math.hypot(dx,dz)<1e-6:dx,dz=0.,1.
-            def lateral(p):return p[0]*dz-p[2]*dx
-            goals=tuple(sorted(goals,key=lambda p:(lateral(p),p)))
-            homes=[arena.vehicles[e].pose.position for e in bots]
-            patrol=[]
-            for goal in goals:
-                home=min(homes,key=lambda p:(abs(lateral(p)-lateral(goal)),p))
-                patrol.extend((goal,home))
-            self.objectives[team]=tuple(patrol)
-            bots.sort(key=lambda e:(lateral(arena.vehicles[e].pose.position),e))
-            for rank,eid in enumerate(bots):
-                lane=(round(rank*(len(goals)-1)/(len(bots)-1))
-                      if len(bots)>1 else len(goals)//2)
-                arena.training_bots[eid].patrol_index=2*lane
+        self.patrols = {}
+        spawns = {team: tuple(v.pose.position for v in arena.vehicles.values() if v.team == team)
+                  for team in (1, 2)}
+        for team, own in spawns.items():
+            enemies = spawns[3 - team]
+            if not own or not enemies:
+                continue
+            start = tuple(sum(p[i] for p in own) / len(own) for i in range(3))
+            end = tuple(sum(p[i] for p in enemies) / len(enemies) for i in range(3))
+            dx, dz = end[0] - start[0], end[2] - start[2]
+            length = math.hypot(dx, dz)
+            if length < 1.:
+                continue
+            nx, nz = dz / length, -dx / length
+            bots = sorted((arena.vehicles[e] for e in arena.training_bots if arena.vehicles[e].team == team),
+                          key=lambda v: (v.pose.position[0] * nx + v.pose.position[2] * nz, v.entity_id))
+            for rank, bot in enumerate(bots):
+                ai = arena.training_bots[bot.entity_id]
+                progress, width, _ = _TACTICS.get(ai.vehicle_class, ((.55, .78, .96), 1., 24.))
+                lane = 2 * rank / max(1, len(bots) - 1) - 1 if len(bots) > 1 else 0.
+                lateral = min(78., length * .16) * width
+                offsets = (lane, lane * .45, -lane if lane else .6)
+                self.patrols[bot.entity_id] = tuple(
+                    (start[0] + dx * t + nx * lateral * offset,
+                     start[1] + (end[1] - start[1]) * t,
+                     start[2] + dz * t + nz * lateral * offset)
+                    for t, offset in zip(progress, offsets))
         self.stats = dict(decisions=0,max_decisions_per_step=0,perception_rays=0,
                           avoidance=0,cover_moves=0,route_entries=0,combat_moves=0,
                           combat_forward_moves=0,combat_reverse_moves=0,
@@ -309,7 +322,7 @@ class BotDirector:
                           combat_blocked=0,combat_corridor_checks=0)
 
     def patrol_goal(self, bot, ai):
-        goals=self.objectives[bot.team]
+        goals = self.patrols.get(bot.entity_id, ())
         return goals[ai.patrol_index%len(goals)] if goals else None
 
     def _visibility_points(self, target):
@@ -357,7 +370,8 @@ class BotDirector:
                         target.account_id is None or a.players[target.account_id].attached):
                     enemies.append(target)
             living = {target.entity_id for target in enemies}
-            marked = ({target.entity_id for target in enemies if a.recon.team_visible(team, target.entity_id, now)}
+            marked = (living if getattr(a, 'team_spotting', False) else
+                      {target.entity_id for target in enemies if a.recon.team_visible(team, target.entity_id, now)}
                       if a.recon is not None else ())
             team_targets[team] = enemies, wrecks, living, marked
         for eid in due:
@@ -1011,7 +1025,7 @@ class BotDirector:
             goal=self.patrol_goal(bot,ai)
             if goal is None:
                 bot.flags=0;return
-            for _ in self.objectives[bot.team]:
+            for _ in self.patrols[bot.entity_id]:
                 if math.hypot(goal[0]-bot.pose.position[0],goal[2]-bot.pose.position[2])>=8.:break
                 ai.patrol_index+=1
                 goal=self.patrol_goal(bot,ai)
@@ -1037,9 +1051,10 @@ class BotDirector:
         braking=a._training_bot_braking_acceleration(bot)
         if nav is None:
             self._reset_maneuver(ai)
+            stop = order.stop_distance if order is not None else ai.STOP_DISTANCE if seen else 1.
             bot.flags=ai.controls(bot.pose,goal,now,closing_speed=closing,
                 braking_acceleration=braking,align_at_stop=align,
-                stop_distance=order.stop_distance if order is not None else None)
+                stop_distance=stop)
             return
         escape=self._margin_escape(bot,ai,now)
         if escape is not None:
@@ -1093,7 +1108,8 @@ class BotDirector:
         blocked=frozenset(ai.route_bad_cells)
         search=nav.searches.get(bot.entity_id)
         if now>=ai.next_plan:
-            moved=search is None or math.dist(nav.point(search.goal),goal)>8.
+            plan_goal = nav.point(search.goal) if search is not None else goal
+            moved = math.hypot(plan_goal[0] - goal[0], plan_goal[2] - goal[2]) > 8.
             retry=search is not None and search.done and not search.path
             changed=search is not None and (search.generation!=nav.generation
                                             or getattr(search,'blocked',frozenset())!=blocked)
@@ -1112,6 +1128,20 @@ class BotDirector:
         following=nav.waypoint(search,bot.pose.position,bot.speed)
         if following is None:
             bot.flags=0
+            if kind == 'patrol' and distance > 1. and (search is None or not search.done):
+                # Use a short, checked leg while the shared planner searches.
+                origin = bot.pose.position
+                fraction = min(1., 18. / distance)
+                step = tuple(start + (end - start) * fraction for start, end in zip(origin, goal))
+                climb = getattr(nav, 'actor_climb_edges', {}).get(bot.entity_id)
+                if nav.clear(origin, step, blocked=blocked, climb_edges=climb):
+                    flags = ai.controls(bot.pose, step, now, closing_speed=abs(bot.speed),
+                                        braking_acceleration=braking, stop_distance=1.)
+                    bot.flags = self._avoid(bot, step, flags, now)
+                    if self._watch_route(bot, ai, goal, step, distance, now,
+                                         attempted_forward=bool(flags & ai.FORWARD)):
+                        bot.flags = self._avoid(bot, step, ai.REVERSE, now)
+                    return
             if align:
                 # A casemate can aim its hull while the approach route is
                 # pending or unavailable. Path availability must not disable

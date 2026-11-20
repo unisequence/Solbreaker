@@ -95,6 +95,8 @@ def launch_client(lab, *, auto_login=None, profile=None, url=None, lighting=None
         install_training_maps(lab, manifest)
         from .client_atmosphere import apply_preset, install_weather_maps
         manifest = install_weather_maps(lab, manifest)
+        from .proving_ground_map import install as install_proving_ground
+        install_proving_ground(lab, manifest)
         install_server_name(lab)
         legacy_lighting = os.environ.get('SOLBREAKER_MINES_LIGHTING', 'day') if lighting is None else 'day'
         if legacy_lighting not in ('day', 'evening'):

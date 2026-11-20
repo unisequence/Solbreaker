@@ -11,12 +11,41 @@ from solbreaker.account import command_response
 from solbreaker.arena import Arena
 from solbreaker.base import BaseEndpoint
 from solbreaker.battle import pb_int, spawn_message_parts
+from solbreaker.camouflage import _paint_catalog, compatible_paints, unlocked_paints
 from solbreaker.garage import GarageStore
 from solbreaker.profile import account_snapshot
 from solbreaker.storage import AccountStore
 
 
 class CamouflageTests(unittest.TestCase):
+    def test_hidden_legendary_paint_is_unlocked_only_for_compatible_tanks(self):
+        game = Path('/test-game')
+        catalog = b'''<root><camouflages>
+            <glitch><id>648</id><script>Camouflage</script>
+                <kind>desert summer winter</kind><group>legendary</group><notInShop>true</notInShop>
+                <vehicleFilter><include><vehicle><name>european:Carro</name></vehicle></include></vehicleFilter>
+            </glitch>
+            <shop><id>10</id><script>Camouflage</script>
+                <kind>desert summer winter</kind><notInShop>false</notInShop>
+            </shop>
+            <hidden><id>11</id><script>Camouflage</script>
+                <kind>desert summer winter</kind><group>legendary</group><notInShop>true</notInShop>
+            </hidden>
+            <attachment><id>12</id><script>Camouflage</script>
+                <kind>customization</kind><group>legendary</group><notInShop>true</notInShop>
+                <vehicleFilter><include><vehicle><name>european:Carro</name></vehicle></include></vehicleFilter>
+            </attachment>
+        </camouflages></root>'''
+        vehicles = b'<root><Carro><level>10</level></Carro><Other><level>10</level></Other></root>'
+        glitch = (648 << 8) | 0xf8
+        shop = (10 << 8) | 0xf8
+        self.addCleanup(_paint_catalog.cache_clear)
+        with patch('solbreaker.camouflage.read', side_effect=[catalog, vehicles, vehicles]), \
+             patch('solbreaker.camouflage.vehicle_key', side_effect=[('european', 'Carro'), ('european', 'Other')]):
+            self.assertEqual(unlocked_paints(game), [glitch, shop])
+            self.assertEqual(compatible_paints(game, 1), {'glitch': glitch, 'shop': shop})
+            self.assertEqual(compatible_paints(game, 2), {'shop': shop})
+
     def test_native_request_equips_removes_and_rejects_incompatible_paint(self):
         paint = (60 << 8) | 0xf8
         endpoint = BaseEndpoint.__new__(BaseEndpoint)
@@ -32,12 +61,12 @@ class CamouflageTests(unittest.TestCase):
             body = struct.pack('<HHqiii', 239, 112, 13, 306, 1, value)
             return endpoint.vehicle_camouflage(client, 141, body, 239)
 
-        with patch('solbreaker.camouflage.compatible_paints', return_value={'inferno': paint}):
+        with patch('solbreaker.base.compatible_paints', return_value={'inferno': paint}):
             self.assertEqual(request(paint), b'update' + command_response(239, 0))
-            endpoint.progression.garage.set_camouflage.assert_called_once_with(2, 306, paint)
+            endpoint.progression.garage.set_camouflage.assert_called_once_with(2, 306, paint, slot=1)
             endpoint.progression.garage.set_camouflage.reset_mock()
             self.assertEqual(request(0), b'update' + command_response(239, 0))
-            endpoint.progression.garage.set_camouflage.assert_called_once_with(2, 306, 0)
+            endpoint.progression.garage.set_camouflage.assert_called_once_with(2, 306, 0, slot=1)
             endpoint.progression.garage.set_camouflage.reset_mock()
             self.assertEqual(request(0xffff), command_response(
                 239, -1, message='This paint is incompatible with the vehicle'))

@@ -162,7 +162,8 @@ def _button(name, label, event, width=64):
         components={'SizePolicy': {'horizontalPolicy': 'FixedSize', 'horizontalValue': float(width),
                                   'verticalPolicy': 'FixedSize', 'verticalValue': 56.},
                     'UIInputEventComponent': {'onTouchUpInside': event}},
-        children=[{'path': 'Caption', 'bindings': [['UITextComponent.text', label]]}])
+        children=[{'path': 'Caption', 'bindings': [['UITextComponent.text', label]],
+                   'components': {'UITextComponent': {'fitting': 'FITTING_REDUCE'}}}])
 
 
 def _row(name, caption, buttons, *, conditional=True):
@@ -658,15 +659,6 @@ STRINGS = {
            'RoomHeaderBots': 'Боты', 'RoomHeaderTime': 'Время'}}
 
 
-BATTLE_PARAMETER_LABELS = (
-    'Kind', 'Allies', 'Enemies', 'Difficulty', 'Rules', 'Lives', 'Duration',
-    'UnlimitedAmmo', 'RoomBotsCaption', 'RoomBots1', 'RoomBots2',
-)
-for translations in STRINGS.values():
-    for parameter in BATTLE_PARAMETER_LABELS:
-        translations[parameter] = translations[parameter].upper()
-
-
 STRINGS['en'].update(PolygonSettings='Polygon settings', ModeCancel='Cancel', ModeSelect='Select', ModeTabMadGames='Mad Games',
                      ModeDescriptionElimination='Destroy the enemy team.',
                      ModeDescriptionEncounter='Capture the base or destroy the enemy team.',
@@ -704,6 +696,13 @@ for locale, respawn, title in (('en', 'RESPAWN', 'Choose a role'), ('ru', 'РЕ�
                     strings[f'{key}L{level}'] = amount + unit
             else:
                 strings[key] = value + unit
+
+for translations in STRINGS.values():
+    for key, value in translations.items():
+        if (key not in ('Saved', 'Minutes', 'RoomBotsHint')
+                and not key.startswith('ModeDescription')
+                and not (key.startswith('BossRole') and 'Value' in key)):
+            translations[key] = value.upper()
 
 
 def _boss_actions(root, *names):
@@ -767,7 +766,7 @@ def patch_boss_screen(document):
                                    'topAnchorEnabled': True, 'topAnchor': 0.},
                         'SizePolicy': {'horizontalPolicy': 'Ignore', 'verticalPolicy': 'Ignore'},
                         'UITextComponent': {'align': ['LEFT', 'VCENTER'],
-                                            'multiline': 'MULTILINE_DISABLED', 'fitting': 'FITTING_NONE'}},
+                                            'multiline': 'MULTILINE_DISABLED', 'fitting': 'FITTING_REDUCE'}},
                      'bindings': [['UITextComponent.text',
                                    f'localize("Local/BattleSettings/{prefix}Label{row}")']]},
                     {'path': 'Value', 'size': [38., 32.], 'components': {
@@ -816,7 +815,7 @@ def patch_boss_screen(document):
                 {'path': detail + '/AbilityName', 'size': [156., 24.], 'components': {
                     'SizePolicy': {'horizontalPolicy': 'PercentOfParent', 'horizontalValue': 94.,
                                    'verticalPolicy': 'FixedSize', 'verticalValue': 24.},
-                    'UITextComponent': {'align': ['HCENTER', 'VCENTER'], 'fitting': 'FITTING_NONE'}},
+                    'UITextComponent': {'align': ['HCENTER', 'VCENTER'], 'fitting': 'FITTING_REDUCE'}},
                  'bindings': [['UITextComponent.text', f'localize("Local/BattleSettings/{prefix}")']]},
                 {'path': detail + '/AbilityDescription', 'visible': False,
                  'components': {'IgnoreLayout': {}}},
@@ -920,9 +919,12 @@ def patch_room(document):
     }
     header['children'].append(summary)
 
+BATTLE_SETTINGS_UI_VERSION = 60
+
+
 def upgrade_form(lab, manifest):
     """Refresh the installed native battle settings form in an idle client."""
-    if manifest.get('battle_settings_ui_version') == 59:
+    if manifest.get('battle_settings_ui_version') == BATTLE_SETTINGS_UI_VERSION:
         return manifest
     from hashlib import sha256
     import json
@@ -979,14 +981,8 @@ def upgrade_form(lab, manifest):
         else:
             document = yaml.load(raw, Loader=_StringsLoader)
             locale = 'en' if relative == STRINGS_EN else 'ru'
-            strings = {f'Local/BattleSettings/{key}': STRINGS[locale][key]
-                       for key in ('RoomBotsCaption', 'RoomBotsHint', 'Gravity', 'Encounter', 'BigBoss', 'MadGames', 'Uprising',
-                                   'Lives', 'Duration', 'Minutes', 'ModeDefault', 'SingleLife', 'Endless', 'NoTimer', 'RoomBots1', 'RoomBots2',
-                                   'RoomHeaderBots', 'RoomHeaderTime', 'UnlimitedAmmo', 'AmmoOn', 'AmmoOff')}
-            strings.update({f'Local/BattleSettings/{key}': value for key, value in STRINGS[locale].items()
-                            if key in ('Respawn', 'ChangeTank', 'ReturnToBattle') or key.startswith(('BossRole', 'ModeDescription'))
-                            or key in ('ModeCancel', 'ModeSelect', 'ModeTabMadGames', 'PolygonSettings')
-                            or key in BATTLE_PARAMETER_LABELS})
+            strings = {f'Local/BattleSettings/{key}': value for key, value in STRINGS[locale].items()}
+            strings['#training_rooms:CreationScreen/Header'] = STRINGS[locale]['Settings']
             locale_index = 0 if locale == 'en' else 1
             strings.update({f'Local/Sb{key}': values[locale_index]
                             for key, values in client_practice_picker.STRINGS.items()
@@ -1063,7 +1059,7 @@ def upgrade_form(lab, manifest):
     for target, content in staged.items():
         atomic_write(target, content, replace_symlink=target in (data/ROOM, data/BATTLE_MENU))
     updated = dict(manifest, ui_overrides=overrides, room_bot_hint_version=1,
-                   battle_settings_ui_version=59)
+                   battle_settings_ui_version=BATTLE_SETTINGS_UI_VERSION)
     atomic_write(lab/'manifest.json', (json.dumps(updated, indent=2)+'\n').encode())
     return updated
 

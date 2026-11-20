@@ -18,6 +18,46 @@ def vehicle(entity, team, position):
 
 
 class CombatManeuverTests(unittest.TestCase):
+    def test_patrols_advance_without_sight_and_use_class_ranges(self):
+        scout = vehicle(200, 1, (-15., 0., 0.))
+        heavy = vehicle(201, 1, (0., 0., 0.))
+        destroyer = vehicle(202, 1, (15., 0., 0.))
+        enemy = vehicle(300, 2, (0., 0., 200.))
+        controllers = {
+            scout.entity_id: TrainingBot(scout.entity_id, vehicle_class='lightTank'),
+            heavy.entity_id: TrainingBot(heavy.entity_id, vehicle_class='heavyTank'),
+            destroyer.entity_id: TrainingBot(destroyer.entity_id, vehicle_class='AT-SPG'),
+        }
+        arena = SimpleNamespace(vehicles={v.entity_id: v for v in (scout, heavy, destroyer, enemy)},
+                                training_bots=controllers, players={}, world=None,
+                                _training_bot_braking_acceleration=lambda _: 12.)
+        director = BotDirector(arena)
+        scout_goal, heavy_goal, destroyer_goal = (
+            director.patrol_goal(v, controllers[v.entity_id]) for v in (scout, heavy, destroyer))
+        self.assertGreater(scout_goal[2], heavy_goal[2])
+        self.assertGreater(heavy_goal[2], destroyer_goal[2])
+        self.assertGreater(abs(scout_goal[0]), abs(heavy_goal[0]))
+        self.assertGreater(controllers[destroyer.entity_id].STOP_DISTANCE,
+                           controllers[heavy.entity_id].STOP_DISTANCE)
+        for bot in scout, heavy, destroyer:
+            director._drive(bot, controllers[bot.entity_id], 2.)
+            self.assertTrue(bot.flags & TrainingBot.FORWARD)
+            bot.gun.set_point.assert_not_called()
+
+    def test_shared_spot_is_a_route_hint_not_a_clear_shot(self):
+        director, bot, ai, enemy = self.scene(distance=180.)
+        director.arena.team_spotting = True
+        director.arena.world._static_rays = lambda starts, ends: [(0, 0, .3)] * len(starts)
+        director._perceive((bot.entity_id,), 1.)
+        self.assertEqual(ai.known, {enemy.entity_id: (enemy.pose.position, 1.)})
+        self.assertFalse(ai.visible)
+        self.assertEqual(director.orders.select(bot, ai, 1.).kind, 'investigate')
+        enemy.mad_unspotted = True
+        enemy.pose = Pose((2., 0., 80.), 0.)
+        director._perceive((bot.entity_id,), 2.)
+        self.assertFalse(ai.known)
+        self.assertEqual(director.orders.select(bot, ai, 2.).goal, (.5, 0., 180.5))
+
     def scene(self, entity=200, distance=24.):
         ai=TrainingBot(entity)
         bot=vehicle(entity,1,(.5,0.,.5))

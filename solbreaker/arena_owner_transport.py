@@ -126,20 +126,26 @@ class ArenaOwnerTransport:
             session = sessions.get(event.account_id)
             if session is not None:
                 address, client = session
-                if self._entitled(address, client):
+                # The Avatar arrives before its vehicles. READY publishes
+                # their current state once the client has created them.
+                if self._current(address, client):
                     attachment = attachments.pop(event.account_id, b'')
                     # Resource data must precede ResetEntities in a leave result.
                     # Avatar owns the report subscription until that reset.
                     self.endpoint.send(address, client, attachment + event.body)
                     if attachment:
                         client.result_sent = True
+                elif (command.op == 'leave' and command.account_id == event.account_id
+                      and event.body == b'\x04\0' and self._entitled(address, client)):
+                    # ResetEntities can return a loading client to the hangar.
+                    self.endpoint.send(address, client, event.body)
         # A report can become visible when the postbattle timer expires on
         # a quiet step, with no new gameplay events to carry the resource.
         for account_id, body in attachments.items():
             session = sessions.get(account_id)
             if body and session is not None:
                 address, client = session
-                if self._entitled(address, client):
+                if self._current(address, client):
                     self.endpoint.send(address, client, body)
                     client.result_sent = True
         if result.motions:
