@@ -1,6 +1,9 @@
 """Portable native library selection and spawned owner socket transport."""
 import asyncio
+from pathlib import Path
 import socket
+import sys
+import tempfile
 import time
 import unittest
 from unittest.mock import patch
@@ -63,6 +66,34 @@ class NativeWindowsTests(unittest.TestCase):
 
         with patch.dict('os.environ', {'SOLBREAKER_OWNER_IPC': 'socket'}):
             asyncio.run(run_owner())
+
+    @unittest.skipUnless(sys.platform == 'win32', 'Windows filesystem and Bullet runtime')
+    def test_bullet_loads_unicode_mesh_without_short_alias(self):
+        import pybullet as bullet
+        from solbreaker.mesh_files import bullet_mesh_paths, create_bullet_mesh
+
+        client = bullet.connect(bullet.DIRECT)
+        self.addCleanup(bullet.disconnect, client)
+        with tempfile.TemporaryDirectory(prefix='солбрейкер-') as folder:
+            mesh = Path(folder) / 'карта.obj'
+            mesh.write_text('v 0 0 0\nv 1 0 0\nv 0 0 1\nf 1 2 3\n', encoding='ascii')
+            filename = str(mesh)
+            shape = create_bullet_mesh(bullet, filename, physicsClientId=client,
+                                       flags=bullet.GEOM_FORCE_CONCAVE_TRIMESH)
+            self.assertGreaterEqual(shape, 0)
+            with patch('solbreaker.mesh_files._short_windows_path', side_effect=lambda path: path):
+                with bullet_mesh_paths([filename, '']) as (compatible, empty):
+                    self.assertTrue(compatible.isascii())
+                    self.assertEqual(empty, '')
+                    self.assertEqual(Path(compatible).read_bytes(), mesh.read_bytes())
+                    shape = bullet.createCollisionShapeArray(
+                        shapeTypes=[bullet.GEOM_MESH, bullet.GEOM_BOX],
+                        fileNames=[compatible, empty],
+                        halfExtents=[(.5, .5, .5)] * 2,
+                        physicsClientId=client)
+                    self.assertGreaterEqual(shape, 0)
+                self.assertFalse(Path(compatible).exists())
+                self.assertTrue(mesh.exists())
 
     def test_tcp_fallback_disables_nagle_for_frame_delivery(self):
         fallback = socket._fallback_socketpair

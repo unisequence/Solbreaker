@@ -6,6 +6,8 @@ Body identifiers in returned hits belong to this query world.
 """
 import pybullet as bullet
 
+from .mesh_files import create_bullet_mesh
+
 
 def mesh_inputs(assets):
     if len(assets.triangles):
@@ -24,7 +26,7 @@ class VisibilityWorld:
         self.shape_count = 0
 
     def _mesh(self, path):
-        shape = bullet.createCollisionShape(bullet.GEOM_MESH, fileName=path,
+        shape = create_bullet_mesh(bullet, path,
             flags=bullet.GEOM_FORCE_CONCAVE_TRIMESH, physicsClientId=self.cid)
         body = bullet.createMultiBody(baseMass=0, baseCollisionShapeIndex=shape,
                                       physicsClientId=self.cid)

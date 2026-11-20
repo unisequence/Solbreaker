@@ -34,7 +34,7 @@ from .dava_scene import scene, geometry, components, active_nodes, world_vertice
 from .dvpl import read
 from .mass_properties import VehicleMassModel
 from .orientation import matrix, quaternion
-from .mesh_files import MeshFiles
+from .mesh_files import MeshFiles, bullet_mesh_paths, create_bullet_mesh
 from .map_catalog import load_map_spec
 from .terrain import MapTerrain
 from .fall_damage import MIN_HULL_DAMAGE_SPEED, evaluate_fall_impact, impact_damage_speed
@@ -1070,7 +1070,7 @@ class CollisionWorld:
         return self.poses[self.target_id]
 
     def _mesh_body(self, path):
-        shape = bullet.createCollisionShape(bullet.GEOM_MESH, fileName=path,
+        shape = create_bullet_mesh(bullet, path,
                     flags=bullet.GEOM_FORCE_CONCAVE_TRIMESH,
                     physicsClientId=self.cid)
         body = bullet.createMultiBody(baseMass=0, baseCollisionShapeIndex=shape, physicsClientId=self.cid)
@@ -1105,8 +1105,8 @@ class CollisionWorld:
             else:
                 for name, verts in assets.tank_shapes:
                     names.append(name)
-                    shapes.append(bullet.createCollisionShape(bullet.GEOM_MESH,
-                        fileName=assets.mesh_files.mesh(verts), physicsClientId=self.cid))
+                    shapes.append(create_bullet_mesh(bullet, assets.mesh_files.mesh(verts),
+                                                     physicsClientId=self.cid))
             cached = self._kinematic_shapes[cache_key] = (owner, shapes, names)
         _, shapes, names = cached
         hull = names.index('hull')
@@ -1151,8 +1151,8 @@ class CollisionWorld:
                 halfExtents=part.half_extents, collisionFramePosition=part.center,
                 physicsClientId=self.cid)
         if part.kind == 'prism':
-            return bullet.createCollisionShape(bullet.GEOM_MESH,
-                fileName=assets.mesh_files.mesh(part.vertices), physicsClientId=self.cid)
+            return create_bullet_mesh(bullet, assets.mesh_files.mesh(part.vertices),
+                                      physicsClientId=self.cid)
         raise ValueError(f'Unsupported grounded vehicle proxy: {part.kind}')
 
     def _sensor_filter(self, entity, group, mask):
@@ -1254,11 +1254,12 @@ class CollisionWorld:
             tuple(float(value) for value in np.min(shape_lows,axis=0)),
             tuple(float(value) for value in np.max(shape_highs,axis=0)))
         try:
-            shape = bullet.createCollisionShapeArray(shapeTypes=[bullet.GEOM_MESH]*len(file_names),
-                fileNames=file_names, meshScales=[(1.,1.,1.)]*len(file_names),
-                collisionFramePositions=positions,
-                collisionFrameOrientations=orientations,
-                physicsClientId=self.cid)
+            with bullet_mesh_paths(file_names) as compatible:
+                shape = bullet.createCollisionShapeArray(shapeTypes=[bullet.GEOM_MESH]*len(file_names),
+                    fileNames=compatible, meshScales=[(1.,1.,1.)]*len(file_names),
+                    collisionFramePositions=positions,
+                    collisionFrameOrientations=orientations,
+                    physicsClientId=self.cid)
         finally:
             # PyBullet reads OBJ files synchronously. Remove these temporary
             # convex-mesh inputs; Bullet keeps the loaded shape until the
@@ -1296,10 +1297,11 @@ class CollisionWorld:
             orientations.append((math.sqrt(.5),0.,0.,math.sqrt(.5))
                                 if part.kind == 'cylinder' else (0.,0.,0.,1.))
             lows.append(low+offset);highs.append(high+offset)
-        shape = bullet.createCollisionShapeArray(shapeTypes=kinds, fileNames=files,
-            halfExtents=halves, radii=radii, lengths=lengths,
-            meshScales=[(1.,1.,1.)]*len(kinds), collisionFramePositions=positions,
-            collisionFrameOrientations=orientations, physicsClientId=self.cid)
+        with bullet_mesh_paths(files) as compatible:
+            shape = bullet.createCollisionShapeArray(shapeTypes=kinds, fileNames=compatible,
+                halfExtents=halves, radii=radii, lengths=lengths,
+                meshScales=[(1.,1.,1.)]*len(kinds), collisionFramePositions=positions,
+                collisionFrameOrientations=orientations, physicsClientId=self.cid)
         self.dynamic_bounds[entity] = (tuple(np.min(lows,axis=0)),tuple(np.max(highs,axis=0)))
         return shape
 
