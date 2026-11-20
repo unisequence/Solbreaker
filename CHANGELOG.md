@@ -21,7 +21,8 @@
   turn faster and slide farther.
 - Camouflage can be set separately for summer, winter and desert. Added a
   replay viewer to the launcher and a link to GitHub in the hangar.
-- Improved Windows and Linux handling of paths in setup and local data.
+- Fixed battle startup on Windows when the collision cache is stored in a
+  folder with Cyrillic characters.
 
 ## 0.1.0-rc.1
 

@@ -4,11 +4,76 @@ PyBullet 3.2.7's extractVertices/extractIndices leak Python references in the
 vertices= API. File loading avoids that path. The original triangles and spatial
 batches are retained; these files are disposable derivatives of local assets.
 """
+from contextlib import contextmanager
 import hashlib
+import os
 from pathlib import Path
+import shutil
+import sys
 import tempfile
 
 import numpy as np
+
+
+def _short_windows_path(path):
+    import ctypes
+    from ctypes import wintypes
+
+    short_path = ctypes.WinDLL('kernel32').GetShortPathNameW
+    short_path.argtypes = (wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD)
+    short_path.restype = wintypes.DWORD
+    length = short_path(path, None, 0)
+    if not length:
+        return path
+    buffer = ctypes.create_unicode_buffer(length)
+    if 0 < short_path(path, buffer, length) < length:
+        return buffer.value
+    return path
+
+
+def _bullet_windows_path(path):
+    if path.isascii():
+        return path
+    short = _short_windows_path(path)
+    if short.isascii():
+        return short
+    try:
+        relative = os.path.relpath(short)
+    except ValueError:
+        return None
+    return relative if relative.isascii() else None
+
+
+@contextmanager
+def bullet_mesh_paths(paths):
+    """Bridge Python's Unicode paths to Bullet 3.2.7's narrow Windows fopen."""
+    if sys.platform != 'win32':
+        yield paths
+        return
+    compatible = [_bullet_windows_path(path) for path in paths]
+    if None not in compatible:
+        yield compatible
+        return
+
+    # Some volumes disable short aliases. Stage only the files Bullet can't
+    # open, in a directory owned for the duration of its synchronous reads.
+    temp_root = tempfile.gettempdir()
+    if _bullet_windows_path(temp_root) is None:
+        temp_root = os.getcwd()
+    with tempfile.TemporaryDirectory(prefix='solbreaker-bullet-', dir=temp_root) as root:
+        for index, original in enumerate(paths):
+            if compatible[index] is None:
+                staged = Path(root) / f'{index}.obj'
+                shutil.copyfile(original, staged)
+                compatible[index] = _bullet_windows_path(str(staged))
+                if compatible[index] is None:
+                    raise OSError('Could not create a Windows-compatible Bullet mesh path')
+        yield compatible
+
+
+def create_bullet_mesh(bullet, path, **kwargs):
+    with bullet_mesh_paths([path]) as (filename,):
+        return bullet.createCollisionShape(bullet.GEOM_MESH, fileName=filename, **kwargs)
 
 
 class MeshFiles:
