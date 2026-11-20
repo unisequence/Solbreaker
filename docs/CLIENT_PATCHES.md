@@ -1,72 +1,61 @@
-# Client executable changes
+# Client executable patches
 
-Client preparation creates a separate copy of `wotblitz.exe` and applies
-build-specific executable adapters, in addition to changes to UI resources
-and connection configuration. The original game executable is not modified.
+Solbreaker prepares a separate copy of `wotblitz.exe` and patches it on disk
+before launch. The Windows launcher and Linux launcher with Proton use the same
+patch chain. The original Blitz installation stays intact.
 
-The first public alpha supports build `11.21.0.1235_7376187` only. Preparation
-requires the exact original executable SHA-256:
+## Supported build
 
-```text
-5030ee4b9f6ec7db1c06efa2b92f9dd7243574be5d8d9578c118119318bc9608
-```
+Solbreaker 0.1.0-rc.2 supports Blitz build `11.21.0.1235_7376187`. Setup checks
+the original executable against the SHA-256 below before preparing the client.
 
-## Included changes
-
-All twelve groups below are applied by the normal preparation path on both
-Windows and Linux/Proton. There are no per-group switches in the setup wizard.
-
-| Group | Original code/data windows | Purpose and implementation |
+| File | Size in bytes | SHA-256 |
 | --- | ---: | --- |
-| Region picker | 1 | Adapt the single-region pre-login branch; `client_patch.py` |
-| Damage popup timing | 5 | Change entry/hold animation constants; `client_patch.py` |
-| Marker ray | 1 | Scope the marker ray dispatcher to its pinned caller; `client_patch.py` |
-| Hold fire | 1 | Extend the keyboard/mouse fire controller; `client_patch.py` |
-| Replay controls | 4 | Timeline, rewind and playback speed callbacks; `replay_patch.py` |
-| Battle statistics | 1 | Enable the existing statistics panel; `stats_patch.py` |
-| Recon bridge | 14 | Server recon messages, enemy markers/minimap opacity, silhouettes, alert lamp and armor overlays; `client_recon.py` |
-| Bot battle settings | 3 | Open the settings screen and handle save replies; `client_battle_settings.py` |
-| Private profile | 1 | Redirect documents to the prepared client's own profile; `windows_profile_patch.py` |
-| TLS verification | 4 | Enable certificate-chain verification and select the CA bundle; `client_tls.py` |
-| ATGM target lock | 2 | Enable the native target-lock input with missile ammunition selected and keep the lock on ammo changes; `client_atgm_aim.py` |
-| Sandbox controls | 11 | Extend keyboard settings with sandbox bindings, send sandbox input, and render a view from an owned missile; `client_sandbox.py` |
+| Original `wotblitz.exe` | 73,841,664 | `5030ee4b9f6ec7db1c06efa2b92f9dd7243574be5d8d9578c118119318bc9608` |
+| Prepared RC2 `wotblitz.exe` | 73,901,056 | `7222581ad0ae5db6fe240667c8089a065140c64860b7cb3f9ee617f39b3c4770` |
 
-This is **48 original code/data windows**, three calls in the added recon
-bridge, plus PE header changes and 11
-relocation records. Some adapters add native x86 code; the assembly and C
-sources are under `solbreaker/native/`. The appended executable/readable
-`.mkray` section occupies 16,384 file bytes.
+A byte-for-byte comparison found 1,318 changed bytes in the original file
+range and a 59,392-byte appended `.mkray` section, including padding. The
+section contains the added x86 code and data. The corresponding assembly
+and C sources live in [`solbreaker/native`](../solbreaker/native/).
 
-An exact comparison for the current chain changes 1,091 bytes within the
-original file and appends 16,384 bytes, including section padding. File size
-changes from 73,841,664 to 73,858,048 bytes. The final SHA-256 is:
+## What changes in the executable
 
-```text
-30fe28798626af150dd0b81861c9888fdec91e2a22d39fda43ed2816b6040a6a
-```
+| Change | Implementation |
+| --- | --- |
+| Local region picker, damage popup timing, gun-marker ray and keyboard/mouse hold-fire | [`client_patch.py`](../solbreaker/client_patch.py) |
+| Replay timeline, rewind and playback speed | [`replay_patch.py`](../solbreaker/replay_patch.py) |
+| In-battle statistics panel | [`stats_patch.py`](../solbreaker/stats_patch.py) |
+| Server visibility updates, enemy markers, minimap, silhouettes, detection light and armor overlays | [`client_recon.py`](../solbreaker/client_recon.py) |
+| Battle settings and its server replies | [`client_battle_settings.py`](../solbreaker/client_battle_settings.py) |
+| Redirect game documents to the prepared client's private profile on Windows and under Proton | [`windows_profile_patch.py`](../solbreaker/windows_profile_patch.py) |
+| Verify TLS certificate chains with the configured CA bundle | [`client_tls.py`](../solbreaker/client_tls.py) |
+| Lock a target with missile ammunition selected and preserve the lock when changing ammunition | [`client_atgm_aim.py`](../solbreaker/client_atgm_aim.py) |
+| Sandbox input and missile camera, aiming circle, field of view, control and sniper zoom persistence, graphics settings during battle, and battle HUD | [`client_sandbox.py`](../solbreaker/client_sandbox.py) and [`sandbox_client.c`](../solbreaker/native/sandbox_client.c) |
 
-The window count is a count of named patch sites, not a count of individual
-machine instructions or contiguous differing byte runs.
+Setup also patches local UI resources, including labels and control bindings,
+and writes connection settings for the selected server. The Proving Ground
+uses its own map data and UI resources. RC2 builds the map locally from the
+bundled layout and the compatible Blitz files. The server handles battle rules
+and ability cooldowns. The three default ability keys there are **7**, **8**
+and **9**, and can be rebound in Controls.
 
-## Application and validation
+## Installation and upgrades
 
-[`client_setup.prepare`](../solbreaker/client_setup.py) stages a new client
-directory. `install_picker` installs the region and timing changes together.
-The following stages install marker, hold-fire, replay, statistics, recon and
-battle-settings adapters, the private profile redirect, TLS verification and
-ATGM target lock and the sandbox bridge.
+[`client_setup.prepare`](../solbreaker/client_setup.py) stages a fresh
+client and applies the executable patches. Each stage checks the executable
+fingerprint or the PE layout and bytes it depends on. Setup records the
+resulting fingerprint in the client's manifest. It writes a replacement
+executable to a temporary file before moving it into place.
 
-Each stage accepts known input fingerprints and checks the instruction windows
-or PE layout it depends on. Outputs are pinned by SHA-256. Unknown inputs cause
-preparation to fail. Writes use a temporary file, flush/fsync and atomic
-replacement. The prepared client is activated only after setup completes.
-Upgrade paths recognize already-applied versions and a bounded set of known
-predecessors.
+The Solbreaker updater replaces the launcher and patching code. The next
+**Play** from the launcher runs
+[`launch_client`](../solbreaker/management_tasks.py), which upgrades a
+prepared executable from a recognized previous revision, refreshes local
+resources and then starts the game. Your client keeps its existing
+`documents/DAVAProject` profile.
 
-These patches are applied on disk before the game starts. Launching an
-existing client through the updated launcher also installs the ATGM
-target-lock and sandbox patches on the previous supported executable. Server addresses,
-public keys, domain names and CA files are configured separately.
-
-The release distributes patching code and its source, not an original or
-patched game executable. Obtain the compatible client separately.
+A different upstream Blitz build needs its own validation and patch chain.
+The GitHub archives contain the patching code and Solbreaker resources. Setup
+gets the Blitz executable and donor resources from the compatible game files
+you provide.
