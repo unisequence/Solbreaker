@@ -21,7 +21,7 @@ from cryptography.exceptions import UnsupportedAlgorithm
 
 from .build_info import BUILD_SHA256, VERSION
 from .connection import CONNECTION_PROFILE_MAX_BYTES, validate_connection_profile
-from .network import PRIVATE, ipv4
+from .network import PRIVATE, VPN_NETWORKS, ipv4, vpn_network
 
 PORT = 39068
 MAGIC = b'Solbreaker-LAN\x01'
@@ -80,8 +80,19 @@ class DiscoveredServer:
     profile: bytes
 
 
-def fetch_server(address, port):
-    client = http.client.HTTPConnection(address, port, timeout=0.8)
+def fetch_server(address, port, *, source=None):
+    options = {}
+    target = ipaddress.IPv4Address(address)
+    if vpn_network(target) is not None:
+        if source is None:
+            # A remembered VPN address may otherwise go through the default
+            # Internet route after the VPN disconnects.
+            source = next((str(interface.ip) for _, interface, _ in local_interfaces()
+                           if target in interface.network), None)
+        if source is None:
+            return None
+        options['source_address'] = (source, 0)
+    client = http.client.HTTPConnection(address, port, timeout=0.8, **options)
     try:
         client.request('GET', '/tfs/connection/v1', headers={'Accept': 'application/json'})
         response = client.getresponse()
@@ -149,7 +160,7 @@ def discover(interfaces, *, timeout=1.25):
     prefix = MAGIC + secrets.token_bytes(NONCE_SIZE)
     query = prefix + b'\x00\x00'
     sockets = {}
-    candidates = set()
+    candidates = {}
     try:
         for source, targets in destinations.items():
             probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -161,7 +172,7 @@ def discover(interfaces, *, timeout=1.25):
                 continue
             probe.setblocking(False)
             subnet = next(interface.network for interface in interfaces if str(interface.ip) == source)
-            sockets[probe] = (subnet, tailscale.get(source, ()))
+            sockets[probe] = (source, subnet, tailscale.get(source, ()))
             for target in targets:
                 try:
                     probe.sendto(query, (target, PORT))
@@ -179,13 +190,13 @@ def discover(interfaces, *, timeout=1.25):
                     packet, (address, source_port) = probe.recvfrom(len(query) + 1)
                 except OSError:
                     continue
-                subnet, peers = sockets[probe]
+                source, subnet, peers = sockets[probe]
                 if (source_port == PORT and len(packet) == len(query) and packet.startswith(prefix)
                         and discoverable_ip(address)
                         and (ipaddress.IPv4Address(address) in subnet or address in peers)):
                     port = struct.unpack('!H', packet[-2:])[0]
                     if 1024 <= port <= 65535:
-                        candidates.add((address, port))
+                        candidates.setdefault((address, port), source)
                         if len(candidates) == MAX_SERVERS:
                             break
     finally:
@@ -193,16 +204,23 @@ def discover(interfaces, *, timeout=1.25):
             probe.close()
 
     with ThreadPoolExecutor(max_workers=8) as executor:
-        results = executor.map(lambda target: fetch_server(*target), candidates)
+        results = executor.map(lambda item: fetch_server(*item[0], source=item[1]), candidates.items())
         return sorted((server for server in results if server is not None),
                       key=lambda server: (server.name.casefold(), server.address, server.port))
 
 
 def interface_scope(interface, name):
-    if interface.ip in TAILNET and 'tailscale' in name.casefold():
+    name = name.casefold()
+    if interface.ip in TAILNET and 'tailscale' in name:
         return str(TAILNET)
     if any(interface.network.subnet_of(network) for network in PRIVATE):
         return str(interface.network)
+    adapter_names = set(name.split())
+    if 'ham0' in adapter_names:
+        adapter_names.add('hamachi')
+    for adapter, network in VPN_NETWORKS.items():
+        if adapter in adapter_names and interface.network.subnet_of(network):
+            return str(network if interface.network.prefixlen >= 31 else interface.network)
     return None
 
 
@@ -225,5 +243,7 @@ def local_interfaces():
                 interface = ipaddress.IPv4Interface(f'{ip}/{prefix}')
                 scope = interface_scope(interface, f'{name} {adapter.name()}')
                 if scope:
+                    if vpn_network(interface.ip) is not None:
+                        interface = ipaddress.IPv4Interface(f'{ip}/{scope.partition("/")[2]}')
                     interfaces[ip] = (name, interface, scope)
     return list(interfaces.values())

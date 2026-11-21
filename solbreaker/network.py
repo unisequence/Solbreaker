@@ -12,12 +12,23 @@ PRIVATE = tuple(ipaddress.ip_network(n) for n in
                 ('127.0.0.0/8','10.0.0.0/8','172.16.0.0/12','192.168.0.0/16','100.64.0.0/10'))
 
 
+VPN_NETWORKS = {
+    'hamachi': ipaddress.IPv4Network('25.0.0.0/8'),
+    'radmin': ipaddress.IPv4Network('26.0.0.0/8'),
+}
+LAN_NETWORKS = PRIVATE + tuple(VPN_NETWORKS.values())
+
+
+def vpn_network(address):
+    return next((network for network in VPN_NETWORKS.values() if address in network), None)
+
+
 def ipv4(value, *, wildcard=False, public=False):
     try:address=ipaddress.IPv4Address(value)
     except (ValueError,TypeError):raise ValueError('Use a literal IPv4 address') from None
     if wildcard and address.is_unspecified:return str(address)
-    if not any(address in network for network in PRIVATE) and not (public and address.is_global):
-        raise ValueError('Use an IPv4 address in a loopback, private LAN or CGNAT network')
+    if not any(address in network for network in LAN_NETWORKS) and not (public and address.is_global):
+        raise ValueError('Use an IPv4 address in a loopback, LAN or supported VPN network')
     if address.is_multicast or address.is_unspecified or address==ipaddress.IPv4Address('127.0.0.0'):
         raise ValueError('Invalid endpoint address')
     return str(address)
@@ -147,10 +158,11 @@ def parse_config(document):
         raise ValueError('Provide one to 32 IPv4 client networks')
     try:networks=tuple(ipaddress.IPv4Network(n,strict=True) for n in networks)
     except ValueError:raise ValueError('Client networks must be canonical IPv4 CIDRs') from None
-    if any(not any(n.subnet_of(allowed) for allowed in PRIVATE)
+    allowed_networks = PRIVATE if public else LAN_NETWORKS
+    if any(not any(n.subnet_of(allowed) for allowed in allowed_networks)
            and not (public and n.prefixlen == 32 and n.network_address.is_global
                     and not n.network_address.is_multicast) for n in networks):
-        raise ValueError('Client networks require private CIDRs or explicit public /32 hosts in version 2')
+        raise ValueError('Client networks require LAN or supported VPN CIDRs, or explicit public /32 hosts in version 2')
     result=NetworkConfig(listeners['http'],listeners['login'],listeners['base'],advertised_http,
         Endpoint.parse(advertise['login'],public=public),Endpoint.parse(advertise['base'],public=public),
         origin(document['services']['http'],public=public),networks,document['version'])

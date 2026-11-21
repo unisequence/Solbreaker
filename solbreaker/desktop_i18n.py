@@ -62,10 +62,11 @@ ENGLISH = {
     'Найденные серверы': 'Discovered servers',
     'Найти серверы': 'Find servers',
     'Можно также указать адрес или файл от владельца сервера.': 'You can also enter an address or use a file from the host.',
-    'Ищем серверы в LAN и Tailscale…': 'Looking for servers on LAN and Tailscale…',
+    'Ищем серверы в LAN и VPN…': 'Looking for servers on LAN and VPN…',
     'Не удалось проверить локальную сеть.': 'Could not search the local network.',
     'Выбери сервер из списка.': 'Select a server from the list.',
-    'Серверы не найдены. Проверь, что владелец открыл доступ и запустил сервер.': 'No servers found. Check that the host enabled sharing and started the server.',
+    'Серверы не найдены. Можно ввести адрес сервера или импортировать файл подключения.':
+        'No servers found. Enter a server address or import a connection file.',
     'Настроить доступ по LAN / VPN': 'Set up LAN / VPN access',
     'Выбери сеть, затем запусти сервер. Друг увидит его в мастере подключения.': 'Choose a network, then start the server. Your friend can find it in the setup wizard.',
     'Только на этом компьютере': 'This computer only',

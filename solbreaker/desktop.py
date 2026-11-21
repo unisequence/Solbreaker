@@ -405,7 +405,7 @@ class SetupWizard(QDialog):
         self.lan_results.clear()
         self.lan_results.setEnabled(False)
         self.search_button.setEnabled(False)
-        self.lan_status.setText(tr('Ищем серверы в LAN и Tailscale…'))
+        self.lan_status.setText(tr('Ищем серверы в LAN и VPN…'))
         interfaces = [interface for _, interface, _ in discovery_interfaces()]
         executor = ThreadPoolExecutor(max_workers=1)
         self.lan_scan = executor.submit(discovery.discover, interfaces)
@@ -426,7 +426,7 @@ class SetupWizard(QDialog):
             self.lan_results.addItem(f'{server.name} ({server.address})', server)
         self.lan_results.setEnabled(bool(results))
         self.lan_status.setText(tr('Выбери сервер из списка.' if results else
-                                   'Серверы не найдены. Проверь, что владелец открыл доступ и запустил сервер.'))
+                                   'Серверы не найдены. Можно ввести адрес сервера или импортировать файл подключения.'))
 
     def choose_discovered(self, index):
         server = self.lan_results.itemData(index)

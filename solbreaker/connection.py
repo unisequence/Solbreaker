@@ -281,7 +281,8 @@ def validate_connection_profile(profile,manifest):
     if (profile['game_version'],profile['exe_sha256'])!=(manifest['version'],manifest['exe_sha256']):
         raise ValueError('Connection profile requires a different pinned client build')
     if (not isinstance(profile['login_public_key'],str) or not isinstance(profile['advertise'],dict)
-            or set(profile['advertise'])!={'http','login','base'}):
+            or set(profile['advertise'])!={'http','login','base'}
+            or not all(isinstance(value, str) for value in profile['advertise'].values())):
         raise ValueError('Invalid public key or advertised endpoints')
     raw=profile['login_public_key'].encode('ascii')
     ca = profile.get('tls_ca_certificate')
@@ -297,16 +298,17 @@ def validate_connection_profile(profile,manifest):
     document['services']['http']=profile['advertise']['http']
     # A client profile declares no listeners of its own. These addresses are
     # retained only for schema compatibility; serve rejects client-only labs.
-    from .network import PRIVATE
-    document['access']['client_networks']=[str(n) for n in PRIVATE]
-    if profile['version'] == 2:
-        hosts = (urlsplit(profile['advertise']['http']).hostname,
-                 profile['advertise']['login'].rpartition(':')[0],
-                 profile['advertise']['base'].rpartition(':')[0])
-        addresses = set()
-        for host in hosts:
-            try:address = ipaddress.IPv4Address(host)
-            except ValueError:continue
+    from .network import PRIVATE, vpn_network
+    hosts = (urlsplit(profile['advertise']['http']).hostname,
+             profile['advertise']['login'].rpartition(':')[0],
+             profile['advertise']['base'].rpartition(':')[0])
+    addresses = set()
+    for host in hosts:
+        try:
+            address = ipaddress.IPv4Address(host)
+        except ValueError:
+            continue
+        if profile['version'] == 2 or vpn_network(address) is not None:
             addresses.add(f'{address}/32')
-        document['access']['client_networks'].extend(sorted(addresses))
+    document['access']['client_networks'] = [str(n) for n in PRIVATE] + sorted(addresses)
     return parse_config(document),raw,ca,name
