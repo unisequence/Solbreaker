@@ -71,6 +71,28 @@ class DesktopTests(unittest.TestCase):
         self.assertEqual(wizard.progress.maximum(), 0)
         wizard.reject()
 
+    def test_setup_surfaces_the_vehicle_catalog_path_in_the_selected_language(self):
+        import sys
+        from solbreaker.management import Job
+
+        self.window.language_picker.setCurrentIndex(1)
+        self.window.start_wizard()
+        wizard = self.window.wizard
+        missing = 'Data/XML/item_defs/vehicles/other/Oth99_Relic.xml.dvpl'
+        worker = ('from pathlib import Path; from solbreaker.resource_source import VehicleCatalogError; '
+                  'from solbreaker.setup_progress import report_catalog_error; '
+                  f'report_catalog_error(VehicleCatalogError(Path({missing!r}))); raise SystemExit(1)')
+        job = Job('prepare-client', [sys.executable, '-c', worker], self.window.manager.output)
+        job.thread.join(5)
+        self.assertEqual(job.returncode, 1)
+        self.window.manager.job = wizard.job = job
+        wizard.update_job(self.window.manager.drain())
+
+        expected = 'The selected game build is missing this vehicle catalog file: ' + missing
+        self.assertEqual(wizard.error_label.text(), expected)
+        self.assertTrue(wizard.next.isEnabled())
+        wizard.reject()
+
     def test_remote_choice_shows_address_or_file_and_persists_explicit_mode(self):
         self.window.remote.setChecked(True)
         self.window.start_wizard()

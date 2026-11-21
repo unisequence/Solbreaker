@@ -10,9 +10,9 @@ import sys
 from solbreaker.bootstrap import prepare
 from solbreaker.connection import configure, connection_profile, atomic_write
 from solbreaker.network import defaults, ipv4, parse_config, PRIVATE
-from solbreaker.resource_source import inspect_game
+from solbreaker.resource_source import VehicleCatalogError, inspect_game
 from solbreaker.storage import account_access
-from solbreaker.setup_progress import report
+from solbreaker.setup_progress import report, report_catalog_error
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -94,5 +94,8 @@ if __name__ == '__main__':
     parser.add_argument('--options', required=True)
     try:
         finish(json.loads(parser.parse_args().options))
+    except VehicleCatalogError as error:
+        report_catalog_error(error)
+        parser.exit(1, f'Setup failed: {error}\n')
     except (OSError, ValueError, AttributeError, RuntimeError, subprocess.CalledProcessError) as error:
         parser.exit(1, f'Setup failed: {error}\n')

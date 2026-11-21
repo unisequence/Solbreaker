@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.0-rc.3
+
+- The launcher can find LAN servers through Radmin VPN and Hamachi.
+- Classic bots push forward more often. They look for a clearer firing lane
+  when blocked and sometimes break off to finish a spotted low-health tank.
+- Fixed tracks dipping below the ground after a rough landing.
+- Setup checks the vehicle catalog early and names the missing or unreadable
+  file in the launcher.
+
 ## 0.1.0-rc.2
 
 - Added the Proving Ground, a 1 km² map with a shooting range, a suspension

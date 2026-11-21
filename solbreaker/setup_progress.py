@@ -9,3 +9,7 @@ def report(message, **progress):
 def report_copy(completed, total):
     report(f'Копируем ресурсы игры — {completed // (1 << 20)} из {total // (1 << 20)} МиБ',
            completed=completed, total=total)
+
+
+def report_catalog_error(error):
+    print(json.dumps(dict(event='vehicle_catalog_error', message=str(error))), flush=True)

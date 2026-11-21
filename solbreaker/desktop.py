@@ -628,6 +628,7 @@ class SetupWizard(QDialog):
         if self.job is not None and self.job.returncode is not None:
             result = self.job.returncode
             action = self.job.action
+            resource_error = self.job.resource_error
             self.job = None
             if result == 0 or action == 'cleanup-depot':
                 try:
@@ -639,6 +640,8 @@ class SetupWizard(QDialog):
                         self.activity.setText(tr('Игра готова. Папку загрузки пока не удалось удалить.'))
                 except (OSError, ValueError) as error:
                     self.show_error(error)
+            elif resource_error:
+                self.show_error(resource_error)
             elif self.first_step and not self.local:
                 self.show_error(tr('Не удалось настроить подключение. Причина указана в журнале выше.'))
             else:

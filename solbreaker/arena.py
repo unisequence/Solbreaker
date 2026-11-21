@@ -3295,7 +3295,22 @@ class Arena:
             return
         if bot.mad_cloaked and bot.flags & TrainingBot.REVERSE:
             return
-        visible,_ = self.aim_hit(bot)
+        visible,impact = self.aim_hit(bot)
+        blocked = False
+        if visible != target.entity_id and impact is not None and not self.gun_destroyed(bot):
+            blocker = self.vehicles.get(visible)
+            known = (blocker is None or blocker.team == bot.team
+                     or visible in controller.visible or visible in controller.seen_obstacles)
+            # Ignore a gun still traversing or a ray that simply missed the
+            # target. The obstructed point must be in front of the target.
+            gun = bot.gun
+            low, high = gun.pitch_limits(gun.yaw)
+            pitch = max(low, min(high, gun.desired_pitch))
+            blocked = (known and abs(wrap(gun.desired_yaw - gun.yaw)) <= .08
+                       and abs(pitch - gun.pitch) <= .06
+                       and math.dist(bot.pose.position, impact) + .75
+                           < math.dist(bot.pose.position, target.pose.position))
+        controller.observe_firing_lane(target.entity_id, blocked, now)
         if (visible == target.entity_id if ai is None else
                 controller.sight_confirmed(target.entity_id, visible == target.entity_id, now)):
             if self.mad_games_mode:

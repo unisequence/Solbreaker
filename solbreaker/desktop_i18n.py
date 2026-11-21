@@ -326,6 +326,8 @@ COPY_PROGRESS = re.compile(r'Копируем ресурсы игры — (\d+) 
 PREFIXES = {
     'Укажи ': 'Choose a ',
     'Неверное значение настройки ': 'Invalid setting ',
+    'В выбранной сборке отсутствует файл каталога техники ': 'The selected game build is missing this vehicle catalog file: ',
+    'Не удалось прочитать каталог техники. Файл ': 'Could not read the vehicle catalog. File: ',
     'Порт должен быть целым числом от 1024 до ': 'The port must be an integer from 1024 to ',
     'Загрузка ещё не завершена или файл повреждён. Дождись «Depot download complete» в Steam. Файл ': 'The download is incomplete or a file is damaged. Wait for “Depot download complete” in Steam. File ',
     'Хеш файла отличается от эталонной сборки. Дождись завершения загрузки или повтори её в Steam. Файл ': 'A file hash does not match the reference build. Wait for the download to finish or download it again in Steam. File ',
