@@ -13,7 +13,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 
 from solbreaker import discovery, dvpl
 from solbreaker.build_info import BUILD_SHA256, VERSION
-from solbreaker.connection import configure_lan, connect_client, key_id
+from solbreaker.connection import configure_lan, connect_client, key_id, validate_connection_profile
 from solbreaker.management_tasks import refresh_lan_profile
 from solbreaker.network import load_network, parse_config
 
@@ -85,7 +85,53 @@ class DiscoveryTests(unittest.TestCase):
             self.assertEqual(discovery.tailscale_peers({'100.64.1.11'}), {})
         self.assertEqual(discovery.interface_scope(ipaddress.IPv4Interface('100.64.1.10/32'),
                                                   'Tailscale'), '100.64.0.0/10')
-        self.assertIsNone(discovery.interface_scope(ipaddress.IPv4Interface('26.5.1.10/8'), 'Radmin VPN'))
+
+    def test_supported_vpn_scopes_require_matching_adapters(self):
+        for address, name, expected in (
+                ('26.5.1.10/8', 'Radmin VPN', '26.0.0.0/8'),
+                ('26.5.1.10/32', 'Ethernet Famatech Radmin VPN Ethernet Adapter', '26.0.0.0/8'),
+                ('25.5.1.10/32', 'ham0 ham0', '25.0.0.0/8'),
+                ('25.5.1.10/24', 'Hamachi', '25.5.1.0/24'),
+                ('26.5.1.10/8', 'Wi-Fi', None),
+                ('25.5.1.10/8', 'Radmin VPN', None),
+                ('26.5.1.10/7', 'Radmin VPN', None),
+                ('8.8.8.1/24', 'Radmin VPN', None),
+                ('192.168.10.6/24', 'ZeroTier One', '192.168.10.0/24')):
+            with self.subTest(address=address, adapter=name):
+                self.assertEqual(discovery.interface_scope(ipaddress.IPv4Interface(address), name), expected)
+
+    def test_overlay_probe_uses_the_vpn_source_and_accepts_the_profile(self):
+        for octet, name in ((26, 'Radmin VPN'), (25, 'Hamachi')):
+            with self.subTest(adapter=name):
+                host = f'{octet}.2.3.4'
+                source = f'{octet}.2.3.5'
+                interface = ipaddress.IPv4Interface(f'{source}/8')
+                advertise = dict(http=f'http://{host}:18117', login=f'{host}:20026', base=f'{host}:20027')
+                profile = dict(version=1, game_version=VERSION, exe_sha256=BUILD_SHA256,
+                               server_id=key_id(self.key), login_public_key=self.key.decode('ascii'),
+                               advertise=advertise)
+                with (patch.object(discovery.http.client, 'HTTPConnection') as factory,
+                      patch.object(discovery, 'local_interfaces', return_value=[]) as interfaces):
+                    self.assertIsNone(discovery.fetch_server(host, 18117))
+                    factory.assert_not_called()
+                    interfaces.return_value = [(name, interface, str(interface.network))]
+                    response = factory.return_value.getresponse.return_value
+                    response.status = 200
+                    response.read.return_value = json.dumps(profile).encode()
+                    self.assertEqual(discovery.fetch_server(host, 18117).address, host)
+                    factory.assert_called_once_with(host, 18117, timeout=0.8, source_address=(source, 0))
+                manifest = dict(version=VERSION, exe_sha256=BUILD_SHA256, http_port=18117, login_port=20026)
+                network, *_ = validate_connection_profile(profile, manifest)
+                self.assertTrue(network.allows(host))
+                self.assertFalse(network.allows(source))
+
+    def test_public_config_requires_explicit_hosts_for_overlay_ranges(self):
+        document = lan_network().document()
+        document['version'] = 2
+        document['advertise']['http'] = document['advertise']['http'].replace('http:', 'https:')
+        document['access']['client_networks'].append('26.0.0.0/8')
+        with self.assertRaisesRegex(ValueError, 'Client networks'):
+            parse_config(document)
 
     def test_configuring_sharing_updates_the_managed_profile_and_preserves_ports(self):
         with TemporaryDirectory() as directory:
@@ -106,6 +152,19 @@ class DiscoveryTests(unittest.TestCase):
             self.assertEqual(profile['server_id'], key_id(self.key))
             self.assertEqual(profile['advertise'], lan_network().document()['advertise'])
             self.assertFalse(load_network(state).allows('192.168.10.20'))
+
+            for host, subnet, peer in (('26.5.1.10', '26.0.0.0/8', '26.5.1.11'),
+                                       ('25.5.1.10', '25.0.0.0/8', '25.5.1.11')):
+                with self.subTest(subnet=subnet):
+                    configure_lan(state, host, subnet)
+                    configured = json.loads((state/'connection.json').read_bytes())
+                    self.assertEqual(configured['server_id'], profile['server_id'])
+                    self.assertEqual(configured['advertise']['http'], f'http://{host}:18117')
+                    self.assertEqual(configured['advertise']['login'], f'{host}:20026')
+                    network = load_network(state)
+                    self.assertEqual(network.listen_base.pair, (host, 20027))
+                    self.assertTrue(network.allows(peer))
+                    self.assertFalse(network.allows('8.8.8.8'))
 
             configure_lan(state, '127.0.0.1', '127.0.0.0/8')
             restored = json.loads((state/'connection.json').read_bytes())
