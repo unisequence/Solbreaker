@@ -14,7 +14,8 @@ from solbreaker.collision import Pose
 def vehicle(entity, team, position):
     return SimpleNamespace(entity_id=entity,team=team,pose=Pose(position,0.),
         speed=0.,flags=0,alive=True,account_id=None,reload_at=20.,burst_pending=False,
-        tracks={},gun=SimpleNamespace(yaw_limits=(-math.pi,math.pi),set_point=Mock()))
+        ammo=10,pump_times=(),tracks={},gun=SimpleNamespace(yaw_limits=(-math.pi,math.pi),
+            TURRET=(0.,1.5,0.),GUN=(0.,0.,0.),set_point=Mock()))
 
 
 class CombatManeuverTests(unittest.TestCase):
@@ -57,6 +58,142 @@ class CombatManeuverTests(unittest.TestCase):
         director._perceive((bot.entity_id,), 2.)
         self.assertFalse(ai.known)
         self.assertEqual(director.orders.select(bot, ai, 2.).goal, (.5, 0., 180.5))
+
+    def test_patrol_takes_a_checked_detour_while_the_path_is_pending(self):
+        director, bot, ai, _ = self.scene(distance=100.)
+        base = np.zeros((200, 40), dtype=bool)
+        base[25, 18:23] = True
+        nav = director.navigation = Navigation(
+            (-20., -20., 20., 180.), np.zeros_like(base, dtype=float), base, cell=1., radius=1.8)
+        ai.known.clear()
+        ai.visible.clear()
+
+        director._drive(bot, ai, 1.)
+        self.assertFalse(nav.searches[bot.entity_id].done)
+        self.assertFalse(nav.clear(bot.pose.position, (.5, 0., 18.5)))
+        step, _, _, _ = ai.approach_ground
+        self.assertTrue(nav.clear(bot.pose.position, step))
+        self.assertNotEqual(step[0], bot.pose.position[0])
+        self.assertTrue(bot.flags & (ai.FORWARD | ai.LEFT | ai.RIGHT))
+
+    def test_a_sighting_interrupts_regroup_and_leaders_do_not_turn_back(self):
+        director, bot, ai, enemy = self.scene(distance=180.)
+        ally = vehicle(201, 1, (.5, 0., 200.))
+        director.arena.vehicles[ally.entity_id] = ally
+        ai.known.clear()
+        ai.visible.clear()
+
+        self.assertIsNone(director.orders.select(bot, ai, 1.))
+        order = director.orders.select(bot, ai, 1. + director.orders.ISOLATION_SECONDS)
+        self.assertEqual(order.kind, 'regroup')
+
+        ai.known[enemy.entity_id] = (enemy.pose.position, 8.)
+        self.assertEqual(director.orders.select(bot, ai, 8.).kind, 'investigate')
+        self.assertFalse(director.orders.states[bot.entity_id].regrouping)
+
+        ai.known.clear()
+        director.orders.states.clear()
+        bot.pose = Pose((.5, 0., 310.), 0.)
+        self.assertIsNone(director.orders.select(bot, ai, 10.))
+        self.assertIsNone(director.orders.select(bot, ai, 10. + director.orders.ISOLATION_SECONDS))
+
+    def test_blocked_loaded_bot_uses_a_clear_firing_position_for_its_class(self):
+        for kind, forward, lateral in (('lightTank', 5., 15.), ('mediumTank', 4., 12.),
+                                      ('heavyTank', 9., 5.), ('AT-SPG', 0., 7.)):
+            with self.subTest(kind=kind):
+                director, bot, ai, enemy = self.scene()
+                bot.reload_at = 0.
+                ai.vehicle_class = kind
+                rays = director.arena.world._static_rays
+                rays.side_effect = lambda starts, ends: [(1, 0, .5) if x < .5 else (-1, 0, 1.)
+                                                        for x, _, _ in starts]
+                director._drive(bot, ai, 0.)
+                for i in range(24):
+                    ai.observe_firing_lane(enemy.entity_id, True, i / 4)
+                director._drive(bot, ai, 5.75)
+                self.assertIsNone(ai.firing_position)
+                rays.assert_not_called()
+
+                ai.observe_firing_lane(enemy.entity_id, True, 6.)
+                director._drive(bot, ai, 6.)
+                self.assertEqual(ai.firing_position.goal, (.5 + lateral, 0., .5 + forward))
+                self.assertTrue(bot.flags & (ai.FORWARD | ai.RIGHT))
+                self.assertEqual(director.stats['firing_repositions'], 1)
+                self.assertLessEqual(len(rays.call_args.args[0]), 4)
+
+                ai.observe_firing_lane(enemy.entity_id, False, 6.1)
+                ai.sight_confirmed(enemy.entity_id, True, 6.1)
+                director._drive(bot, ai, 6.2)
+                self.assertEqual(bot.flags, 0)
+                self.assertIsNone(ai.firing_position)
+
+    def test_clear_or_stale_shot_samples_cannot_trigger_a_move(self):
+        director, bot, ai, enemy = self.scene()
+        bot.reload_at = 0.
+        for i in range(25):
+            ai.observe_firing_lane(enemy.entity_id, True, i / 4)
+        self.assertTrue(ai.firing_lane_blocked(enemy.entity_id, 6.))
+        self.assertFalse(ai.firing_lane_blocked(enemy.entity_id, 7.))
+        ai.observe_firing_lane(enemy.entity_id, True, 7.)
+        self.assertFalse(ai.firing_lane_blocked(enemy.entity_id, 7.))
+        ai.observe_firing_lane(enemy.entity_id, False, 7.25)
+        self.assertFalse(ai.firing_lane_blocked(enemy.entity_id, 7.25))
+
+    def test_one_bot_tries_a_finisher_only_after_seeing_the_flanker(self):
+        director, bot, ai, enemy = self.scene(distance=28.)
+        arena = director.arena
+        arena.shell_for = lambda _: SimpleNamespace(damage=300., max_distance=500.)
+        arena.gun_destroyed = lambda _: False
+        bot.reload_at = 0.
+        enemy.health = 900
+        flanker = vehicle(301, 2, (30.5, 0., 30.5))
+        # A remembered or shared contact has no readable health in this test.
+        arena.vehicles[301] = flanker
+        ai.known[301] = (flanker.pose.position, 0.)
+        ai.finisher_random = Mock()
+        ai.finisher_random.random.return_value = .1
+        director._drive(bot, ai, 1.)
+        self.assertEqual(ai.target_id, enemy.entity_id)
+        ai.finisher_random.random.assert_not_called()
+
+        flanker.health = 120
+        ai.visible.add(301)
+        director._drive(bot, ai, 2.)
+        self.assertEqual(ai.target_id, flanker.entity_id)
+        self.assertEqual(director.stats['finisher_switches'], 1)
+
+        teammate = vehicle(202, 1, bot.pose.position)
+        teammate.reload_at = 0.
+        partner = TrainingBot(teammate.entity_id)
+        partner.visible = {enemy.entity_id, flanker.entity_id}
+        candidates = [(v.entity_id, v.pose.position) for v in (enemy, flanker)]
+        self.assertEqual(director._finisher_target(teammate, partner, candidates, enemy.entity_id, 2.1),
+                         enemy.entity_id)
+        ai.visible.remove(301)
+        director._drive(bot, ai, 2.2)
+        self.assertEqual(ai.target_id, enemy.entity_id)
+        self.assertNotIn(bot.team, director.finishers)
+
+    def test_finisher_chance_has_a_team_cooldown(self):
+        director, bot, ai, enemy = self.scene(distance=28.)
+        director.arena.shell_for = lambda _: SimpleNamespace(damage=300., max_distance=500.)
+        director.arena.gun_destroyed = lambda _: False
+        bot.reload_at = 0.
+        enemy.health = 900
+        flanker = vehicle(301, 2, (30.5, 0., 30.5))
+        flanker.health = 100
+        director.arena.vehicles[301] = flanker
+        ai.known[301] = (flanker.pose.position, 0.)
+        ai.visible.add(301)
+        ai.finisher_random = Mock()
+        ai.finisher_random.random.side_effect = [.9, .1]
+
+        for now in (1., 1.2, 8.9):
+            director._drive(bot, ai, now)
+            self.assertEqual(ai.target_id, enemy.entity_id)
+        ai.finisher_random.random.assert_called_once()
+        director._drive(bot, ai, 9.)
+        self.assertEqual(ai.target_id, flanker.entity_id)
 
     def scene(self, entity=200, distance=24.):
         ai=TrainingBot(entity)

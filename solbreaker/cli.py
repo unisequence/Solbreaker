@@ -6,6 +6,8 @@ import logging
 from pathlib import Path
 
 from . import __version__
+from .resource_source import VehicleCatalogError
+from .setup_progress import report_catalog_error
 
 
 def main(argv=None):
@@ -197,6 +199,9 @@ def main(argv=None):
                 diagnostics.close()
             return
         print(json.dumps(result, ensure_ascii=False, indent=2))
+    except VehicleCatalogError as error:
+        report_catalog_error(error)
+        parser.exit(1, f'Error: {error}\n')
     except (OSError, ValueError) as error:
         parser.exit(1, f'Error: {error}\n')
     except KeyboardInterrupt:

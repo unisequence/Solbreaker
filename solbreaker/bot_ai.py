@@ -30,6 +30,14 @@ class BotProfile:
     aim_resample_seconds: float
 
 
+@dataclass
+class FiringMove:
+    goal: tuple
+    expires_at: float
+    check_at: float
+    generation: int
+
+
 # "normal" keeps the original single-bot stop and query cadence.
 DIFFICULTIES = {
     'easy': BotProfile(32., .4, 1.2, 1.6, 1.4),
@@ -45,6 +53,14 @@ _TACTICS = {
     'mediumTank': ((.59, .86, .98), 1.2, 45.),
     'heavyTank': ((.52, .73, .94), .65, 26.),
     'AT-SPG': ((.38, .57, .81), .95, 95.),
+}
+
+# Candidate (forward, lateral) offsets from a blocked firing position.
+_FIRING_OFFSETS = {
+    'lightTank': ((5., 15.), (2., 9.)),
+    'mediumTank': ((4., 12.), (2., 8.)),
+    'heavyTank': ((9., 5.), (6., 4.)),
+    'AT-SPG': ((0., 7.), (-3., 5.)),
 }
 
 _HULL_VISIBILITY_OFFSETS = np.array(((-1, 0), (1, 0), (0, -1), (0, 1),
@@ -75,6 +91,7 @@ class TrainingBot:
     STUCK_YAW_PROGRESS = .06
     REVERSE_SECONDS = 1.5
     SHOT_CHECK_SECONDS = .25
+    BLOCKED_FIRE_SECONDS = 6.
     # Leave a margin for slope, tick cadence and model mismatch; this is bot
     # planning only and does not change the vehicle's actual braking force.
     BRAKING_SAFETY_FACTOR = .65
@@ -98,6 +115,7 @@ class TrainingBot:
         self.set_difficulty(difficulty)
         # Per-bot deterministic stream: reproducible tests and replays.
         self.random = random.Random(entity_id)
+        self.finisher_random = random.Random(f'finisher:{entity_id}')
         self.target_id = None
         self.sighted = None
         self.aim = None
@@ -157,6 +175,11 @@ class TrainingBot:
         self.learned_corridors = 0
         self.margin_goal = None
         self.margin_until = self.next_margin_check = 0.
+        self.approach_ground = None
+        self.next_approach_check = 0.
+        self.blocked_fire = None
+        self.firing_position = None
+        self.next_firing_position = 0.
 
     def set_difficulty(self, difficulty):
         self.difficulty = difficulty
@@ -232,6 +255,22 @@ class TrainingBot:
         self.next_shot_check = now + self.SHOT_CHECK_SECONDS
         return True
 
+    def observe_firing_lane(self, target, blocked, now):
+        previous = self.blocked_fire
+        if not blocked:
+            self.blocked_fire = None
+            return
+        since = (previous[1] if previous is not None and previous[0] == target
+                 and now - previous[2] <= 2 * self.SHOT_CHECK_SECONDS else now)
+        self.blocked_fire = (target, since, now)
+
+    def firing_lane_blocked(self, target, now):
+        if self.blocked_fire is None:
+            return False
+        entity, since, sampled_at = self.blocked_fire
+        return (entity == target and now - since >= self.BLOCKED_FIRE_SECONDS
+                and now - sampled_at <= 2 * self.SHOT_CHECK_SECONDS)
+
     def choose_target(self, position, candidates):
         """Pick the nearest enemy, with hysteresis, from public positions.
 
@@ -279,12 +318,18 @@ class BotDirector:
     DECISION_TICKS = 4
     MEMORY_SECONDS = 10.
     VIEW_DISTANCE = 350.
+    FINISHER_RANGE = 170.
+    FINISHER_CHANCE = .4
+    FINISHER_RETRY_SECONDS = 8.
+    FINISHER_FOCUS_SECONDS = 5.
 
     def __init__(self, arena):
         self.arena = arena
         self.navigation = None
         self.traffic = TrafficController(self)
         self.orders = BotOrders(self)
+        self.finishers = {}
+        self.next_finisher_check = {}
         self.phases = {eid:i%self.DECISION_TICKS for i,eid in enumerate(arena.training_bots)}
         # Spawn areas are public map objectives, captured once. Patrol never
         # reads the current position of an unseen opponent to follow it.
@@ -319,7 +364,8 @@ class BotDirector:
                           avoidance=0,cover_moves=0,route_entries=0,combat_moves=0,
                           combat_forward_moves=0,combat_reverse_moves=0,
                           combat_drive_ticks=0,combat_hold_ticks=0,
-                          combat_blocked=0,combat_corridor_checks=0)
+                          combat_blocked=0,combat_corridor_checks=0,
+                          firing_repositions=0,finisher_switches=0)
 
     def patrol_goal(self, bot, ai):
         goals = self.patrols.get(bot.entity_id, ())
@@ -539,6 +585,69 @@ class BotDirector:
         return nav.clear(bot.pose.position,point,
             blocked=tuple(node for node,until in ai.route_bad_cells.items() if now<until),
             climb_edges=nav.actor_climb_edges.get(bot.entity_id))
+
+    def _find_firing_position(self, bot, ai, target, now):
+        nav = self.navigation
+        x, _, z = bot.pose.position
+        enemy = ai.known[target][0]
+        dx, dz = enemy[0] - x, enemy[2] - z
+        distance = math.hypot(dx, dz)
+        if not 12. <= distance <= 210.:
+            return None
+        dx, dz = dx / distance, dz / distance
+        side = 1 if bot.entity_id % 2 else -1
+        offsets = _FIRING_OFFSETS.get(ai.vehicle_class, _FIRING_OFFSETS['mediumTank'])
+        candidates = []
+        for forward, lateral in offsets:
+            for offset in (side * lateral, -side * lateral):
+                px, pz = x + dx * forward + dz * offset, z + dz * forward - dx * offset
+                node = nav.node((px, 0., pz))
+                if node is None:
+                    continue
+                point = (px, nav.point(node)[1], pz)
+                if self._maneuver_clear(bot, ai, point, now) and self._traffic_corridor_clear(bot, point):
+                    candidates.append(point)
+        if not candidates:
+            return None
+        aim = ai.visible_points.get(target, (enemy[0], enemy[1] + ai.AIM_HEIGHT, enemy[2]))
+        gun_height = bot.gun.TURRET[1] + bot.gun.GUN[1]
+        starts = [(x, y + gun_height, z) for x, y, z in candidates]
+        hits = self.arena.world._static_rays(starts, [aim] * len(starts))
+        self.stats['perception_rays'] += len(candidates)
+        return next((point for point, hit in zip(candidates, hits) if hit[0] < 0 or hit[2] >= .999), None)
+
+    def _reposition_to_fire(self, bot, ai, target, now, braking):
+        move = ai.firing_position
+        if move is None and (now < ai.next_firing_position or abs(bot.speed) > 1.5
+                             or not ai.firing_lane_blocked(target, now)):
+            return None
+        if bot.reload_at or bot.burst_pending or bot.ammo <= 0 or bot.pump_times and not bot.clip:
+            ai.firing_position = None
+            return None
+        if move is None:
+            ai.next_firing_position = now + 4.
+            point = self._find_firing_position(bot, ai, target, now)
+            if point is None:
+                return None
+            ai.firing_position = FiringMove(point, now + 6., now + .35, self.navigation.generation)
+            ai.next_firing_position = now + 12.
+            self.stats['firing_repositions'] += 1
+        else:
+            point = move.goal
+            at_position = math.hypot(point[0] - bot.pose.position[0], point[2] - bot.pose.position[2]) <= 1.5
+            if (now >= move.expires_at or at_position or ai.sighted is not None
+                    or not self._traffic_corridor_clear(bot, point)):
+                ai.firing_position = None
+                return 0
+            if now >= move.check_at or move.generation != self.navigation.generation:
+                if not self._maneuver_clear(bot, ai, point, now):
+                    ai.firing_position = None
+                    return 0
+                move.check_at = now + .35
+                move.generation = self.navigation.generation
+        flags = ai.controls(bot.pose, point, now, closing_speed=max(0., bot.speed),
+                            braking_acceleration=braking, stop_distance=.75)
+        return self._avoid(bot, point, flags, now)
 
     def _maneuver(self, bot, ai, threat, chosen, eligible, now, braking):
         """Short reload-time track inputs, independent of the global route.
@@ -765,7 +874,6 @@ class BotDirector:
 
     def _margin_escape(self, bot, ai, now):
         """Leave a conservative disc margin along the hull's current heading."""
-        if not ai.recoveries:return None
         nav=self.navigation;node=nav.node(bot.pose.position)
         if node is None or nav.walkable.ravel()[node]:
             ai.margin_goal=None
@@ -796,6 +904,44 @@ class BotDirector:
             ai.check_at=ai.check_position=ai.check_yaw=None
             ai.next_plan=0.
             return end
+        return None
+
+    def _local_approach(self, bot, ai, goal, stop, now, blocked):
+        """Follow a short walkable leg while the global route is unavailable."""
+        nav = self.navigation
+        origin = bot.pose.position
+        climb = nav.actor_climb_edges.get(bot.entity_id)
+        course = ai.approach_ground
+        if course is not None:
+            point, destination, generation, exclusions = course
+            if (math.hypot(goal[0] - destination[0], goal[2] - destination[2]) <= 8.
+                    and generation == nav.generation and exclusions == blocked
+                    and math.hypot(point[0] - origin[0], point[2] - origin[2]) > 2.):
+                if now < ai.next_approach_check:
+                    return point
+                if nav.clear(origin, point, blocked=blocked, climb_edges=climb):
+                    ai.next_approach_check = now + .5
+                    return point
+            ai.approach_ground = None
+        if now < ai.next_approach_check:
+            return None
+        ai.next_approach_check = now + .5
+        dx, dz = goal[0] - origin[0], goal[2] - origin[2]
+        length = math.hypot(dx, dz)
+        reach = min(18., length - stop)
+        if reach < 3.:
+            return None
+        bearing = math.atan2(dx, dz)
+        side = 1 if bot.entity_id % 2 else -1
+        spans = (reach, 8.) if reach > 8. else (reach,)
+        for span in spans:
+            for offset in (0., side * .45, -side * .45, side * .9, -side * .9, side * 1.25, -side * 1.25):
+                heading = bearing + offset
+                point = (origin[0] + math.sin(heading) * span, origin[1],
+                         origin[2] + math.cos(heading) * span)
+                if nav.clear(origin, point, blocked=blocked, climb_edges=climb):
+                    ai.approach_ground = point, goal, nav.generation, blocked
+                    return point
         return None
 
     def _avoid(self, bot, waypoint, flags, now):
@@ -934,6 +1080,48 @@ class BotDirector:
         self._drive(bot,ai,now)
         self._travel_aim(bot,ai,now)
 
+    def _finisher_target(self, bot, ai, candidates, chosen, now):
+        focus = self.finishers.get(bot.team)
+        if focus is not None:
+            owner, target, expires = focus
+            if now >= expires:
+                self.finishers.pop(bot.team)
+            elif owner != bot.entity_id:
+                return chosen
+            elif target in ai.visible and any(eid == target for eid, _ in candidates):
+                return target
+            else:
+                self.finishers.pop(bot.team)
+        if (chosen not in ai.visible or len(candidates) < 2
+                or now < self.next_finisher_check.get(bot.team, 0.)
+                or bot.reload_at > now + 1. or bot.ammo <= 0 or bot.burst_pending
+                or bot.pump_times and not bot.clip):
+            return chosen
+        shell = self.arena.shell_for(bot)
+        if shell is None or shell.damage <= 0. or self.arena.gun_destroyed(bot):
+            return chosen
+        vehicles = self.arena.vehicles
+        if vehicles[chosen].health <= shell.damage:
+            return chosen
+        x, _, z = bot.pose.position
+        distances = {eid: math.hypot(point[0] - x, point[2] - z)
+                     for eid, point in candidates if eid in ai.visible}
+        current_range = distances[chosen]
+        if current_range < 16.:
+            return chosen
+        limit = min(shell.max_distance, self.FINISHER_RANGE, 1.65 * current_range + 15.)
+        chances = [(distance, eid) for eid, distance in distances.items()
+                   if eid != chosen and distance <= limit and vehicles[eid].health <= shell.damage]
+        if not chances:
+            return chosen
+        self.next_finisher_check[bot.team] = now + self.FINISHER_RETRY_SECONDS
+        if ai.finisher_random.random() >= self.FINISHER_CHANCE:
+            return chosen
+        _, target = min(chances)
+        self.finishers[bot.team] = (bot.entity_id, target, now + self.FINISHER_FOCUS_SECONDS)
+        self.stats['finisher_switches'] += 1
+        return target
+
     def _drive_route_exit(self, bot, ai, now):
         """Finish one accepted short detour before changing noncombat orders."""
         if ai.route_exit is None:return False
@@ -981,18 +1169,28 @@ class BotDirector:
                 candidates = capturers
         previous_target=ai.target_id
         chosen=ai.choose_target(bot.pose.position,candidates)
+        chosen=ai.target_id=self._finisher_target(bot,ai,candidates,chosen,now)
         seen=chosen in ai.visible
         if not seen or chosen!=previous_target:
             ai.cover_goal=None
             ai.combat_align=False
+            ai.blocked_fire=ai.firing_position=None
         if (not seen or chosen!=ai.maneuver_target or now<ai.reverse_until
                 or ai.recovery_replan or ai.passing is not None
                 or bot.entity_id in self.traffic.by_entity):
             self._reset_maneuver(ai)
         if seen:ai.route_exit=None
         order=self.orders.select(bot,ai,now,chosen)
+        if (nav is not None and order is not None and order.kind in ('investigate','regroup')
+                and order.kind == ai.route_kind and order.goal == ai.order_goal and now >= ai.next_plan):
+            stalled=nav.searches.get(bot.entity_id)
+            if stalled is not None and stalled.done and not stalled.path:
+                self.orders.abandon(bot,now)
+                nav.cancel(bot.entity_id)
+                order=self.orders.select(bot,ai,now,chosen)
         kind='combat' if seen else order.kind if order is not None else 'patrol'
         if kind!=ai.order_kind:
+            ai.approach_ground=None;ai.next_approach_check=0.
             # Brief sight loss must not cancel the same approach search on
             # every visibility edge. Regroup/patrol changes own new routes.
             if {kind,ai.order_kind}!={'combat','investigate'}:
@@ -1011,6 +1209,7 @@ class BotDirector:
             ai.check_at=ai.check_position=ai.check_yaw=None
             ai.reverse_until=min(ai.reverse_until,now)
             self._reset_maneuver(ai)
+            ai.firing_position=None
             if ai.route_watch_pause_at is None:ai.route_watch_pause_at=now
             return
         if order is not None and order.kind == 'defend':
@@ -1025,6 +1224,13 @@ class BotDirector:
             goal=self.patrol_goal(bot,ai)
             if goal is None:
                 bot.flags=0;return
+            previous_route=nav.searches.get(bot.entity_id) if nav is not None else None
+            if (ai.route_kind == 'patrol' and previous_route is not None and previous_route.done
+                    and previous_route.path):
+                endpoint=nav.point(previous_route.goal)
+                if math.hypot(endpoint[0]-bot.pose.position[0],endpoint[2]-bot.pose.position[2])<=2.:
+                    ai.patrol_index+=1;goal=self.patrol_goal(bot,ai)
+                    patrol_changed=True
             for _ in self.patrols[bot.entity_id]:
                 if math.hypot(goal[0]-bot.pose.position[0],goal[2]-bot.pose.position[2])>=8.:break
                 ai.patrol_index+=1
@@ -1035,6 +1241,7 @@ class BotDirector:
         traffic_flags=self.traffic.controls(bot,ai,now)
         if traffic_flags is not None:
             ai.route_exit=None
+            ai.firing_position=None
             bot.flags=traffic_flags
             if not traffic_flags:ai.check_at=ai.check_position=ai.check_yaw=None
             if ai.route_watch_pause_at is None:ai.route_watch_pause_at=now
@@ -1059,6 +1266,7 @@ class BotDirector:
         escape=self._margin_escape(bot,ai,now)
         if escape is not None:
             self._reset_maneuver(ai)
+            ai.firing_position=None
             flags=ai.controls(bot.pose,escape,now,closing_speed=abs(bot.speed),
                 braking_acceleration=braking,stop_distance=.5)
             bot.flags=self._avoid(bot,escape,flags,now)
@@ -1072,11 +1280,13 @@ class BotDirector:
             # Finish the physical back-out before asking for a path from the
             # new position. Waiting for a cancelled path must not swallow the
             # very reverse command which was meant to clear the obstruction.
+            ai.firing_position=None
             bot.flags=self._avoid(bot,goal,ai.REVERSE|ai.recovery_turn,now)
             return
         if ai.passing is not None and now<ai.passing_until:
             # Global route following must not steer back into the occupied
             # lane halfway through a validated local passing manoeuvre.
+            ai.firing_position=None
             passing=ai.passing
             flags=ai.controls(bot.pose,passing,now,closing_speed=abs(bot.speed),
                 braking_acceleration=braking,stop_distance=.5)
@@ -1091,6 +1301,12 @@ class BotDirector:
             ai.check_at=ai.check_position=ai.check_yaw=None
             if ai.route_watch_pause_at is None:ai.route_watch_pause_at=now
             return
+        if seen and not travelling:
+            reposition=self._reposition_to_fire(bot,ai,chosen,now,braking)
+            if reposition is not None:
+                bot.flags=reposition
+                if ai.route_watch_pause_at is None:ai.route_watch_pause_at=now
+                return
         maneuver=self._maneuver(bot,ai,goal,chosen,
             seen and not travelling and not align
             and bot.gun.yaw_limits[1]-bot.gun.yaw_limits[0]>=math.tau-.01,now,braking)
@@ -1114,8 +1330,7 @@ class BotDirector:
             changed=search is not None and (search.generation!=nav.generation
                                             or getattr(search,'blocked',frozenset())!=blocked)
             if retry:
-                if kind in ('investigate','regroup'):self.orders.abandon(bot,now)
-                if kind=='patrol' and not travelling:
+                if kind=='patrol':
                     ai.patrol_index+=1;goal=self.patrol_goal(bot,ai)
                 nav.cancel(bot.entity_id);search=None
             if search is None or changed or ai.route_kind!=kind or moved and search.done:
@@ -1124,31 +1339,11 @@ class BotDirector:
                 ai.route_kind=kind
                 if search is None and kind=='patrol' and not travelling and not retry:
                     ai.patrol_index+=1
-            ai.next_plan=now+(2. if retry or search is None else .75)
+            ai.next_plan=now+(.5 if search is None else .75)
+        stop=order.stop_distance if order is not None else ai.STOP_DISTANCE if seen and not travelling else 1.
         following=nav.waypoint(search,bot.pose.position,bot.speed)
         if following is None:
             bot.flags=0
-            if kind == 'patrol' and distance > 1. and (search is None or not search.done):
-                # Use a short, checked leg while the shared planner searches.
-                origin = bot.pose.position
-                fraction = min(1., 18. / distance)
-                step = tuple(start + (end - start) * fraction for start, end in zip(origin, goal))
-                climb = getattr(nav, 'actor_climb_edges', {}).get(bot.entity_id)
-                if nav.clear(origin, step, blocked=blocked, climb_edges=climb):
-                    flags = ai.controls(bot.pose, step, now, closing_speed=abs(bot.speed),
-                                        braking_acceleration=braking, stop_distance=1.)
-                    bot.flags = self._avoid(bot, step, flags, now)
-                    if self._watch_route(bot, ai, goal, step, distance, now,
-                                         attempted_forward=bool(flags & ai.FORWARD)):
-                        bot.flags = self._avoid(bot, step, ai.REVERSE, now)
-                    return
-            if align:
-                # A casemate can aim its hull while the approach route is
-                # pending or unavailable. Path availability must not disable
-                # its gun against an already visible distant enemy.
-                bot.flags=self._avoid(bot,goal,ai.controls(bot.pose,goal,now,
-                    closing_speed=closing,braking_acceleration=braking,
-                    remaining_distance=0.,align_at_stop=True),now)
             if search is not None and search.path:
                 node=nav.node(bot.pose.position)
                 # A ram or a conservative rotating-footprint margin can put
@@ -1179,11 +1374,29 @@ class BotDirector:
                 if search.done:
                     nav.request(bot.entity_id,bot.pose.position,goal,blocked=blocked,restart=True)
                     ai.next_plan=now+.25
+            step=self._local_approach(bot,ai,goal,stop,now,blocked)
+            if step is not None:
+                remaining=math.hypot(step[0]-bot.pose.position[0],step[2]-bot.pose.position[2])
+                flags=ai.controls(bot.pose,step,now,closing_speed=abs(bot.speed),
+                    braking_acceleration=braking,stop_distance=.75)
+                bot.flags=self._avoid(bot,step,flags,now)
+                if self._watch_route(bot,ai,goal,step,remaining,now,
+                                     attempted_forward=bool(flags&ai.FORWARD)):
+                    bot.flags=self._avoid(bot,step,ai.REVERSE,now)
+                return
+            if align:
+                # A casemate can aim its hull while the approach route is
+                # pending or unavailable. Path availability must not disable
+                # its gun against an already visible distant enemy.
+                bot.flags=self._avoid(bot,goal,ai.controls(bot.pose,goal,now,
+                    closing_speed=closing,braking_acceleration=braking,
+                    remaining_distance=0.,align_at_stop=True),now)
             # Reset only when waiting. A physically attempted grid-entry turn
             # still needs the normal stuck detector if the hull cannot rotate.
             if not align:ai.check_at=ai.check_position=ai.check_yaw=None
             if ai.route_watch_pause_at is None:ai.route_watch_pause_at=now
             return
+        ai.approach_ground=None
         waypoint,remaining=following
         # Keep the chosen local exit while a slow hull turns into it. Expired
         # learned cells and a moving ally must not replace it with the old hill.
@@ -1197,7 +1410,6 @@ class BotDirector:
                 if near:
                     ai.route_exit=(search,waypoint)
                     if self._drive_route_exit(bot,ai,now):return
-        stop=order.stop_distance if order is not None else ai.STOP_DISTANCE if seen and not travelling else 1.
         # Route distance, not distance to the next tiny grid segment, governs
         # braking. The normal drivetrain still determines actual acceleration.
         flags=ai.controls(bot.pose,waypoint,now,closing_speed=abs(bot.speed),
@@ -1218,6 +1430,7 @@ class BotDirector:
             bot=a.vehicles[eid]
             if not bot.alive or eid in disabled:
                 bot.flags=0
+                ai.blocked_fire=ai.firing_position=None
                 if nav:nav.cancel(eid)
                 continue
             bot.last_input=now
@@ -1229,6 +1442,7 @@ class BotDirector:
             if state is not None and not state.grounded:
                 bot.flags=0
                 ai=a.training_bots[eid]
+                ai.blocked_fire=ai.firing_position=None
                 ai.check_at=ai.check_position=ai.check_yaw=None
                 self._reset_maneuver(ai)
                 if ai.route_watch_pause_at is None:ai.route_watch_pause_at=now

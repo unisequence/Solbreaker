@@ -44,14 +44,14 @@ class BotOrders:
     INVESTIGATE_STOP = 5.
     BLOCKED_COOLDOWN = 15.
     ISOLATION_DISTANCE = 90.
-    ISOLATION_SECONDS = 2.
+    ISOLATION_SECONDS = 6.
     REGROUP_RELEASE = 45.
     REGROUP_STOP = 35.
     REGROUP_UPDATE_SECONDS = 1.
     REGROUP_GOAL_MOVEMENT = 8.
     HOME_RADIUS = 60.
     HOME_RELEASE = 50.
-    REGROUP_MAX_SECONDS = 45.
+    REGROUP_MAX_SECONDS = 18.
     REGROUP_STALL_SECONDS = 10.
     REGROUP_PROGRESS_METRES = 2.
     REGROUP_COOLDOWN = 15.
@@ -181,28 +181,22 @@ class BotOrders:
         return Order('regroup', state.regroup_goal, self.REGROUP_STOP)
 
     def select(self, bot, ai, now, chosen=None):
-        """Combat > public defence > regroup > investigation > capture > patrol."""
+        """Combat > public defence > investigation > capture > forward regroup > patrol."""
         if not bot.alive:
             self.states.pop(bot.entity_id, None)
             return None
         state = self.states.setdefault(bot.entity_id, _State())
         self._remember(state, ai, bot.pose.position, now)
         selected = chosen if chosen is not None else getattr(ai, 'target_id', None)
-        objective = self.objective(bot, ai, now, selected)
-        if (state.regrouping and self._ally_position(bot,
-                self.director.arena.vehicles.get(state.regroup_ally),state) is None):
-            self._end_regroup(state,now)
-        regroup = self._regroup(state, self._nearest_ally(bot,state), now)
         if selected is not None and selected in ai.visible:
+            self._end_regroup(state, now)
             state.last_kind = None
             return None
+        objective = self.objective(bot, ai, now, selected)
         if objective is not None and objective.kind == 'defend':
             self._end_regroup(state, now)
             state.last_kind = objective.kind
             return objective
-        if regroup is not None:
-            state.last_kind = regroup.kind
-            return regroup
         def usable(entity):
             sighting = state.sightings.get(entity)
             return sighting is not None and not sighting.visited and now >= sighting.blocked_until
@@ -218,11 +212,28 @@ class BotOrders:
                         best = rank, entity
                 if best is not None:
                     state.investigating = best[1]
-        if state.investigating is None:
-            state.last_kind = objective.kind if objective is not None else None
+        if state.investigating is not None:
+            self._end_regroup(state, now)
+            state.last_kind = 'investigate'
+            return Order('investigate', state.sightings[state.investigating].goal, self.INVESTIGATE_STOP)
+        if objective is not None:
+            self._end_regroup(state, now)
+            state.last_kind = objective.kind
             return objective
-        state.last_kind = 'investigate'
-        return Order('investigate', state.sightings[state.investigating].goal, self.INVESTIGATE_STOP)
+        if (state.regrouping and self._ally_position(bot,
+                self.director.arena.vehicles.get(state.regroup_ally), state) is None):
+            self._end_regroup(state, now)
+        nearest = self._nearest_ally(bot, state)
+        if nearest is not None:
+            home = self.home_centers[bot.team]
+            position = bot.pose.position
+            # The leader keeps pushing. Only a straggler should leave its
+            # lane to catch up, never a scout to return to the rear.
+            if self._distance2(nearest[1], home) <= self._distance2(position, home):
+                nearest = None
+        regroup = self._regroup(state, nearest, now)
+        state.last_kind = regroup.kind if regroup is not None else None
+        return regroup
 
     def objective(self, bot, ai, now, selected=None):
         """Assign capturers and responders from public progress and allies."""

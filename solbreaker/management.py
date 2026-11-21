@@ -218,6 +218,7 @@ class Job:
         self.action = action
         self.started = False
         self.returncode = None
+        self.resource_error = ''
         self._stop_requested = False
         self.process = subprocess.Popen(argv, cwd=PROJECT, stdin=subprocess.PIPE,
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, encoding='utf-8', errors='replace',
@@ -229,10 +230,14 @@ class Job:
     def _read(self, output):
         for line in self.process.stdout:
             try:
-                if json.loads(line).get('event') == 'started':
+                event = json.loads(line)
+                if event.get('event') == 'started':
                     self.started = True
                     if self._stop_requested:
                         self._send_stop()
+                elif event.get('event') == 'vehicle_catalog_error' and isinstance(event.get('message'), str):
+                    self.resource_error = event['message']
+                    continue
             except (ValueError, AttributeError):
                 pass
             try:
@@ -409,13 +414,15 @@ class Manager:
             if self.server.running and self.server.started and self.notice in (
                     'Сервер запускается', 'Сервер запускается для подготовки карт…'):
                 self.notice = 'Сервер готов к подключениям'
-            if not self.server.running and not self._server_exit_reported:
-                self.notice = ('Сервер остановлен' if self.server.process.returncode == 0
-                               else f'Сервер завершился с ошибкой {self.server.process.returncode}. Открой журнал')
+            if not self.server.running and self.server.returncode is not None and not self._server_exit_reported:
+                self.notice = ('Сервер остановлен' if self.server.returncode == 0
+                               else self.server.resource_error or
+                               f'Сервер завершился с ошибкой {self.server.returncode}. Открой журнал')
                 self._server_exit_reported = True
         if self.job is not None and self.job.returncode is not None:
             self.notice = ('Готово' if self.job.returncode == 0
-                           else f'Операция завершилась с ошибкой {self.job.returncode}. Подробности в журнале')
+                           else self.job.resource_error or
+                           f'Операция завершилась с ошибкой {self.job.returncode}. Подробности в журнале')
             self.job = None
         if self.client is not None and (code := self.client.poll()) is not None:
             self.client = None
