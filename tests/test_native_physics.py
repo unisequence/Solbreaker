@@ -921,6 +921,30 @@ class NativePhysicsTests(unittest.TestCase):
         self.assertEqual(world._constrain_dynamic_pose(entity, pose, velocity, rotation),
                          (pose, velocity))
 
+    def test_sandbox_landing_clears_the_low_part_of_a_curved_track_nose(self):
+        assets = self.assets('flat')
+        outline = ((0., -1.), (0., .8), (.02, 2.6), (.8, 3.),
+                   (1.4, 3.), (1.4, -1.))
+        left = np.array([(x, y, z) for x in (-1.1, -.7) for y, z in outline])
+        right = np.array([(x, y, z) for x in (.7, 1.1) for y, z in outline])
+        hull, _, _, turret = assets.tank_shapes
+        assets.tank_shapes = (hull, ('chassis_track_L', left),
+                              ('chassis_track_R', right), turret)
+        assets.contact_proxies = vehicle_proxies(assets.tank_shapes, assets.turret_node, assets.support)
+        world = self.world(assets)
+        velocity = (1., -3., 6.)
+        self.assertTrue(world.set_flight_velocity(200, velocity, (0., 0., 0.), sandbox_landing=True))
+        ground = world.terrain.height(0., 0.)
+        pose = Pose((0., ground + .45, 0.), 0., .30)
+        rotation = matrix(pose.yaw, pose.pitch)
+
+        corrected, corrected_velocity = world._constrain_dynamic_pose(200, pose, velocity, rotation)
+
+        track_floor = (right @ rotation.T)[:, 1].min() + corrected.position[1]
+        self.assertAlmostEqual(track_floor, ground - world.SKIN)
+        self.assertEqual(corrected_velocity, (1., 0., 6.))
+        self.assertEqual(corrected.pitch, pose.pitch)
+
     def test_dynamic_terrain_guard_ignores_empty_space_below_a_bevelled_nose(self):
         from solbreaker.collision import bullet, matrix, quaternion
         assets = self.assets('flat')

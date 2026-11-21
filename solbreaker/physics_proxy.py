@@ -76,18 +76,19 @@ def _lower_envelope(vertices):
     return np.asarray(lower)
 
 
-def _prism(vertices, low, high):
+def _prism(vertices, low, high, *, track):
     lower = _lower_envelope(vertices)
-    floor = float(low[1])
-    tolerance = 64.*np.finfo(float).eps*max(1., float(high[1]-low[1]))
-    flat = lower[np.abs(lower[:, 1]-floor) <= tolerance]
-    if not len(flat):
-        raise ValueError('Vehicle proxy has no lower carrying outline')
-    # End height, beginning/end of the lowest floor, and end height retain
-    # front/rear upsweep with at most four lower points. The two upper corners
-    # close one convex polygon, extruded across the original component width.
-    candidates = [lower[0], (flat[0, 0], floor), (flat[-1, 0], floor), lower[-1],
-                  (float(high[2]), float(high[1])), (float(low[2]), float(high[1]))]
+    if not track:
+        floor = float(low[1])
+        tolerance = 64.*np.finfo(float).eps*max(1., float(high[1]-low[1]))
+        flat = lower[np.abs(lower[:, 1]-floor) <= tolerance]
+        if not len(flat):
+            raise ValueError('Vehicle proxy has no lower carrying outline')
+        # Retain the existing four-point approximation for the hull.
+        lower = (lower[0], (flat[0, 0], floor), (flat[-1, 0], floor), lower[-1])
+    # A chord across the full upsweep can sit well above the visible tread.
+    # Its convex outline retains only the points needed for ground contact.
+    candidates = [*lower, (float(high[2]), float(high[1])), (float(low[2]), float(high[1]))]
     profile = []
     for point in candidates:
         point = tuple(float(value) for value in point)
@@ -96,7 +97,7 @@ def _prism(vertices, low, high):
     if profile[-1] == profile[0]:
         profile.pop()
     result = np.asarray([(float(x), y, z) for x in (low[0], high[0]) for z, y in profile], dtype=float)
-    if len(result) > 12 or len(profile) < 3 or not np.isfinite(result).all():
+    if len(profile) < 3 or not np.isfinite(result).all():
         raise ValueError('Invalid generated vehicle proxy')
     result.setflags(write=False)
     return result
@@ -128,8 +129,10 @@ def vehicle_proxies(tank_shapes, turret_node, support):
             raise ValueError('Invalid vehicle proxy component name')
         names.add(name)
         vertices, low, high, center, half_extents = _component(source)
-        if name == 'hull' or name.startswith('chassis_track_'):
-            parts.append(ProxyPart(name, 'prism', center, half_extents, _prism(vertices, low, high)))
+        track = name.startswith('chassis_track_')
+        if name == 'hull' or track:
+            prism = _prism(vertices, low, high, track=track)
+            parts.append(ProxyPart(name, 'prism', center, half_extents, prism))
         else:
             parts.append(ProxyPart(name, 'box', center, half_extents))
     if 'hull' not in names or turret_node is not None and turret_node not in names:
