@@ -8,6 +8,48 @@ import re
 from PySide6.QtWidgets import QApplication
 
 ENGLISH = {
+    'В папке установки есть файл или ссылка, мешающие обновлению. Распакуй новую версию в отдельную папку и укажи прежние пути к клиенту и данным в параметрах.':
+        'A file or link in the installation folder blocks the update. Extract the new release to a separate folder and select your existing client and data folders in Settings.',
+    'Подготовленный клиент отсутствует или был изменён. Проверь путь к клиенту или подготовь новую копию через лаунчер.':
+        'The prepared client is missing or has changed. Check the client path or prepare a new copy in the launcher.',
+    'Steam не дал доступ к загрузке. Войди в аккаунт, на котором доступен Blitz, и повтори попытку.':
+        'Steam denied access to the download. Sign in with an account that has access to Blitz and try again.',
+    'Steam не завершил загрузку. Проверь соединение и повтори попытку. Можно продолжить через консоль Steam.':
+        'Steam did not finish the download. Check your connection and try again. You can also continue from the Steam console.',
+    'Выбери освещение карт':
+        'Choose map lighting',
+    'По сохранённому адресу отвечает другой сервер Solbreaker':
+        'A different Solbreaker server is responding at the saved address',
+    'Не удалось проверить сертификат сервера. Проверь дату и время, обнови корневые сертификаты системы и повтори попытку.':
+        'Could not verify the server certificate. Check your system date and time, update your root certificates, and try again.',
+    'На диске не хватает свободного места. Освободи место на диске установки и повтори попытку.':
+        'The installation drive is out of free space. Free up some space and try again.',
+    'Порт сервера уже занят. Закрой другой экземпляр сервера или поменяй порты в параметрах.':
+        'The server port is already in use. Close another instance of the server or change the ports in Settings.',
+    'Пути к игре и клиенту Solbreaker конфликтуют. Укажи исходный Blitz и отдельную папку клиента Solbreaker в параметрах.':
+        'The game and Solbreaker client paths conflict. Set the original Blitz folder and a separate Solbreaker client folder in Settings.',
+    'Путь к клиенту слишком длинный. Выбери папку ближе к корню диска и повтори подготовку.':
+        'The client path is too long. Choose a folder closer to the drive root and try again.',
+    'Физика карты не загрузилась. На Windows попробуй перенести Solbreaker и папку данных по пути без кириллицы, например C:/Games/Solbreaker.':
+        'The map physics failed to load. On Windows, try moving Solbreaker and its data folder to paths without Cyrillic characters, such as C:/Games/Solbreaker.',
+    'Выбрана несовместимая сборка Blitz. Укажи папку поддерживаемой версии игры или скачай её через лаунчер.':
+        'This Blitz build is incompatible. Choose the folder for a supported build or download it through the launcher.',
+    'Файлы обновления неполные или повреждены. Скачай обновление ещё раз.':
+        'The update files are incomplete or damaged. Download the update again.',
+    'Не удалось заменить файл. Закрой игру и другие экземпляры Solbreaker перед повторной попыткой.':
+        'Could not replace a file. Close the game and other Solbreaker instances before trying again.',
+    'Системе не удалось открыть или записать файл. Проверь права на папку Solbreaker и повтори попытку.':
+        'The system could not open or write a file. Check the permissions for the Solbreaker folder and try again.',
+    'Не удалось подключиться по сети. Проверь подключение и адрес сервера, затем повтори попытку.':
+        'The network connection failed. Check your connection and the server address, then try again.',
+    'Не найдены Steam или Proton. Проверь пути к Steam и Proton в параметрах.':
+        'Could not find Steam or Proton. Check their paths in Settings.',
+    'Папка клиента уже существует. Выбери новый путь для подготовки клиента.':
+        'The client folder already exists. Choose a new path for client setup.',
+    'Бой не запустился. Попробуй другую карту. Если ошибка повторится, открой журнал.':
+        'The battle did not start. Try another map. If the error persists, open the log.',
+    'Не удалось запустить клиент. Открой журнал.':
+        'Could not start the client. Open the log.',
     'Освещение карт': 'Map lighting',
     'Оригинал': 'Original',
     'Закат': 'Sunset',

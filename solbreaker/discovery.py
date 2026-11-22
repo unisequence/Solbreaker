@@ -6,6 +6,7 @@ import http.client
 import ipaddress
 import json
 import os
+import re
 from pathlib import Path
 import secrets
 import select
@@ -147,7 +148,9 @@ def tailscale_peers(addresses):
         return {}
 
 
-def discover(interfaces, *, timeout=1.25):
+def discover(interfaces=None, *, timeout=1.25):
+    if interfaces is None:
+        interfaces = (interface for _, interface, _ in local_interfaces())
     interfaces = tuple(interfaces)
     destinations = {}
     for interface in interfaces:
@@ -215,7 +218,9 @@ def interface_scope(interface, name):
         return str(TAILNET)
     if any(interface.network.subnet_of(network) for network in PRIVATE):
         return str(interface.network)
-    adapter_names = set(name.split())
+    adapter_names = set(re.findall(r'[a-z0-9]+', name))
+    if 'radminvpn' in adapter_names:
+        adapter_names.add('radmin')
     if 'ham0' in adapter_names:
         adapter_names.add('hamachi')
     for adapter, network in VPN_NETWORKS.items():
@@ -224,26 +229,63 @@ def interface_scope(interface, name):
     return None
 
 
+def _windows_adapter_descriptions():
+    script = ("[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; "
+              "Get-NetAdapter -IncludeHidden -ErrorAction Stop | Where-Object Status -eq 'Up' | "
+              "Select-Object InterfaceIndex, InterfaceDescription | ConvertTo-Json -Compress")
+    try:
+        result = subprocess.run(['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', script],
+                                capture_output=True, check=True, timeout=3,
+                                creationflags=subprocess.CREATE_NO_WINDOW)
+        rows = json.loads(result.stdout.decode('utf-8-sig'))
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return {}
+    if isinstance(rows, dict):
+        rows = [rows]
+    if not isinstance(rows, list):
+        return {}
+    return {row['InterfaceIndex']: row['InterfaceDescription'] for row in rows
+            if isinstance(row, dict) and type(row.get('InterfaceIndex')) is int
+            and isinstance(row.get('InterfaceDescription'), str)}
+
+
 def local_interfaces():
     try:
         from PySide6.QtNetwork import QNetworkInterface
     except ImportError:
         return []
     interfaces = {}
+    descriptions = None
     for adapter in QNetworkInterface.allInterfaces():
         flags = adapter.flags()
         active = QNetworkInterface.IsUp | QNetworkInterface.IsRunning
-        if flags & active != active or flags & QNetworkInterface.IsLoopBack:
+        if flags & QNetworkInterface.IsLoopBack:
+            continue
+        running = flags & active == active
+        if not running and sys.platform != 'win32':
             continue
         name = adapter.humanReadableName() or adapter.name()
+        label = f'{name} {adapter.name()}'
         for address in adapter.addressEntries():
             ip = address.ip().toString()
             prefix = address.prefixLength()
             if discoverable_ip(ip) and 0 <= prefix <= 32:
                 interface = ipaddress.IPv4Interface(f'{ip}/{prefix}')
-                scope = interface_scope(interface, f'{name} {adapter.name()}')
+                vpn = vpn_network(interface.ip)
+                scope = interface_scope(interface, label) if running else None
+                display_name = name
+                if scope is None and vpn is not None and sys.platform == 'win32':
+                    # Qt may expose only a renamed connection or omit the
+                    # running flag for a virtual adapter. Match its driver by
+                    # interface index and require Windows to report it as up.
+                    if descriptions is None:
+                        descriptions = _windows_adapter_descriptions()
+                    driver = descriptions.get(adapter.index(), '')
+                    scope = interface_scope(interface, driver)
+                    if scope:
+                        display_name = driver
                 if scope:
-                    if vpn_network(interface.ip) is not None:
+                    if vpn is not None:
                         interface = ipaddress.IPv4Interface(f'{ip}/{scope.partition("/")[2]}')
-                    interfaces[ip] = (name, interface, scope)
+                    interfaces[ip] = (display_name, interface, scope)
     return list(interfaces.values())

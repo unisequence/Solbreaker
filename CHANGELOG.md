@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.0
+
+- Classic bots can push together after a spotted opponent fires. They call
+  off the push if another threat appears.
+- Fixed detection of renamed Radmin VPN and Hamachi adapters on Windows.
+- Fixed the sign-in prompt for an incorrect email or password.
+- Added English fallback text for Solbreaker UI labels in other game languages.
+  Fixed the untranslated Supremacy label on the battle loading screen.
+- The launcher explains common setup, update, network and map-loading errors
+  and tells players what to check next. The journal keeps the technical details.
+
 ## 0.1.0-rc.3
 
 - The launcher can find LAN servers through Radmin VPN and Hamachi.

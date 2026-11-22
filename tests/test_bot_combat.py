@@ -19,6 +19,45 @@ def vehicle(entity, team, position):
 
 
 class CombatManeuverTests(unittest.TestCase):
+    def test_group_push_uses_a_seen_shot_and_aborts_on_a_second_contact(self):
+        lead = vehicle(200, 1, (0., 0., 0.))
+        wing = vehicle(201, 1, (17., 0., 0.))
+        enemy = vehicle(300, 2, (0., 0., 50.))
+        actors = {v.entity_id: v for v in (lead, wing, enemy)}
+        drivers = {200: TrainingBot(200, vehicle_class='heavyTank'),
+                   201: TrainingBot(201, vehicle_class='mediumTank')}
+        for bot in (lead, wing):
+            bot.health = bot.max_health = 1000
+            bot.reload_at = 0.
+            drivers[bot.entity_id].known[300] = (enemy.pose.position, 10.)
+        arena = SimpleNamespace(vehicles=actors, training_bots=drivers, players={}, world=None)
+        director = BotDirector(arena)
+        director.navigation = Mock()
+        director.orders.objective = Mock(return_value=None)
+        director._maneuver_clear = Mock(return_value=True)
+        director._traffic_corridor_clear = Mock(return_value=True)
+        director._find_firing_position = Mock(return_value=(21., 0., 6.))
+        director._avoid = Mock(side_effect=lambda bot, goal, flags, now: flags)
+
+        director.observe_shot(enemy, 10.)
+        director._update_team_pushes(10.)
+        self.assertFalse(director.team_pushes)
+
+        for ai in drivers.values():
+            ai.visible.add(300)
+        director.observe_shot(enemy, 10.25)
+        director._update_team_pushes(10.25)
+        push = director.team_pushes[1]
+        self.assertEqual(set(push.goals), {200, 201})
+        for bot in (lead, wing):
+            ai = drivers[bot.entity_id]
+            self.assertEqual(director._drive_team_push(bot, ai, 300, 10.25, 12.), 0)
+            self.assertTrue(director._drive_team_push(bot, ai, 300, push.start, 12.) & ai.FORWARD)
+            ai.known[300] = (enemy.pose.position, push.start)
+        drivers[201].visible.add(301)
+        director._update_team_pushes(push.start)
+        self.assertFalse(director.team_pushes)
+
     def test_patrols_advance_without_sight_and_use_class_ranges(self):
         scout = vehicle(200, 1, (-15., 0., 0.))
         heavy = vehicle(201, 1, (0., 0., 0.))

@@ -61,6 +61,26 @@ class RegistrationTests(unittest.IsolatedAsyncioTestCase):
         row = self.accounts.store.db.execute('SELECT password_hash FROM accounts WHERE id=?', (account.id,)).fetchone()
         self.assertNotEqual(row['password_hash'], b'sample-password')
 
+    async def test_invalid_password_uses_a_localized_error_key(self):
+        from solbreaker.client_ui import STRINGS_EN, STRINGS_RU, _local_labels
+        from solbreaker.localization import LOGIN_ERROR_LABELS
+
+        account = await self.accounts.register('pilot@example.test', 'sample-password', 'pilot')
+        path = '/id/api/v2/account/credentials/create/oauth/token/'
+        for username in (account.username, 'missing@example.test'):
+            fields = {'username': [username], 'password': ['wrong-password']}
+            for result in (self.accounts.handle('POST', path, fields, {}),
+                           await self.accounts.handle_async('POST', path, fields, {})):
+                status, body, _ = result
+                self.assertEqual(status, 401)
+                self.assertEqual(body, {'error': 'invalid_grant'})
+        valid = {'username': [account.username], 'password': ['sample-password']}
+        status, body, _ = await self.accounts.handle_async('POST', path, valid, {})
+        self.assertEqual((status, body['user']), (200, account.id))
+        for relative in (STRINGS_EN, STRINGS_RU):
+            labels = _local_labels(relative)
+            self.assertFalse(LOGIN_ERROR_LABELS.keys() - labels.keys())
+
     async def test_invalid_inputs_do_not_start_password_work_or_resolve_dns(self):
         with patch('socket.getaddrinfo', side_effect=AssertionError('registration must not resolve email DNS')):
             for email in (None, '', 'pilot', 'a@@example.test', 'a..b@example.test', 'a@-bad.test', 'a@host', 'a@host.1'):

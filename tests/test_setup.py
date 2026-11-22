@@ -20,6 +20,28 @@ class SetupTests(unittest.TestCase):
         return parser().parse_args(['--game', str(self.game), '--state', str(self.root/'state'),
                                     '--skip-build', '--skip-dependencies', *extra])
 
+    def test_additional_client_locales_keep_stock_labels_and_get_solbreaker_keys(self):
+        import yaml
+        from solbreaker import client_ui, dvpl
+
+        strings = self.game/'Data/Strings'
+        strings.mkdir(parents=True)
+        original = dvpl.encode('Cancel: Annuler\nNumeric: "001"\n'.encode())
+        french = strings/'fr.yaml.dvpl'
+        french.write_bytes(original)
+        (strings/'en.yaml.dvpl').write_bytes(dvpl.encode(b'Cancel: Cancel\n'))
+
+        patches = client_ui._fallback_locale_patches(self.game, 'Local server')
+        self.assertEqual(set(patches), {'Strings/fr.yaml.dvpl'})
+        labels = yaml.load(dvpl.decode(patches['Strings/fr.yaml.dvpl']), Loader=client_ui._StringsLoader)
+        self.assertEqual(labels['Cancel'], 'Annuler')
+        self.assertEqual(labels['Numeric'], '001')
+        self.assertEqual(labels['Local/BotsTitle'], 'BATTLE WITH BOTS')
+        self.assertEqual(labels['gameplaymode/Supremacy'], 'SUPREMACY')
+        self.assertEqual(labels['Local PoC'], 'Local server')
+        self.assertIn('Local/SbSetupRandom', labels)
+        self.assertEqual(french.read_bytes(), original)
+
     def test_existing_state_requires_explicit_resume_before_mutation(self):
         state = self.root/'state'
         state.mkdir()

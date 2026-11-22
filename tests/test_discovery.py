@@ -100,6 +100,42 @@ class DiscoveryTests(unittest.TestCase):
             with self.subTest(address=address, adapter=name):
                 self.assertEqual(discovery.interface_scope(ipaddress.IPv4Interface(address), name), expected)
 
+    def test_windows_uses_driver_description_for_renamed_vpn_adapter(self):
+        from PySide6.QtNetwork import QNetworkInterface
+
+        def adapter(index, name, ip, flags):
+            device = Mock()
+            device.index.return_value = index
+            device.name.return_value = f'{{device-{index}}}'
+            device.humanReadableName.return_value = name
+            device.flags.return_value = flags
+            address = Mock()
+            address.ip.return_value.toString.return_value = ip
+            address.prefixLength.return_value = 32
+            device.addressEntries.return_value = [address]
+            return device
+
+        up = QNetworkInterface.IsUp | QNetworkInterface.IsRunning
+        devices = [
+            adapter(8, 'Ethernet 3', '26.5.1.10', QNetworkInterface.IsUp),
+            adapter(10, 'Ethernet 4', '26.6.1.10', up),
+            adapter(11, 'Ethernet 5', '25.5.1.10', up),
+            adapter(12, 'Offline Radmin VPN', '26.8.1.10', QNetworkInterface.IsUp),
+        ]
+        with (patch.object(QNetworkInterface, 'allInterfaces', return_value=devices),
+              patch.object(discovery.sys, 'platform', 'win32'),
+              patch.object(discovery, '_windows_adapter_descriptions', return_value={
+                  8: 'Famatech RadminVPN Ethernet Adapter',
+                  10: 'Intel Ethernet Adapter',
+                  11: 'LogMeIn Hamachi Virtual Ethernet Adapter',
+              }) as descriptions):
+            result = discovery.local_interfaces()
+        self.assertEqual([(name, str(interface), scope) for name, interface, scope in result], [
+            ('Famatech RadminVPN Ethernet Adapter', '26.5.1.10/8', '26.0.0.0/8'),
+            ('LogMeIn Hamachi Virtual Ethernet Adapter', '25.5.1.10/8', '25.0.0.0/8'),
+        ])
+        descriptions.assert_called_once()
+
     def test_overlay_probe_uses_the_vpn_source_and_accepts_the_profile(self):
         for octet, name in ((26, 'Radmin VPN'), (25, 'Hamachi')):
             with self.subTest(adapter=name):

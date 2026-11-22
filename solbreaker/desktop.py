@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog, QFil
     QVBoxLayout, QWidget)
 
 from . import __version__, discovery, updates
-from .management import PROJECT, Manager, Settings, read_log
+from .management import PROJECT, Manager, Settings, friendly_error, log_tail, read_log
 from .build_info import COMPATIBILITY
 from .connection import atomic_write
 from .replay_inspector import ReplayError, load_replay
@@ -406,9 +406,8 @@ class SetupWizard(QDialog):
         self.lan_results.setEnabled(False)
         self.search_button.setEnabled(False)
         self.lan_status.setText(tr('Ищем серверы в LAN и VPN…'))
-        interfaces = [interface for _, interface, _ in discovery_interfaces()]
         executor = ThreadPoolExecutor(max_workers=1)
-        self.lan_scan = executor.submit(discovery.discover, interfaces)
+        self.lan_scan = executor.submit(discovery.discover)
         executor.shutdown(wait=False)
         self.lan_timer.start(100)
 
@@ -628,7 +627,7 @@ class SetupWizard(QDialog):
         if self.job is not None and self.job.returncode is not None:
             result = self.job.returncode
             action = self.job.action
-            resource_error = self.job.resource_error
+            cause = self.job.resource_error or self.job.failure_notice
             self.job = None
             if result == 0 or action == 'cleanup-depot':
                 try:
@@ -640,8 +639,8 @@ class SetupWizard(QDialog):
                         self.activity.setText(tr('Игра готова. Папку загрузки пока не удалось удалить.'))
                 except (OSError, ValueError) as error:
                     self.show_error(error)
-            elif resource_error:
-                self.show_error(resource_error)
+            elif cause:
+                self.show_error(cause)
             elif self.first_step and not self.local:
                 self.show_error(tr('Не удалось настроить подключение. Причина указана в журнале выше.'))
             else:
@@ -652,7 +651,7 @@ class SetupWizard(QDialog):
         self.unlock_depot()
         self.pending.clear()
         self.job = None
-        self.error_label.setText(tr(str(error)))
+        self.error_label.setText(tr(friendly_error(error) or str(error)))
         self.error_label.setVisible(True)
         self.progress.setVisible(False)
         self.next.setEnabled(True)
@@ -1335,7 +1334,7 @@ class Window(QMainWindow):
             release = task.result()
         except Exception as error:
             self.log.appendPlainText(str(error))
-            self.error('Не удалось подготовить обновление. Подробности в журнале.')
+            self.error(friendly_error(error) or 'Не удалось подготовить обновление. Подробности в журнале.')
             return
         if release is None:
             self.manager.notice = 'Установлена последняя доступная версия.'
@@ -1354,8 +1353,13 @@ class Window(QMainWindow):
         if self.replay_view_task is not None and self.replay_view_task.done():
             self.finish_replay_view()
         if self.update_result:
-            self.manager.notice = ('Solbreaker обновлён.' if self.update_result == 'success'
-                                   else 'Установка обновления не удалась. См. runtime/launcher-update.log.')
+            if self.update_result == 'success':
+                self.manager.notice = 'Solbreaker обновлён.'
+            else:
+                detail = log_tail(PROJECT/'runtime/launcher-update.log')
+                self.log.appendPlainText(detail)
+                self.manager.notice = (friendly_error(detail) or
+                                       'Установка обновления не удалась. См. runtime/launcher-update.log.')
             self.update_result = ''
         self.progress.setVisible(self.manager.busy or starting or self.update_task is not None)
         self.notice.setText(self.update_detail or tr(self.manager.notice))
@@ -1415,8 +1419,11 @@ class Window(QMainWindow):
                                         status in ('Сервер остановлен', 'Ошибка запуска сервера'))
 
     def error(self, error):
-        self.manager.notice = str(error)
-        QMessageBox.warning(self, 'Solbreaker', tr(str(error)))
+        hint = friendly_error(error)
+        if hint:
+            self.log.appendPlainText(str(error))
+        self.manager.notice = hint or str(error)
+        QMessageBox.warning(self, 'Solbreaker', tr(self.manager.notice))
 
     def closeEvent(self, event):
         if self.update_task is not None:

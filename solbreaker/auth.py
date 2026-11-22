@@ -154,7 +154,9 @@ class LocalAccounts:
             except PasswordQueueFull:
                 return 429, {'error': 'local_login_busy'}, {'Retry-After': '1'}
         if account is None:
-            return 401, {'error': 'invalid_grant', 'error_description': 'Invalid local credentials'}, {}
+            # The native client matches the bare code to its localized login
+            # prompt. Adding error_description sends it to the generic dialog.
+            return 401, {'error': 'invalid_grant'}, {}
         return self._access_response(account.id)
 
     async def register(self, email, password, nickname):
@@ -219,7 +221,7 @@ class LocalAccounts:
                 account = self.store.authenticate(value("username"), value("password"),
                                                   autocreate=self.autocreate)
                 if account is None:
-                    return 401, {"error": "invalid_grant", "error_description": "Invalid local credentials"}, {}
+                    return 401, {"error": "invalid_grant"}, {}
                 account_id = account.id
             return self._access_response(account_id)
         if method == "POST" and path in (prefix + "token1/", "/id/api/v2/account/info/"):

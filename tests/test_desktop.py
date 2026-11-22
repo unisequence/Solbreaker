@@ -394,6 +394,11 @@ class DesktopTests(unittest.TestCase):
         self.assertEqual(tr('Порт должен быть целым числом от 1024 до 65535'),
                          'The port must be an integer from 1024 to 65535')
 
+    def test_all_recognized_failures_have_english_launcher_text(self):
+        from solbreaker.desktop_i18n import ENGLISH
+        from solbreaker.management import DIAGNOSTIC_MESSAGES
+        self.assertFalse({message for _, message in DIAGNOSTIC_MESSAGES} - ENGLISH.keys())
+
     def test_language_switch_preserves_pending_name_when_server_manifest_has_old_name(self):
         import json
         state = self.root/'state'

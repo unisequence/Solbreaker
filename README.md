@@ -22,9 +22,8 @@ Choose **Proving Ground** in the hangar to drive the suspension circuit, test
 shots or try Gravity and Mad Games abilities together. You can also select the
 map in a training room.
 
-Solbreaker is in public prerelease. Expect bugs, incomplete mechanics and changes
-between versions. Back up server data before updating. The project does not
-include the game client or its assets; you need your own compatible copy.
+Back up server data before updating. The project does not include the game
+client or its assets. Setup uses your compatible copy.
 Setup creates a separate client and applies build-pinned executable and UI
 adapters. Their scope and validation are described in [Client patches](docs/CLIENT_PATCHES.md).
 

@@ -15,6 +15,7 @@ from .build_info import STEAM_APP, STEAM_DEPOT, STEAM_MANIFEST
 from .connection import atomic_write
 from .desktop import button, document, label
 from .desktop_i18n import tr
+from .management import friendly_error
 from .steam_depot import DEPOT_FOLDER, DOWNLOAD_COMMAND, bundled_downloader, find_depots, verify_depot
 
 DEPOT_PROGRESS = re.compile(r'^\s*(\d{1,3}[.,]\d{2})%\s')
@@ -214,6 +215,7 @@ class DepotDialog(QDialog):
         self.download_percent = -1.
         self.download_output = b''
         self.download_error = ''
+        self.status.setToolTip('')
         self.qr_rows = None
         self.set_working(True)
         self.manual.hide()
@@ -310,8 +312,9 @@ class DepotDialog(QDialog):
         elif code or exit_status != QProcess.NormalExit:
             self.progress.hide()
             detail = self.download_error
-            self.status.setText(tr('DepotDownloader завершился с ошибкой ({code}).').format(code=code)
-                                + (f' {detail}' if detail else ''))
+            self.status.setText(tr(friendly_error(detail) or
+                                   'Steam не завершил загрузку. Проверь соединение и повтори попытку. Можно продолжить через консоль Steam.'))
+            self.status.setToolTip(detail)
         else:
             self.folder.setText(str(self.download_target))
             self.verify()

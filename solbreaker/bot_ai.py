@@ -38,6 +38,14 @@ class FiringMove:
     generation: int
 
 
+@dataclass
+class TeamPush:
+    target: int
+    start: float
+    end: float
+    goals: dict
+
+
 # "normal" keeps the original single-bot stop and query cadence.
 DIFFICULTIES = {
     'easy': BotProfile(32., .4, 1.2, 1.6, 1.4),
@@ -330,6 +338,10 @@ class BotDirector:
         self.orders = BotOrders(self)
         self.finishers = {}
         self.next_finisher_check = {}
+        self.observed_shots = {}
+        self.team_pushes = {}
+        self.next_push_check = 0.
+        self.push_cooldowns = {}
         self.phases = {eid:i%self.DECISION_TICKS for i,eid in enumerate(arena.training_bots)}
         # Spawn areas are public map objectives, captured once. Patrol never
         # reads the current position of an unseen opponent to follow it.
@@ -585,6 +597,112 @@ class BotDirector:
         return nav.clear(bot.pose.position,point,
             blocked=tuple(node for node,until in ai.route_bad_cells.items() if now<until),
             climb_edges=nav.actor_climb_edges.get(bot.entity_id))
+
+    def observe_shot(self, shooter, now):
+        if self.navigation is None:
+            return
+        for entity, ai in self.arena.training_bots.items():
+            observer = self.arena.vehicles[entity]
+            sighting = ai.known.get(shooter.entity_id)
+            if (observer.alive and observer.team != shooter.team and shooter.entity_id in ai.visible
+                    and sighting is not None and now - sighting[1] <= .25):
+                self.observed_shots[observer.team] = (shooter.entity_id, now)
+                push = self.team_pushes.get(observer.team)
+                if push is not None and push.target == shooter.entity_id:
+                    self.team_pushes.pop(observer.team)
+
+    def _push_ready(self, bot, ai, target, now):
+        sighting = ai.known.get(target)
+        motion = getattr(self.arena.world, 'motion', {}).get(bot.entity_id)
+        nearby_rival = any(enemy != target and (
+            enemy not in ai.known or math.dist(bot.pose.position, ai.known[enemy][0]) <= 105.)
+            for enemy in ai.visible)
+        return (bot.alive and bot.entity_id not in getattr(self.arena, 'disabled_training_bots', ())
+                and not self.traffic.immobilized(bot)
+                and (motion is None or motion.grounded) and bot.entity_id not in self.traffic.by_entity
+                and target in ai.visible and not nearby_rival and sighting is not None and now - sighting[1] <= .25
+                and ai.cover_goal is None and ai.passing is None and now >= ai.reverse_until
+                and not ai.recovery_replan and bot.health >= .35 * bot.max_health)
+
+    def _update_team_pushes(self, now):
+        for team, push in tuple(self.team_pushes.items()):
+            if now >= push.end or not all(self._push_ready(self.arena.vehicles[e], self.arena.training_bots[e],
+                                                          push.target, now) for e in push.goals):
+                self.team_pushes.pop(team)
+        if now < self.next_push_check:
+            return
+        self.next_push_check = now + .25
+        for team, (target, fired) in tuple(self.observed_shots.items()):
+            if now - fired > .9:
+                self.observed_shots.pop(team)
+                continue
+            if team in self.team_pushes or now < self.push_cooldowns.get(team, 0.):
+                continue
+            movers, support = [], []
+            for entity, ai in self.arena.training_bots.items():
+                bot = self.arena.vehicles[entity]
+                if (bot.team != team or not self._push_ready(bot, ai, target, now) or bot.ammo <= 0
+                        or bot.reload_at > now + 1.75 or bot.burst_pending or bot.pump_times and not bot.clip
+                        or self.orders.objective(bot, ai, now, target) is not None):
+                    continue
+                x, y, z = bot.pose.position
+                tx, ty, tz = ai.known[target][0]
+                span = math.hypot(tx - x, tz - z)
+                if ai.vehicle_class == 'AT-SPG' and 24. <= span <= 125.:
+                    origin = (x, y + bot.gun.TURRET[1] + bot.gun.GUN[1], z)
+                    hit, = self.arena.world._static_rays([origin], [(tx, ty + ai.AIM_HEIGHT, tz)])
+                    if hit[0] < 0 or hit[2] >= .999:
+                        support.append(bot)
+                if ai.vehicle_class not in ('heavyTank', 'mediumTank', 'lightTank') or not 24. <= span <= 115.:
+                    continue
+                bearing = math.atan2(tx - x, tz - z)
+                movers.append((bot, ai, bearing, span))
+            movers.sort(key=lambda item: (item[1].vehicle_class != 'heavyTank', item[3], item[0].entity_id))
+            for lead, ai, bearing, _ in movers:
+                if lead.reload_at > now + .45 or abs(wrap(bearing - lead.pose.yaw)) > .9:
+                    continue
+                x, y, z = lead.pose.position
+                front = (x + 8. * math.sin(bearing), y, z + 8. * math.cos(bearing))
+                if not self._maneuver_clear(lead, ai, front, now) or not self._traffic_corridor_clear(lead, front):
+                    continue
+                for wing, wing_ai, _, _ in movers:
+                    if wing is lead or math.dist(wing.pose.position, lead.pose.position) > 55.:
+                        continue
+                    flank = self._find_firing_position(wing, wing_ai, target, now)
+                    if (flank is None or math.dist(front, flank) < 9.
+                            or abs(wrap(math.atan2(flank[0] - wing.pose.position[0],
+                                                  flank[2] - wing.pose.position[2]) - wing.pose.yaw)) > 1.15):
+                        continue
+                    goals = {lead.entity_id: front, wing.entity_id: flank}
+                    for guard in support:
+                        if math.dist(guard.pose.position, lead.pose.position) <= 55.:
+                            goals[guard.entity_id] = guard.pose.position
+                            break
+                    self.team_pushes[team] = TeamPush(target, now + .2, now + 3.2, goals)
+                    self.push_cooldowns[team] = now + 12.
+                    self.stats['team_pushes'] = self.stats.get('team_pushes', 0) + 1
+                    break
+                if team in self.team_pushes:
+                    break
+
+    def _drive_team_push(self, bot, ai, target, now, braking):
+        push = self.team_pushes.get(bot.team)
+        if push is None or push.target != target or bot.entity_id not in push.goals:
+            return None
+        if self.orders.objective(bot, ai, now, target) is not None:
+            self.team_pushes.pop(bot.team, None)
+            return None
+        goal = push.goals[bot.entity_id]
+        if math.dist(bot.pose.position, goal) <= 2.:
+            return 0
+        if not self._maneuver_clear(bot, ai, goal, now) or not self._traffic_corridor_clear(bot, goal):
+            self.team_pushes.pop(bot.team, None)
+            return None
+        if now < push.start:
+            return 0
+        flags = ai.controls(bot.pose, goal, now, closing_speed=max(0., bot.speed),
+                            braking_acceleration=braking, stop_distance=1.5)
+        return self._avoid(bot, goal, flags, now)
 
     def _find_firing_position(self, bot, ai, target, now):
         nav = self.navigation
@@ -1170,6 +1288,9 @@ class BotDirector:
         previous_target=ai.target_id
         chosen=ai.choose_target(bot.pose.position,candidates)
         chosen=ai.target_id=self._finisher_target(bot,ai,candidates,chosen,now)
+        push = self.team_pushes.get(bot.team)
+        if push is not None and bot.entity_id in push.goals and push.target in ai.visible:
+            chosen = ai.target_id = push.target
         seen=chosen in ai.visible
         if not seen or chosen!=previous_target:
             ai.cover_goal=None
@@ -1302,6 +1423,10 @@ class BotDirector:
             if ai.route_watch_pause_at is None:ai.route_watch_pause_at=now
             return
         if seen and not travelling:
+            push_flags = self._drive_team_push(bot, ai, chosen, now, braking)
+            if push_flags is not None:
+                bot.flags = push_flags
+                return
             reposition=self._reposition_to_fire(bot,ai,chosen,now,braking)
             if reposition is not None:
                 bot.flags=reposition
@@ -1436,6 +1561,8 @@ class BotDirector:
             bot.last_input=now
             if a.step_count%self.DECISION_TICKS==self.phases[eid]:due.append(eid)
         self._perceive(due,now)
+        if self.observed_shots or self.team_pushes:
+            self._update_team_pushes(now)
         for eid in due:
             bot=a.vehicles[eid]
             state=getattr(a.world,'motion',{}).get(eid)

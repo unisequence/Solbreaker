@@ -15,6 +15,7 @@ import yaml
 from . import dvpl, client_branding, client_provisions, client_recon, client_bot_mode, client_battle_settings
 from .client_practice_picker import STRINGS as PRACTICE_PICKER_STRINGS
 from .consumables import GRAVITY_JUMP_SPEC
+from .localization import login_error_labels
 from .profile import BOT_QUEUE_TITLES, PROVING_GROUND_DESCRIPTION, PROVING_GROUND_TITLE
 
 
@@ -66,7 +67,7 @@ UI_RESOURCES = (BASE_HEADER, BASE_LOBBY, BASE_LOBBY_ACTIONS, STATS_ITEM, INVENTO
                 client_battle_settings.BATTLE_MENU, *client_recon.MARKER_OPACITY)
 STRINGS_EN = "Strings/en.yaml.dvpl"
 STRINGS_RU = "Strings/ru.yaml.dvpl"
-SANDBOX_BINDINGS_VERSION = 41
+SANDBOX_BINDINGS_VERSION = 44
 COMMUNITY_STRINGS = {
     STRINGS_EN: {'#community:Viber/OpenPage/Notification': 'Open Solbreaker on GitHub?'},
     STRINGS_RU: {'#community:Viber/OpenPage/Notification': 'Открыть Solbreaker на GitHub?'},
@@ -285,6 +286,43 @@ def _sandbox_binding_strings(relative):
             for key, value in SANDBOX_BINDING_STRINGS[relative].items()}
 
 
+def _local_labels(relative):
+    from .client_battle_setup import STRINGS as setup_strings
+
+    locale, index = ('ru', 1) if relative == STRINGS_RU else ('en', 0)
+    labels = {
+        **LOCAL_MODE_STRINGS[relative],
+        **login_error_labels(index),
+        **BOT_QUEUE_STRINGS[relative],
+        **BATTLE_LOADING_STRINGS[relative],
+        **_sandbox_binding_strings(relative),
+        **{f'Local/BattleSettings/{key}': value
+           for key, value in client_battle_settings.STRINGS[locale].items()},
+        **{f'Local/SbSetup{key}': values[index] for key, values in setup_strings.items()},
+        **COMMUNITY_STRINGS[relative],
+    }
+    labels['gameplaymode/Supremacy'] = labels['Local/BattleLoading/Supremacy']
+    return labels
+
+
+def _fallback_locale_patches(source, server_title):
+    labels = _local_labels(STRINGS_EN)
+    labels.update({'Local PoC': server_title, 'Solbreaker': server_title})
+    dumper = getattr(yaml, 'CSafeDumper', yaml.SafeDumper)
+    patches = {}
+    for path in sorted((source/'Data/Strings').glob('*.yaml.dvpl')):
+        relative = f'Strings/{path.name}'
+        if relative in CONSUMABLE_STRINGS:
+            continue
+        strings = yaml.load(dvpl.read(path), Loader=_StringsLoader)
+        if not isinstance(strings, dict):
+            raise ValueError(f'Unsupported string table: {relative}')
+        strings.update(labels)
+        patches[relative] = dvpl.encode(yaml.dump(
+            strings, Dumper=dumper, sort_keys=False, allow_unicode=True, width=1 << 30).encode())
+    return patches
+
+
 def _weather_map_strings(document, relative):
     from .map_catalog import WEATHER_MAPS
 
@@ -369,15 +407,10 @@ def patched_strings(source, relative, *, navigation_enabled=True):
     _fill_vehicle_names(document, relative)
     document.update(LOCAL_PROVISION_STRINGS.get(relative, {}))
     _fill_uprising_provisions(document, relative)
-    document.update(LOCAL_MODE_STRINGS.get(relative, {}))
-    document.update(BOT_QUEUE_STRINGS[relative])
-    document.update(BATTLE_LOADING_STRINGS[relative])
-    document.update(_sandbox_binding_strings(relative))
+    document.update(_local_labels(relative))
     _settings_parameter_case(document)
     _weather_map_strings(document, relative)
     locale = 'ru' if relative == STRINGS_RU else 'en'
-    document.update({'Local/BattleSettings/'+key: value
-                     for key, value in client_battle_settings.STRINGS[locale].items()})
     if navigation_enabled:
         document['#training_rooms:CreationScreen/Header'] = client_battle_settings.STRINGS[locale]['Settings']
     # Every scalar was loaded as text, so the dump quotes anything that would
@@ -779,10 +812,12 @@ def install_ui_guards(lab):
                for name in (*UI_RESOURCES, *CONSUMABLE_STRINGS)}
     patches.update(community_icon_patches())
     from .server_identity import server_name
+    name = server_name(manifest)
+    source_game = Path(manifest.get('source_game', game)).resolve(strict=True)
+    patches.update(_fallback_locale_patches(source_game, name))
     for relative in CONSUMABLE_STRINGS:
         document = yaml.load(dvpl.decode(patches[relative]), Loader=_StringsLoader)
-        document.update({'Local PoC': server_name(manifest), 'Solbreaker': server_name(manifest)})
-        document.update(COMMUNITY_STRINGS[relative])
+        document.update({'Local PoC': name, 'Solbreaker': name})
         patches[relative] = dvpl.encode(yaml.safe_dump(
             document, sort_keys=False, allow_unicode=True, width=1 << 30).encode())
     patches[SKIP_7X7] = dvpl.encode(b'animation CONFIRM_7X7\n{\n    Event("CLOSE_NOTIFICATION");\n}\n')
@@ -810,7 +845,7 @@ def install_ui_guards(lab):
     patches.update(client_branding.descriptor_patches(branding_source))
     # The map picker is driven by the profile's maps.yaml. Preserve its local
     # display name when rebuilding the pinned localization overlays at launch.
-    for relative in CONSUMABLE_STRINGS:
+    for relative in (path for path in patches if path.startswith('Strings/')):
         target = lab / "client/Data" / relative
         if not target.is_file():
             continue
@@ -879,16 +914,14 @@ def install_sandbox_bindings(lab, manifest):
             patches[relative] = patched_resource(original, relative)
     if COMMUNITY_LIST in patches:
         patches.update(community_icon_patches())
+    from .server_identity import server_name
+    patches.update(_fallback_locale_patches(source, server_name(manifest)))
     for relative in SANDBOX_BINDING_STRINGS:
         strings = yaml.load(dvpl.read(data/relative), Loader=_StringsLoader)
         strings.update(CONSUMABLE_STRINGS[relative])
-        strings.update(LOCAL_MODE_STRINGS[relative])
-        strings.update(BOT_QUEUE_STRINGS[relative])
-        strings.update(BATTLE_LOADING_STRINGS[relative])
-        strings.update(COMMUNITY_STRINGS[relative])
+        strings.update(_local_labels(relative))
         _fill_vehicle_names(strings, relative)
         _fill_uprising_provisions(strings, relative)
-        strings.update(_sandbox_binding_strings(relative))
         _settings_parameter_case(strings)
         _weather_map_strings(strings, relative)
         patches[relative] = dvpl.encode(yaml.safe_dump(strings, sort_keys=False, allow_unicode=True,
@@ -934,7 +967,9 @@ def install_server_name(lab):
     if manifest.get('display_server_name') == name:
         return
     patches = {}
-    for relative in CONSUMABLE_STRINGS:
+    for relative in sorted(set(CONSUMABLE_STRINGS) | {
+            path for path in manifest.get('ui_overrides', {})
+            if Path(path).parent == Path('Strings') and path.endswith('.yaml.dvpl')}):
         target = lab/'client/Data'/relative
         document = yaml.load(dvpl.read(target), Loader=_StringsLoader)
         if document.get('Local PoC') == name and document.get('Solbreaker') == name:

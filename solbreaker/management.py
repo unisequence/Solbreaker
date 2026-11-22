@@ -15,6 +15,73 @@ from .client_atmosphere import PRESETS
 PROJECT = Path(__file__).resolve().parents[1]
 
 
+# Match the error text emitted by Python, the launch scripts and the physics worker.
+DIAGNOSTIC_MESSAGES = (
+    (('certificate_verify_failed', 'unable to get local issuer certificate'),
+     'Не удалось проверить сертификат сервера. Проверь дату и время, обнови корневые сертификаты системы и повтори попытку.'),
+    (('no space left on device', 'disk full', 'not enough space on the disk', 'plus 1 gib of free space',
+      '[errno 28]', '[winerror 112]', 'недостаточно места на диске'),
+     'На диске не хватает свободного места. Освободи место на диске установки и повтори попытку.'),
+    (('address already in use', '[winerror 10048]', 'only one usage of each socket address'),
+     'Порт сервера уже занят. Закрой другой экземпляр сервера или поменяй порты в параметрах.'),
+    (('proving ground requires a private solbreaker installation', 'client directory must be separate from game resources',
+      'the lab must be separate from game resources', 'lab client directories must not alias',
+      'an internal game view requires its pinned external source snapshot'),
+     'Пути к игре и клиенту Solbreaker конфликтуют. Укажи исходный Blitz и отдельную папку клиента Solbreaker в параметрах.'),
+    (('supports paths shorter than 260', '[winerror 206]'),
+     'Путь к клиенту слишком длинный. Выбери папку ближе к корню диска и повтори подготовку.'),
+    (('createcollisionshape failed', 'createcollisionshapearray failed',
+      'in any directory in urdf path'),
+     'Физика карты не загрузилась. На Windows попробуй перенести Solbreaker и папку данных по пути без кириллицы, например C:/Games/Solbreaker.'),
+    (('requires compatible resource build', 'server resource build differs', 'game resources changed during client preparation',
+      'incompatible executable', 'requires a different pinned client build'),
+     'Выбрана несовместимая сборка Blitz. Укажи папку поддерживаемой версии игры или скачай её через лаунчер.'),
+    (('update download failed sha-256', 'invalid sha-256 for', 'zip files differ from the release checksum',
+      'incomplete update package', 'update download exceeds the published size'),
+     'Файлы обновления неполные или повреждены. Скачай обновление ещё раз.'),
+    (('[winerror 32]', 'being used by another process'),
+     'Не удалось заменить файл. Закрой игру и другие экземпляры Solbreaker перед повторной попыткой.'),
+    (('update conflicts with a local file', 'update destination uses a symbolic link or junction'),
+     'В папке установки есть файл или ссылка, мешающие обновлению. Распакуй новую версию в отдельную папку и укажи прежние пути к клиенту и данным в параметрах.'),
+    (('permissionerror:', '[errno 13]', '[winerror 5]', 'permission denied', '800a0046', 'access is denied'),
+     'Системе не удалось открыть или записать файл. Проверь права на папку Solbreaker и повтори попытку.'),
+    (('temporary failure in name resolution', 'getaddrinfo failed', 'network is unreachable',
+      'connection timed out', 'connection reset by peer', 'connection refused', 'the read operation timed out'),
+     'Не удалось подключиться по сети. Проверь подключение и адрес сервера, затем повтори попытку.'),
+    (('requires --proton and --steam', 'provide an installed proton executable and steam directory'),
+     'Не найдены Steam или Proton. Проверь пути к Steam и Proton в параметрах.'),
+    (('expected a separate prepared lab client directory', 'клиент отличается от подготовленной копии'),
+     'Подготовленный клиент отсутствует или был изменён. Проверь путь к клиенту или подготовь новую копию через лаунчер.'),
+    (('no subscription', 'does not own app', 'missing license', 'accessdenied'),
+     'Steam не дал доступ к загрузке. Войди в аккаунт, на котором доступен Blitz, и повтори попытку.'),
+    (('choose an absent client directory', 'client directory already exists'),
+     'Папка клиента уже существует. Выбери новый путь для подготовки клиента.'),
+)
+
+
+def friendly_error(detail):
+    detail = str(detail).casefold()
+    for markers, message in DIAGNOSTIC_MESSAGES:
+        if any(marker in detail for marker in markers):
+            return message
+    return ''
+
+
+def log_tail(path, *, start=0):
+    try:
+        with Path(path).open('rb') as stream:
+            bom = stream.read(2)
+            end = stream.seek(0, os.SEEK_END)
+            offset = min(end, max(start, end - 32768))
+            if bom in (b'\xff\xfe', b'\xfe\xff'):
+                stream.seek(max(2, offset + offset % 2))
+                return stream.read().decode('utf-16-le' if bom == b'\xff\xfe' else 'utf-16-be', 'replace')
+            stream.seek(offset)
+            return stream.read().decode('utf-8-sig', 'replace')
+    except OSError:
+        return ''
+
+
 @dataclass
 class Settings:
     game: str = ''
@@ -219,6 +286,7 @@ class Job:
         self.started = False
         self.returncode = None
         self.resource_error = ''
+        self.failure_notice = ''
         self._stop_requested = False
         self.process = subprocess.Popen(argv, cwd=PROJECT, stdin=subprocess.PIPE,
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, encoding='utf-8', errors='replace',
@@ -229,6 +297,7 @@ class Job:
 
     def _read(self, output):
         for line in self.process.stdout:
+            self.failure_notice = friendly_error(line) or self.failure_notice
             try:
                 event = json.loads(line)
                 if event.get('event') == 'started':
@@ -237,7 +306,6 @@ class Job:
                         self._send_stop()
                 elif event.get('event') == 'vehicle_catalog_error' and isinstance(event.get('message'), str):
                     self.resource_error = event['message']
-                    continue
             except (ValueError, AttributeError):
                 pass
             try:
@@ -277,11 +345,13 @@ class Manager:
         self.job = None
         self.server = None
         self.client = None
+        self._client_log = None
         self.notice = 'Выбери действие'
         self._server_exit_reported = False
         self._pending_play = None
         self._map_preparation = None
         self._last_prepared_map = None
+        self._battle_failure = ''
 
     def update_settings(self, settings):
         if settings == self.settings:
@@ -349,6 +419,7 @@ class Manager:
             self._server_exit_reported = False
             self._map_preparation = None
             self._last_prepared_map = None
+            self._battle_failure = ''
         elif action == 'play':
             if self.client is not None and self.client.poll() is None:
                 raise ValueError('Этот клиент уже запущен')
@@ -368,7 +439,7 @@ class Manager:
             private = lab/'private'
             from .platform_io import open_private_file
             descriptor = open_private_file(private, 'launcher-client.log', create=True, writable=True)
-            os.lseek(descriptor, 0, os.SEEK_END)
+            self._client_log = (private/'launcher-client.log', os.lseek(descriptor, 0, os.SEEK_END))
             with os.fdopen(descriptor, 'a') as log:
                 self.client = subprocess.Popen(command(action, self.settings, replay=replay), cwd=PROJECT,
                     env=dict(os.environ, PYTHONUTF8='1', PYTHONUNBUFFERED='1'), stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
@@ -403,6 +474,16 @@ class Manager:
             except ValueError:
                 continue
             phase = {'map_preparation_started': 'preparing', 'map_preparation_paused': 'paused'}
+            if not isinstance(detail, dict):
+                continue
+            if detail.get('event') == 'arena_owner_start_failed':
+                self._battle_failure = (friendly_error(detail.get('reason', '')) or
+                                        'Бой не запустился. Попробуй другую карту. Если ошибка повторится, открой журнал.')
+                self.notice = self._battle_failure
+            elif detail.get('event') == 'arena_world_ready' and self._battle_failure:
+                if self.notice == self._battle_failure:
+                    self.notice = 'Готово'
+                self._battle_failure = ''
             if detail.get('event') in phase:
                 detail['phase'] = phase[detail['event']]
             if (detail.get('event') in (*phase, 'map_preparation')
@@ -416,18 +497,26 @@ class Manager:
                 self.notice = 'Сервер готов к подключениям'
             if not self.server.running and self.server.returncode is not None and not self._server_exit_reported:
                 self.notice = ('Сервер остановлен' if self.server.returncode == 0
-                               else self.server.resource_error or
+                               else self.server.resource_error or self.server.failure_notice or
                                f'Сервер завершился с ошибкой {self.server.returncode}. Открой журнал')
                 self._server_exit_reported = True
         if self.job is not None and self.job.returncode is not None:
             self.notice = ('Готово' if self.job.returncode == 0
-                           else self.job.resource_error or
+                           else self.job.resource_error or self.job.failure_notice or
                            f'Операция завершилась с ошибкой {self.job.returncode}. Подробности в журнале')
             self.job = None
         if self.client is not None and (code := self.client.poll()) is not None:
             self.client = None
             if code != 0:
-                self.notice = 'Не удалось запустить клиент. См. private/launcher-client.log.'
+                detail = ''
+                if self._client_log is not None:
+                    path, start = self._client_log
+                    detail = log_tail(path, start=start)
+                    if detail:
+                        lines.extend(detail.splitlines())
+                        self.history.extend(detail.splitlines())
+                self.notice = friendly_error(detail) or 'Не удалось запустить клиент. Открой журнал.'
+            self._client_log = None
         if self._pending_play is not None and self.server is not None:
             if not self.server.running:
                 self._pending_play = None
@@ -436,7 +525,7 @@ class Manager:
                     self.run('play', **self._pending_play)
                 except (OSError, ValueError) as error:
                     self._pending_play = None
-                    self.notice = str(error)
+                    self.notice = friendly_error(error) or str(error)
         return lines
 
     def server_status(self):

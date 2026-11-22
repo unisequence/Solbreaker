@@ -3430,6 +3430,9 @@ class Arena:
         if factor != 1.:
             shell = dataclasses.replace(shell, damage=shell.damage * factor)
         vehicle.shots += 1
+        director = getattr(self, 'bot_director', None)
+        if director is not None:
+            director.observe_shot(vehicle, now)
         spend_round(vehicle, self.unlimited_ammo or self.practice and vehicle.account_id is not None,
                     from_reserve=from_reserve)
         self.next_shot += 1

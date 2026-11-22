@@ -4,16 +4,50 @@ import json
 import os
 from pathlib import Path
 import sqlite3
+import sys
 from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import Mock, patch
 import zipfile
 
-from solbreaker.management import Job, Manager, Settings, command
+from solbreaker.management import Job, Manager, Settings, command, friendly_error, log_tail
 from solbreaker.management_tasks import backup_state
 
 
 class ManagementTests(unittest.TestCase):
+    def test_failed_job_surfaces_diagnosis_and_keeps_technical_details(self):
+        manager = Manager(Settings())
+        error = 'OSError: [WinError 112] There is not enough space on the disk'
+        manager.job = Job('prepare-client',
+                          [sys.executable, '-c', f'raise SystemExit({error!r})'], manager.output)
+        manager.job.thread.join(5)
+        lines = manager.drain()
+        self.assertIn(error, lines)
+        self.assertIn('Освободи место', manager.notice)
+
+    def test_battle_launch_failure_does_not_require_the_server_to_exit(self):
+        manager = Manager(Settings())
+        manager.output.put(json.dumps({
+            'event': 'arena_owner_start_failed', 'reason': 'pybullet.error: createCollisionShape failed',
+        }))
+        manager.drain()
+        self.assertIn('Физика карты не загрузилась', manager.notice)
+        manager.output.put(json.dumps({'event': 'arena_world_ready'}))
+        manager.drain()
+        self.assertEqual(manager.notice, 'Готово')
+
+    def test_log_tails_support_powershell_encoding_and_ignore_previous_attempt(self):
+        with TemporaryDirectory() as folder:
+            log = Path(folder)/'update.log'
+            log.write_text('Permission denied', encoding='utf-16')
+            self.assertIn('Проверь права', friendly_error(log_tail(log)))
+            log.write_text('No space left on device\n', encoding='utf-8')
+            offset = log.stat().st_size
+            with log.open('a', encoding='utf-8') as stream:
+                stream.write('CERTIFICATE_VERIFY_FAILED\n')
+            self.assertIn('сертификат', friendly_error(log_tail(log, start=offset)))
+            self.assertNotIn('space', log_tail(log, start=offset))
+
     def test_windowless_gui_uses_console_python_for_captured_jobs(self):
         with patch('solbreaker.management.sys.executable', str(Path('runtime')/'pythonw.exe')):
             args = command('prepare-client', Settings(game='/tmp/game', connection='/tmp/profile'), windows=True)
