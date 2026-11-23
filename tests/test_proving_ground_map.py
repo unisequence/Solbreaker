@@ -11,9 +11,10 @@ import numpy as np
 from PIL import Image, ImageDraw
 
 from solbreaker import dvpl, proving_ground_layout as ground
+from solbreaker.connection import ensure_lab
 from solbreaker.dava_proving_scene import _mesh
 from solbreaker.dava_scene import Archive
-from solbreaker.proving_ground_map import BUNDLE, KEY, _marked_catalog, _sound_registration
+from solbreaker.proving_ground_map import BUNDLE, KEY, _marked_catalog, _sound_registration, install
 from solbreaker.proving_ground_signs import sign_meshes
 from tools.build_proving_ground import battle_loading_sprite
 
@@ -30,6 +31,48 @@ class PolygonReader(Archive):
 
 
 class GroundResourceTests(unittest.TestCase):
+    def test_installation_parent_alias_does_not_block_server_or_client(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            state = root/'installation/data'
+            client = state/'client'
+            (client/'Data').mkdir(parents=True)
+            (state/'private').mkdir()
+            game = root/'original'
+            game.mkdir()
+            bundle = root/'bundle'
+            bundle.touch()
+            alias = root/'alias'
+            try:
+                alias.symlink_to(state.parent, target_is_directory=True)
+            except OSError as error:
+                if getattr(error, 'winerror', None) != 1314:
+                    raise
+                self.skipTest('Windows symlink creation requires privileges')
+
+            manifest = {'client': str(alias/'data/client'), 'game': str(game)}
+            (state/'manifest.json').write_text(json.dumps(manifest))
+            self.assertEqual(ensure_lab(alias/'data')[0], state)
+            install(alias/'data', manifest, bundle=bundle)
+
+            foreign = root/'other-client'
+            foreign.symlink_to(client, target_is_directory=True)
+            manifest['client'] = str(foreign)
+            (state/'manifest.json').write_text(json.dumps(manifest))
+            with self.assertRaisesRegex(ValueError, 'separate prepared lab client'):
+                ensure_lab(alias/'data')
+            with self.assertRaisesRegex(ValueError, 'private Solbreaker installation'):
+                install(alias/'data', manifest, bundle=bundle)
+
+            manifest['client'] = str(alias/'data/client')
+            (state/'manifest.json').write_text(json.dumps(manifest))
+            (client/'Data').rmdir()
+            (client/'Data').symlink_to(game, target_is_directory=True)
+            with self.assertRaisesRegex(ValueError, 'separate prepared lab client'):
+                ensure_lab(alias/'data')
+            with self.assertRaisesRegex(ValueError, 'private Solbreaker installation'):
+                install(alias/'data', manifest, bundle=bundle)
+
     def test_native_polygon_counts_are_int32(self):
         item = dict(name='floor',vertices=[[0,0,0],[4,0,0],[0,3,0]],
                     triangles=[[0,1,2]],color=[.7,.7,.7,1])

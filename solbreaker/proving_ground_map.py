@@ -12,7 +12,7 @@ import numpy as np
 import yaml
 
 from . import dvpl
-from .connection import atomic_write
+from .connection import atomic_write, manifest_client_path
 from .dava_proving_scene import compile_scene
 
 KEY = 'solbreaker_proving_ground'
@@ -105,7 +105,7 @@ def _install(lab, manifest, bundle):
     data = client/'Data'
     private = lab/'private'
     source = Path(manifest.get('source_game',manifest['game'])).resolve(strict=True)
-    if (Path(manifest['client']).absolute() != client or client.resolve(strict=True) != client
+    if (manifest_client_path(manifest['client']) != client or client.resolve(strict=True) != client
             or data.resolve(strict=True) != data or private.resolve(strict=True) != private
             or lab.is_relative_to(source) or source.is_relative_to(lab)):
         raise ValueError('Proving ground requires a private Solbreaker installation')
