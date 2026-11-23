@@ -80,6 +80,12 @@ def atomic_write(path,data,*,replace_symlink=False):
         Path(name).unlink(missing_ok=True)
 
 
+def manifest_client_path(value):
+    """Resolve aliases above the recorded client, keeping its leaf name."""
+    path = Path(value)
+    return path.parent.resolve() / path.name
+
+
 def ensure_lab(lab):
     lab=Path(lab).resolve(strict=True)
     manifest_path=lab/'manifest.json'
@@ -92,7 +98,9 @@ def ensure_lab(lab):
         raise ValueError('Expected a private regular lab manifest')
     manifest=json.loads(manifest_path.read_text())
     client=lab/'client';data=client/'Data'
-    if (str(client)!=manifest['client'] or linked(client) or linked(data)
+    recorded_client = Path(manifest['client'])
+    if (not recorded_client.is_absolute() or manifest_client_path(recorded_client) != client
+            or linked(client) or linked(data)
             or not client.is_dir() or not data.is_dir()):
         raise ValueError('Expected a separate prepared lab client directory')
     game=Path(manifest['game']).resolve(strict=True)
