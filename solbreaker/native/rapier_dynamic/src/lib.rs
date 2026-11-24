@@ -278,32 +278,35 @@ impl World {
         0
     }
 
-    fn step(&mut self, dt: f64) -> Value {
+    fn simulate(&mut self, dt: f64) {
         let mut params = IntegrationParameters::default();
         params.dt = dt;
         self.pipeline.step(&Vector::new(0.0, -9.81, 0.0), &params,
             &mut self.islands, &mut self.broad_phase, &mut self.narrow_phase,
             &mut self.bodies, &mut self.colliders, &mut self.impulse_joints,
             &mut self.multibody_joints, &mut self.ccd, None, &(), &());
-        let mut states = BTreeMap::new();
-        for (id, handle) in &self.dynamic {
-            let body = &self.bodies[*handle];
-            let position = body.position();
-            let translation = position.translation.vector;
-            let rotation = position.rotation.quaternion().coords;
-            states.insert(id.to_string(), json!({
-                "position": [translation.x, translation.y, translation.z],
-                "orientation": [rotation.x, rotation.y, rotation.z, rotation.w],
-                "velocity": body.linvel().as_slice(),
-                "angular": body.angvel().as_slice(),
-            }));
-        }
-        let mut contacts = Vec::new();
+    }
+
+    fn state_values(&self) -> impl Iterator<Item = (u32, [f64; 13])> + '_ {
+        self.dynamic.iter().map(|(&id, &handle)| {
+            let body = &self.bodies[handle];
+            let pos = &body.position().translation.vector;
+            let rot = body.position().rotation.quaternion();
+            let vel = body.linvel();
+            let ang = body.angvel();
+            (id, [pos.x, pos.y, pos.z, rot.i, rot.j, rot.k, rot.w,
+                   vel.x, vel.y, vel.z, ang.x, ang.y, ang.z])
+        })
+    }
+
+    fn visit_contacts<'a>(&'a self, dt: f64,
+        mut visit: impl FnMut(u32, ColliderHandle, &'a Value, [f64; 15]))
+    {
         for (id, handle) in &self.dynamic {
             for collider in self.bodies[*handle].colliders() {
                 for pair in self.narrow_phase.contact_pairs_with(*collider) {
                     let other_handle = if pair.collider1 == *collider { pair.collider2 } else { pair.collider1 };
-                    let other = self.collider_entities.get(&other_handle).cloned().unwrap_or(Value::Null);
+                    let other = self.collider_entities.get(&other_handle).unwrap_or(&Value::Null);
                     for manifold in &pair.manifolds {
                         let normal = if pair.collider1 == *collider { -manifold.data.normal } else { manifold.data.normal };
                         // Solver contacts can omit manifold points. Zipping the two
@@ -320,26 +323,91 @@ impl World {
                                 (first, second)
                             } else { (second, first) };
                             let midpoint = rapier3d_f64::na::center(&a, &b);
-                            contacts.push(json!({
-                                "entity": id,
-                                "other": other,
-                                "point": midpoint.coords.as_slice(),
-                                "point_a": a.coords.as_slice(),
-                                "point_b": b.coords.as_slice(),
-                                "normal": normal.as_slice(),
-                                "distance": point.dist,
-                                "impulse": point.data.impulse,
-                                // This is Rapier's reported solver impulse/dt,
-                                // including its warm-start accounting. It is not
-                                // guaranteed to equal net momentum change/dt.
-                                "normal_force": point.data.impulse / dt,
-                            }));
+                            // Report Rapier's accumulated solver impulse per dt.
+                            // Warm starting can make it differ from net momentum change.
+                            visit(*id, other_handle, other,
+                                [midpoint.x, midpoint.y, midpoint.z, a.x, a.y, a.z,
+                                 b.x, b.y, b.z, normal.x, normal.y, normal.z,
+                                 point.dist, point.data.impulse, point.data.impulse / dt]);
                         }
                     }
                 }
             }
         }
+    }
+
+    fn step(&mut self, dt: f64) -> Value {
+        self.simulate(dt);
+        let states: BTreeMap<_, _> = self.state_values().map(|(id, values)|
+            (id.to_string(), json!({
+                "position": &values[..3], "orientation": &values[3..7],
+                "velocity": &values[7..10], "angular": &values[10..13],
+            }))).collect();
+        let mut contacts = Vec::new();
+        self.visit_contacts(dt, |entity, _, other, values| {
+            contacts.push(json!({
+                "entity": entity, "other": other, "point": &values[..3],
+                "point_a": &values[3..6], "point_b": &values[6..9],
+                "normal": &values[9..12], "distance": values[12],
+                "impulse": values[13], "normal_force": values[14],
+            }));
+        });
         json!({"states": states, "contacts": contacts})
+    }
+
+    // Little endian counts, state rows, contact rows and interned JSON metadata.
+    // Float fields are the exact binary64 values previously passed to serde_json.
+    fn write_packed(&self, dt: f64, output: &mut [u8]) -> Option<usize> {
+        let header = 12;
+        let state_size = 4 + 13 * 8;
+        let contact_size = 8 + 15 * 8;
+        let states = self.dynamic.len();
+        let mut pos = header + states * state_size;
+        if pos > output.len() {
+            return None;
+        }
+        for (row, (id, values)) in output[header..pos].chunks_exact_mut(state_size)
+            .zip(self.state_values())
+        {
+            row[..4].copy_from_slice(&id.to_le_bytes());
+            for (field, value) in row[4..].chunks_exact_mut(8).zip(values) {
+                field.copy_from_slice(&value.to_le_bytes());
+            }
+        }
+        let mut contacts = 0u32;
+        let mut overflow = false;
+        let mut metadata = Vec::new();
+        let mut ids = std::collections::HashMap::new();
+        self.visit_contacts(dt, |entity, handle, other, values| {
+            if overflow || output.len() - pos < contact_size {
+                overflow = true;
+                return;
+            }
+            let index = *ids.entry(handle).or_insert_with(|| {
+                let index = metadata.len() as u32;
+                metadata.push(other);
+                index
+            });
+            let row = &mut output[pos..pos + contact_size];
+            row[..4].copy_from_slice(&entity.to_le_bytes());
+            row[4..8].copy_from_slice(&index.to_le_bytes());
+            for (field, value) in row[8..].chunks_exact_mut(8).zip(values) {
+                field.copy_from_slice(&value.to_le_bytes());
+            }
+            pos += contact_size;
+            contacts += 1;
+        });
+        if overflow {
+            return None;
+        }
+        let mut target = &mut output[pos..];
+        let available = target.len();
+        serde_json::to_writer(&mut target, &metadata).ok()?;
+        let encoded = available - target.len();
+        output[..4].copy_from_slice(&(states as u32).to_le_bytes());
+        output[4..8].copy_from_slice(&contacts.to_le_bytes());
+        output[8..12].copy_from_slice(&(encoded as u32).to_le_bytes());
+        Some(pos + encoded)
     }
 
     fn destroy(&mut self, key: &str) {
@@ -515,6 +583,29 @@ pub extern "C" fn tfs_rapier_step(world: *mut World, dt: f64, output: *mut c_cha
 }
 
 #[no_mangle]
+pub extern "C" fn tfs_rapier_step_packed_v1(
+    world: *mut World, dt: f64, output: *mut u8, capacity: usize,
+) -> i32 {
+    if !dt.is_finite() || dt <= 0. || output.is_null() || capacity < 12
+        || capacity > i32::MAX as usize
+    {
+        return -2;
+    }
+    guarded(world, |world| {
+        world.simulate(dt);
+        let buffer = unsafe { std::slice::from_raw_parts_mut(output, capacity) };
+        match world.write_packed(dt, buffer) {
+            Some(length) => length as i32,
+            None => {
+                // The world has already stepped and cannot retry this frame.
+                world.poisoned = true;
+                -1
+            }
+        }
+    })
+}
+
+#[no_mangle]
 pub extern "C" fn tfs_rapier_deactivate(world: *mut World, id: u32) -> i32 {
     guarded(world, |world| world.deactivate(id))
 }
@@ -669,6 +760,17 @@ mod tests {
         assert_eq!(tfs_rapier_step(&mut w, 1./60., output.as_mut_ptr(), 1), -1);
         assert_eq!(tfs_rapier_step(&mut w, 1./60., output.as_mut_ptr(), 1), -3);
     }
+    #[test]
+    fn packed_overflow_cannot_retry_an_advanced_world() {
+        let mut w = world();
+        let mut buffer = [0u8; 12];
+        assert_eq!(tfs_rapier_step_packed_v1(&mut w, 1./60., buffer.as_mut_ptr(), 11), -2);
+        assert!(!w.poisoned);
+        assert_eq!(tfs_rapier_step_packed_v1(&mut w, 1./60., buffer.as_mut_ptr(), 12), -1);
+        assert!(w.poisoned);
+        assert_eq!(tfs_rapier_step_packed_v1(&mut w, 1./60., buffer.as_mut_ptr(), 12), -3);
+    }
+
     #[test]
     fn contact_metadata_points_and_units_follow_the_same_manifold_point() {
         let mut w = world();

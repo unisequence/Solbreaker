@@ -364,24 +364,49 @@ impl Movement<'_> {
             }
         }
         let near = self.world.client.overlapping(low, high)?;
-        if !near.iter().any(|row| {
-            self.world
-                .original_ids
-                .get(&row.body)
-                .is_some_and(|id| self.world.solid_map(*id))
-        }) {
+        let trees: Vec<_> = near
+            .iter()
+            .filter_map(|row| self.world.original_ids.get(&row.body))
+            .filter(|body| self.world.solid_map(**body))
+            .map(|body| self.world.static_triangles.get(body))
+            .collect();
+        if trees.is_empty() {
             return Ok(ground);
         }
         rays.extend(raised.iter().map(|row| row.1));
-        let hits = self.world.cast(&rays)?;
-        for (i, hit) in hits[..xs.len()].iter().enumerate() {
-            if self.world.solid_map(hit.body) && hit.normal[1] > 0.65 {
-                ground[i] = ground[i].max(hit.point[1]);
+        let mut selected = Vec::with_capacity(rays.len());
+        let mut indices = Vec::with_capacity(rays.len());
+        // A ray can only modify the sampled height if its closest hit is a
+        // solid map body. Keep the complete Bullet query for every ray that
+        // could reach such a body, including any geometry that occludes it.
+        let can_filter = trees.iter().all(Option::is_some);
+        for (index, ray) in rays.into_iter().enumerate() {
+            let (start, end) = ray;
+            if can_filter {
+                let bottom = std::array::from_fn(|axis| start[axis].min(end[axis]));
+                let top = std::array::from_fn(|axis| start[axis].max(end[axis]));
+                if trees
+                    .iter()
+                    .flatten()
+                    .all(|tree| !tree.may_intersect(bottom, top))
+                {
+                    continue;
+                }
             }
+            indices.push(index);
+            selected.push(ray);
         }
-        for ((i, _), hit) in raised.iter().zip(&hits[xs.len()..]) {
-            if self.world.solid_map(hit.body) && hit.normal[1] > 0.65 && hit.point[1] > tops[*i] {
-                ground[*i] = ground[*i].max(hit.point[1]);
+        for (ray_index, hit) in indices.into_iter().zip(self.world.cast(&selected)?) {
+            if !self.world.solid_map(hit.body) || !(hit.normal[1] > 0.65) {
+                continue;
+            }
+            if ray_index < xs.len() {
+                ground[ray_index] = ground[ray_index].max(hit.point[1]);
+            } else {
+                let (station, _) = raised[ray_index - xs.len()];
+                if hit.point[1] > tops[station] {
+                    ground[station] = ground[station].max(hit.point[1]);
+                }
             }
         }
         Ok(ground)
@@ -442,7 +467,7 @@ impl Movement<'_> {
         let raw = if let Some(points) = self.contact_cache.get(&key) {
             points.clone()
         } else {
-            let points = self.world.contact_points(self.entity, self.skin())?;
+            let points = self.world.contact_points(self.entity, self.skin(), Some(key))?;
             if self.contact_cache.len() < 128 {
                 self.contact_cache.insert(key, points.clone());
             }

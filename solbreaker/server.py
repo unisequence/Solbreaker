@@ -377,7 +377,7 @@ async def serve(lab: Path, *, sandbox=False):
             local_addr=server.network.listen_login.pair)
         transports.append(udp)
         base, _ = await open_datagram(lambda: BaseEndpoint(server),
-            local_addr=server.network.listen_base.pair)
+            local_addr=server.network.listen_base.pair, batch_receive=True)
         transports.append(base)
         http = await asyncio.start_server(server.http, *server.network.listen_http.pair, limit=16384,
                                          ssl=getattr(server, 'http_tls_context', None))

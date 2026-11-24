@@ -11,7 +11,7 @@ import tomllib
 from unittest.mock import patch
 import zipfile
 
-from tools.package_source import FILES, FOLDERS, GAME_CATALOG, SOURCE_CRATES, WHEEL, WINDOWS_LIBRARIES, package
+from tools.package_source import FILES, FOLDERS, GAME_CATALOG, LINUX_LIBRARIES, SOURCE_CRATES, WHEEL, WINDOWS_LIBRARIES, package
 from solbreaker.resource_copy import copy_resource_tree, resource_tree_facts
 
 
@@ -115,6 +115,32 @@ class PackagingTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, 'accepted SHA-256'):
                     package(root/'result.zip', windows_native=binaries, windows_wheel=wheel)
             self.assertFalse((root/'result.zip').exists())
+
+    def test_dedicated_linux_package_includes_reviewed_contact_collector(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.source_fixture(root)
+            catalog = root/GAME_CATALOG
+            catalog.parent.mkdir(parents=True, exist_ok=True)
+            catalog.write_bytes(gzip.compress(b'[]'))
+            self.write_file_list(root)
+            native = root/'binaries'
+            shared_object = b'\x7fELF\x02\x01\x01' + bytes(9) + b'\x03\x00\x3e\x00'
+            for crate, filename in LINUX_LIBRARIES.items():
+                (native/crate).mkdir(parents=True)
+                (native/crate/filename).write_bytes(shared_object + crate.encode())
+            contact = root/'_contact_queries.abi3.so'
+            contact.write_bytes(shared_object + b'contacts')
+            output = root/'linux.zip'
+            with patch('tools.package_source.ROOT', root):
+                package(output, linux_native=native, linux_contact=contact, server_only=True)
+                with self.assertRaisesRegex(ValueError, 'dedicated Linux libraries'):
+                    package(root/'source.zip', linux_contact=contact)
+            with zipfile.ZipFile(output) as archive:
+                path = 'solbreaker/_contact_queries.abi3.so'
+                self.assertEqual(archive.read('Solbreaker/'+path), contact.read_bytes())
+                checksums = archive.read('Solbreaker/SHA256SUMS').decode()
+                self.assertIn(hashlib.sha256(contact.read_bytes()).hexdigest() + '  ' + path, checksums)
 
     def test_windows_package_accepts_rebuilt_contact_module(self):
         with TemporaryDirectory() as temporary:

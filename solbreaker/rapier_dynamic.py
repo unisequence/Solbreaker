@@ -1,17 +1,56 @@
-"""Minimal JSON ABI for the optional native Rapier dynamic world."""
+"""Binary and legacy JSON bindings for the optional native Rapier world."""
 import ctypes as C
 import json
 import math
 import sys
+import struct
 from functools import wraps
 import threading
 from pathlib import Path
+from typing import NamedTuple
 import numpy as np
 
 
 def library_path():
     name = 'tfs_rapier_dynamic.dll' if sys.platform == 'win32' else 'libtfs_rapier_dynamic.so'
     return Path(__file__).with_name('native')/'rapier_dynamic'/name
+
+
+# Counts followed by fixed-width state and contact rows and a JSON metadata table.
+_PACKED_HEADER = struct.Struct('<III')
+_PACKED_STATE = struct.Struct('<I13d')
+_PACKED_CONTACT = struct.Struct('<II15d')
+
+
+class RapierStepRows(NamedTuple):
+    """Step data detached from the reusable native output buffer."""
+
+    states: dict
+    contacts: list
+    metadata: list
+
+
+def _decode_packed_step(buffer, size, *, rows=False):
+    states_count, contacts_count, metadata_size = _PACKED_HEADER.unpack_from(buffer)
+    contacts_start = _PACKED_HEADER.size + states_count * _PACKED_STATE.size
+    metadata_start = contacts_start + contacts_count * _PACKED_CONTACT.size
+    if metadata_start + metadata_size != size:
+        raise RuntimeError('Invalid packed Rapier dynamic result size')
+    view = memoryview(buffer).cast('B')
+    metadata = json.loads(bytes(view[metadata_start:size]))
+    state_rows = _PACKED_STATE.iter_unpack(view[_PACKED_HEADER.size:contacts_start])
+    contact_rows = _PACKED_CONTACT.iter_unpack(view[contacts_start:metadata_start])
+    if rows:
+        return RapierStepRows({row[0]: row for row in state_rows}, list(contact_rows), metadata)
+    states = {}
+    for row in state_rows:
+        states[str(row[0])] = dict(angular=list(row[11:14]), orientation=list(row[4:8]),
+                                  position=list(row[1:4]), velocity=list(row[8:11]))
+    contacts = [dict(distance=row[14], entity=row[0], impulse=row[15], normal=list(row[11:14]),
+                     normal_force=row[16], other=metadata[row[1]], point=list(row[2:5]),
+                     point_a=list(row[5:8]), point_b=list(row[8:11]))
+                for row in contact_rows]
+    return dict(contacts=contacts, states=dict(sorted(states.items())))
 
 
 class _StaticRayHit(C.Structure):
@@ -47,6 +86,10 @@ class RapierDynamic:
         self.library.tfs_rapier_sync.restype = C.c_int32
         self.library.tfs_rapier_step.argtypes = [C.c_void_p, C.c_double, C.c_char_p, C.c_size_t]
         self.library.tfs_rapier_step.restype = C.c_int32
+        self._step_packed = getattr(self.library, 'tfs_rapier_step_packed_v1', None)
+        if self._step_packed is not None:
+            self._step_packed.argtypes = self.library.tfs_rapier_step.argtypes
+            self._step_packed.restype = C.c_int32
         self.library.tfs_rapier_deactivate.argtypes = [C.c_void_p, C.c_uint32]
         self.library.tfs_rapier_deactivate.restype = C.c_int32
         self._sensor_enabled = getattr(self.library, 'tfs_rapier_sensor_enabled', None)
@@ -142,12 +185,17 @@ class RapierDynamic:
             raise RuntimeError('Rapier sensor sync failed')
 
     @_serialized
-    def step(self, dt):
+    def step(self, dt, *, rows=False):
         self._require_open()
         if isinstance(dt, bool) or not isinstance(dt, (int, float)) or not math.isfinite(dt) or dt <= 0:
             raise ValueError('Invalid Rapier timestep')
         output = self._output
         capacity = len(output)
+        if self._step_packed is not None:
+            result = self._step_packed(self.handle, dt, output, capacity)
+            if result < _PACKED_HEADER.size or result > capacity:
+                raise RuntimeError(f'Rapier packed dynamic step failed: {result}')
+            return _decode_packed_step(output, result, rows=rows)
         result = self.library.tfs_rapier_step(self.handle, dt, output, capacity)
         if result <= 0 or result >= capacity:
             raise RuntimeError(f'Rapier dynamic step failed: {result}')

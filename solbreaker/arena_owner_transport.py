@@ -11,10 +11,12 @@ from dataclasses import replace
 import inspect
 import logging
 import math
+import os
 import time
 
 from . import diagnostics
-from .arena_owner import Command, CommandRejected, MotionPayload, OwnerError, Result
+from .arena_owner import (Command, CommandRejected, INPUT_BATCH_LIMIT, INPUT_BATCH_OPERATIONS,
+                          MotionPayload, OwnerError, Result)
 from .arena_owner_registry import ArenaRoute, RouteFull
 from .motion import tick_sync
 
@@ -24,6 +26,11 @@ _LOG = logging.getLogger(__name__)
 def _consume(future):
     if not future.cancelled():
         future.exception()
+
+
+class _TransportQueue(asyncio.Queue):
+    def oldest(self):
+        return self._queue[0]
 
 
 class ArenaOwnerTransport:
@@ -40,7 +47,10 @@ class ArenaOwnerTransport:
         self.on_delivered = on_delivered
         self.on_fault = on_fault
         self.simulation_debt = simulation_debt
-        self._queue = asyncio.Queue(maxsize=limit)
+        self._queue = _TransportQueue(maxsize=limit)
+        self._batching = (os.environ.get('SOLBREAKER_OWNER_INPUT_BATCH', '1') == '1'
+                          and getattr(route, 'supports_input_batch', False))
+        self._batch_reserved = 0
         self._fault = None
         # Result is retained on settlement/delivery failure; it must never be
         # obtained by replaying a possibly mutated command.
@@ -71,6 +81,8 @@ class ArenaOwnerTransport:
         future = asyncio.get_running_loop().create_future()
         future.add_done_callback(_consume)
         try:
+            if self._queue.qsize() + self._batch_reserved >= self._queue.maxsize:
+                raise asyncio.QueueFull
             self._queue.put_nowait((command, future, sessions, origin,
                                     time.perf_counter_ns() if diagnostics.get_recorder() is not None else None))
         except asyncio.QueueFull as exc:
@@ -168,9 +180,79 @@ class ArenaOwnerTransport:
             if inspect.isawaitable(maybe):
                 await maybe
 
+    def _eligible_for_batch(self, row):
+        command, _, _, origin, _ = row
+        return (command.op in INPUT_BATCH_OPERATIONS and origin is not None
+                and self._entitled(*origin))
+
+    def _take_batch(self, first):
+        # The route owns application once an authorized prefix is sent. Do
+        # not pull a step, a lifecycle operation or a stale session past it.
+        if not self._batching or not self._eligible_for_batch(first):
+            return (first,)
+        batch = [first]
+        while (len(batch) < INPUT_BATCH_LIMIT and not self._queue.empty()
+               and self._eligible_for_batch(self._queue.oldest())):
+            batch.append(self._queue.get_nowait())
+        return batch
+
+    async def _deliver_input_batch(self, batch):
+        recorder = diagnostics.get_recorder()
+        begun = time.perf_counter_ns() if recorder is not None else None
+        route_done = None
+        published = {} if recorder is not None else None
+        self._batch_reserved = len(batch) - 1
+        try:
+            results = await self.route.request_input_batch(tuple(row[0] for row in batch))
+            route_done = time.perf_counter_ns() if recorder is not None else None
+            for row, result in zip(batch, results, strict=True):
+                command, future, sessions, _, _ = row
+                if type(result) is CommandRejected:
+                    if not future.done():
+                        future.set_exception(result)
+                else:
+                    self.undelivered_result = (command, result)
+                    await self._deliver(command, result, sessions)
+                    self.undelivered_result = None
+                    if not future.done():
+                        future.set_result(result)
+                if published is not None:
+                    published[future] = time.perf_counter_ns()
+        except BaseException as exc:
+            for _, future, _, _, _ in batch:
+                if not future.done():
+                    future.set_exception(OwnerError('input batch outcome may be unknown'))
+            if not isinstance(exc, Exception):
+                raise
+            self._begin_close(OwnerError(f'arena input batch failed: {type(exc).__name__}: {str(exc)[:512]}'))
+        finally:
+            self._batch_reserved = 0
+            for command, future, sessions, _, queued_at in batch:
+                self._queue.task_done()
+                if recorder is not None:
+                    finished = published.get(future)
+                    if finished is None:
+                        finished = time.perf_counter_ns()
+                    outcome = ('delivered' if future.done() and not future.cancelled()
+                               and future.exception() is None else 'batch_failed_or_rejected')
+                    recorder.record('owner_transport', arena_id=self.arena_id, operation=command.op,
+                                    account=command.account_id, command_at=command.at, deadline=command.deadline,
+                                    queue_wait_ns=begun-queued_at if queued_at is not None else None,
+                                    route_wait_ns=route_done-begun if route_done is not None else None,
+                                    delivery_ns=finished-route_done if route_done is not None else None,
+                                    total_ns=finished-queued_at if queued_at is not None else None,
+                                    queue_depth=self._queue.qsize(), sessions=len(sessions), outcome=outcome,
+                                    batch_size=len(batch))
+
     async def _run(self):
         while True:
-            command, future, sessions, origin, queued_at = await self._queue.get()
+            batch = self._take_batch(await self._queue.get())
+            if len(batch) > 1:
+                await self._deliver_input_batch(batch)
+                if self._fault is not None:
+                    return
+                continue
+            command, future, sessions, origin, queued_at = batch[0]
             recorder = diagnostics.get_recorder()
             begun = time.perf_counter_ns() if recorder is not None else None
             route_done = None

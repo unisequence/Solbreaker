@@ -137,7 +137,9 @@ def release_version(tag):
 
 
 def build(tag, output, native_archive, linux_native=None, windows_physics=None, windows_rapier=None,
-          windows_contact=None):
+          windows_contact=None, *, linux_contact=None):
+    if linux_contact and not linux_native:
+        raise ValueError('Linux contact collector requires dedicated Linux libraries')
     version = release_version(tag)
     with tempfile.TemporaryDirectory(prefix='solbreaker-release-') as temporary:
         work = Path(temporary)
@@ -158,7 +160,7 @@ def build(tag, output, native_archive, linux_native=None, windows_physics=None, 
         archives = [(source, 'source'), (windows, 'windows-x64'), (server, 'server-windows-x64')]
         if linux_native:
             linux = work/f'Solbreaker-{version}-server-linux-x86_64.zip'
-            package(linux, linux_native=linux_native, server_only=True)
+            package(linux, linux_native=linux_native, linux_contact=linux_contact, server_only=True)
             archives.append((linux, 'server-linux-x86_64'))
         for archive, kind in archives:
             if archive.stat().st_size > updates.MAX_DOWNLOAD:
@@ -178,9 +180,10 @@ if __name__ == '__main__':
     parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--windows-input', type=Path, help='Local copy of the pinned Windows release archive')
     parser.add_argument('--linux-native', type=Path, help='Freshly built Linux native crate directory')
+    parser.add_argument('--linux-contact', type=Path, help='Contact collector built for the Linux bundle')
     parser.add_argument('--windows-physics', type=Path, help='Ground controller DLL built from this checkout')
     parser.add_argument('--windows-rapier', type=Path, help='Rapier DLL built from this checkout')
     parser.add_argument('--windows-contact', type=Path, help='Contact query module built from this checkout')
     args = parser.parse_args()
     build(args.tag, args.output, args.windows_input, args.linux_native, args.windows_physics,
-          args.windows_rapier, args.windows_contact)
+          args.windows_rapier, args.windows_contact, linux_contact=args.linux_contact)

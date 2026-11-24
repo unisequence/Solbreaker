@@ -39,11 +39,23 @@ class ArenaRoute:
         return self._fault
 
     async def request(self, command: Command) -> Result:
-        if self._fault is not None:
-            raise OwnerError('arena route is unavailable') from self._fault
         if type(command) is not Command:
             raise ValueError('unsupported message')
         command.validate()
+        return await self._request(command)
+
+    @property
+    def supports_input_batch(self):
+        return getattr(self.owner, 'supports_input_batch', False)
+
+    async def request_input_batch(self, commands):
+        if not self.supports_input_batch:
+            raise OwnerError('arena route does not support input batches')
+        return await self._request(commands)
+
+    async def _request(self, command):
+        if self._fault is not None:
+            raise OwnerError('arena route is unavailable') from self._fault
         future = asyncio.get_running_loop().create_future()
         future.add_done_callback(_observe_future)
         try:
@@ -63,8 +75,15 @@ class ArenaRoute:
             command, future = await self._queue.get()
             try:
                 try:
-                    result = await self.owner.apply(command)
-                    if type(result) is not Result or result.arena_id != self.arena_id:
+                    batch = type(command) is tuple
+                    result = (await self.owner.apply_input_batch(command) if batch
+                              else await self.owner.apply(command))
+                    results = result if batch else (result,)
+                    if (batch and len(results) != len(command)) or any(
+                        not (batch and type(item) is CommandRejected)
+                        and (type(item) is not Result or item.arena_id != self.arena_id)
+                        for item in results
+                    ):
                         raise OwnerError('owner returned mismatched arena identity')
                 except CommandRejected as exc:
                     if not future.done():
@@ -72,7 +91,7 @@ class ArenaRoute:
                     continue
                 except Exception as exc:
                     failure = OwnerError(
-                        f'arena command {command.op} failed; outcome unknown: {str(exc)[:512]}')
+                        f'arena command {getattr(command, "op", "input-batch")} failed; outcome unknown: {str(exc)[:512]}')
                     failure.__cause__ = exc
                     if not future.done():
                         future.set_exception(failure)

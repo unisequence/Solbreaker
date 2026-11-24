@@ -109,3 +109,42 @@ async def apply(owner, command):
         owner._last_at = command.at
     return result
 
+
+async def apply_input_batch(owner, commands):
+    """Send one accepted prefix and receive each original reply in sequence."""
+    from solbreaker.arena_owner import (Command, CommandRejected, INPUT_BATCH_LIMIT,
+                                       INPUT_BATCH_OPERATIONS, OwnerError, _TIMED,
+                                       _check_reply, _freeze)
+    if owner._closed:
+        raise OwnerError('owner is closed')
+    if type(commands) is not tuple or not 2 <= len(commands) <= INPUT_BATCH_LIMIT:
+        raise ValueError('invalid input batch length')
+    for command in commands:
+        if type(command) is not Command:
+            raise ValueError('unsupported message')
+        command.validate()
+        if command.op not in INPUT_BATCH_OPERATIONS:
+            raise ValueError('command is a batch barrier')
+    requested = tuple(enumerate(commands, owner._seq + 1))
+    end = time.monotonic() + owner._timeout
+    results = []
+    try:
+        await _put(owner._in, _freeze(('input-batch', requested)), owner._timeout)
+        for sequence, command in requested:
+            remaining = end - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError('owner input batch timed out')
+            reply = pickle.loads(await _get(owner._out, owner._process, remaining))
+            try:
+                outcome = _check_reply(reply, sequence, command.op)
+            except CommandRejected as exc:
+                outcome = exc
+            else:
+                if command.op in _TIMED:
+                    owner._last_at = command.at
+            owner._seq = sequence
+            results.append(outcome)
+    except Exception as exc:
+        raise owner._channel_error('input batch', exc) from exc
+    return tuple(results)
+

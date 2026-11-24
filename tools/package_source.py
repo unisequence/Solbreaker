@@ -133,6 +133,7 @@ def validate_contents(payloads):
 
 def package(output, *, windows_native=None, windows_wheel=None, windows_runtime=None,
             linux_native=None, server_only=False, windows_physics=None, windows_rapier=None,
+            linux_contact=None,
             windows_contact=None, depot_bundle=None):
     if bool(windows_native) != bool(windows_wheel):
         raise ValueError('Provide both the Windows DLL directory and the Python 3.12 Bullet wheel')
@@ -142,6 +143,8 @@ def package(output, *, windows_native=None, windows_wheel=None, windows_runtime=
         raise ValueError('Rebuilt Windows libraries require the remaining pinned Windows inputs')
     if linux_native and (windows_native or not server_only):
         raise ValueError('Linux libraries are only supported in a dedicated Linux package')
+    if linux_contact and not linux_native:
+        raise ValueError('Linux contact collector requires dedicated Linux libraries')
     if server_only and not (windows_runtime or linux_native):
         raise ValueError('The dedicated package requires native libraries')
     payloads = source_inputs()
@@ -153,6 +156,8 @@ def package(output, *, windows_native=None, windows_wheel=None, windows_runtime=
     if linux_native:
         binaries = {f'solbreaker/native/{crate}/{name}': read_input(Path(linux_native)/crate/name)
                     for crate, name in LINUX_LIBRARIES.items()}
+        if linux_contact:
+            binaries['solbreaker/_contact_queries.abi3.so'] = read_input(Path(linux_contact))
         for name, content in binaries.items():
             if (content[:7] != b'\x7fELF\x02\x01\x01' or
                     content[16:20] != b'\x03\x00\x3e\x00'):
@@ -233,11 +238,13 @@ def main():
     parser.add_argument('--windows-wheel', type=Path)
     parser.add_argument('--windows-runtime', type=Path, help='Directory of pinned portable CPython and locked Windows wheels')
     parser.add_argument('--linux-native', type=Path, help='Directory of native crates with freshly built Linux libraries')
+    parser.add_argument('--linux-contact', type=Path, help='Freshly built Linux contact collector')
     parser.add_argument('--server-only', action='store_true')
     args = parser.parse_args()
     print(json.dumps(package(args.output, windows_native=args.windows_native,
                              windows_wheel=args.windows_wheel, windows_runtime=args.windows_runtime,
-                             linux_native=args.linux_native, server_only=args.server_only)))
+                             linux_native=args.linux_native, linux_contact=args.linux_contact,
+                             server_only=args.server_only)))
 
 
 if __name__ == '__main__':

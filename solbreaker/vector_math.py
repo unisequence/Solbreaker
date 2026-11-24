@@ -1,4 +1,4 @@
-"""Shortcut for an explicit float(default NumPy vector norm)."""
+"""Small binary64 vector operations used in the physics paths."""
 from math import sqrt as _sqrt
 import numpy as np
 _DEFAULT_NORM=np.linalg.norm
@@ -12,3 +12,9 @@ def vector_length(value):
             and value.ndim==1 and value.flags.c_contiguous):
         return _sqrt(value.dot(value))
     return float(np.linalg.norm(value))
+
+def cross3_f64(left, right):
+    """Cross product for two finite three-vectors with binary64 arithmetic."""
+    ax, ay, az = map(float, left)
+    bx, by, bz = map(float, right)
+    return np.array((ay * bz - az * by, az * bx - ax * bz, ax * by - ay * bx))

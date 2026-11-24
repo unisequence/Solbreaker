@@ -26,7 +26,7 @@ from .catalog import synchronized_catalog, maps_configuration
 from .camouflage import ALL_MAPS_SLOT, battle_paint, compatible_paints
 from .garage import CAMOUFLAGE_SLOTS
 from .battle import (initial_messages, spawn_batches, reconnect_batches, motion_messages, event_messages,
-                     battle_hints_message, ammo_message, avatar_method)
+                     battle_hints_message, ammo_message, avatar_method, world_motion_messages)
 from .arena import ArenaManager
 from .arena_commands import apply_at_tick, decode_input
 from .vehicle_data import VehicleConfiguration
@@ -514,6 +514,12 @@ class BaseEndpoint(asyncio.DatagramProtocol):
     async def _preload_map_metadata(self):
         started = time.monotonic()
         for map_id, key in self.map_catalog.items():
+            # Decoding the full map catalog contends with the owner IPC loop.
+            # The selected map can still be resolved on demand during a battle.
+            while (map_id not in self.map_specs and
+                   any(not arena.finished_at and not arena.closed
+                       for arena in self.arenas.arenas.values())):
+                await asyncio.sleep(.2)
             if map_id in self.map_specs:
                 continue
             try:
@@ -992,14 +998,16 @@ class BaseEndpoint(asyncio.DatagramProtocol):
             self._expire_reconnects(now)
         except Exception as exc:
             self._report_fault('reconnect_expiry', exc)
+        self._motion_world_cache = {}
         for addr, client in list(self.clients.items()):
             if self.clients.get(addr) is not client:
                 continue
             try:
                 if now - client.last_seen > 60:
                     self._disconnect_client(addr, "idle timeout")
+                else:
+                    self.tick_client(addr, client, now)
                     continue
-                self.tick_client(addr, client, now)
             except ChannelOverflow:
                 self._disconnect_client(addr, "reliable send window exceeded")
             except ChannelTimeout:
@@ -1007,6 +1015,9 @@ class BaseEndpoint(asyncio.DatagramProtocol):
             except Exception as exc:
                 self._report_fault('client_tick', exc, account_id=client.account_id)
                 self._disconnect_client(addr, 'internal session failure')
+            # Leaving a battle can change the roster or cancel a special mode.
+            self._motion_world_cache.clear()
+        self._motion_world_cache = None
         outbox = self.server.lab / "private/outbox"
         if (getattr(self.server, "developer_mode", False) and outbox.exists()
                 and any(c.account_created for c in self.clients.values())):
@@ -1229,6 +1240,16 @@ class BaseEndpoint(asyncio.DatagramProtocol):
                                    arena_id=arena.result_id)
                 self._disconnect_client(addr,'internal session failure')
 
+    def _battle_motion_messages(self, arena, player, frame):
+        cache = getattr(self, '_motion_world_cache', None)
+        if (cache is None or frame is None or getattr(arena, 'solo', False)
+                or getattr(arena, 'postbattle_complete', False) or getattr(arena, 'time_stop', None) is not None):
+            return motion_messages(arena, player, frame)
+        key = arena.result_id, player.team
+        if key not in cache:
+            cache[key] = world_motion_messages(arena, frame, team=player.team)
+        return motion_messages(arena, player, frame, world_messages=cache[key])
+
     def tick_client(self, addr, client, now):
         self.retry_pending(addr,client,now)
         self.sync_reports(addr,client,now)
@@ -1326,7 +1347,7 @@ class BaseEndpoint(asyncio.DatagramProtocol):
                 client.battle_hints_at = 0.
             vehicle = arena.vehicle_for(client.account_id)
             if motion_due and arena.started:
-                messages += motion_messages(arena,arena.players[client.account_id],frame)
+                messages += self._battle_motion_messages(arena, arena.players[client.account_id], frame)
                 p = frame.samples[vehicle.entity_id].pose if frame is not None else vehicle.pose
                 self.server.event('training_motion',tick=tick,entity_id=vehicle.entity_id,
                     step_count=frame.step_count if frame is not None else arena.step_count,

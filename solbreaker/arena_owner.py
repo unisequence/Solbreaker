@@ -27,6 +27,8 @@ _LENGTHS.update(sandbox=SANDBOX_INPUT.size, training_park=0, training_swap=None,
 _MAX_MESSAGE = 1024 * 1024
 _TIMED = frozenset(('ready', 'control', 'fire', 'leave', 'disconnect', 'step',
                     'consumable', 'select_shell', 'uprising_select', 'uprising_deselect'))
+INPUT_BATCH_OPERATIONS = frozenset(('control', 'aim', 'fire'))
+INPUT_BATCH_LIMIT = 16
 
 
 class OwnerError(RuntimeError):
@@ -187,6 +189,21 @@ def _check_reply(reply, sequence, operation):
     raise OwnerError(f'invalid owner reply during {operation}; command outcome unknown')
 
 
+def _requests(incoming):
+    while (raw := incoming.get()) is not None:
+        packet = pickle.loads(raw)
+        if type(packet) is tuple and len(packet) == 2 and packet[0] == 'input-batch':
+            batch = packet[1]
+            if (type(batch) is not tuple or not 2 <= len(batch) <= INPUT_BATCH_LIMIT
+                    or any(type(row) is not tuple or len(row) != 2
+                           or type(row[1]) is not Command or row[1].op not in INPUT_BATCH_OPERATIONS
+                           for row in batch)):
+                raise ValueError('invalid arena input batch')
+            yield from batch
+        else:
+            yield packet
+
+
 def _worker(factory: Callable[[], ArenaHandler], incoming, outgoing) -> None:
     handler = None
     sequence = 0
@@ -199,11 +216,7 @@ def _worker(factory: Callable[[], ArenaHandler], incoming, outgoing) -> None:
         handler = factory()
         metrics = getattr(handler, 'startup_metrics', None)
         outgoing.put(_freeze(('ready', metrics) if metrics else ('ready',)), timeout=1)
-        while True:
-            raw = incoming.get()
-            if raw is None:
-                break
-            requested, command = pickle.loads(raw)
+        for requested, command in _requests(incoming):
             if type(requested) is not int or requested != sequence + 1 or type(command) is not Command:
                 raise ValueError('invalid sequence or command')
             command.validate()
@@ -450,16 +463,29 @@ class AsyncArenaOwner:
         return self._cleanup
 
     async def apply(self, command: Command) -> Result:
+        from .owner_async import apply
+        if self._owner.ipc_backend == 'socket':
+            return await self._exchange(apply, self._owner, command)
+        import asyncio
+        return await self._exchange(asyncio.to_thread, self._owner.apply, command)
+
+    @property
+    def supports_input_batch(self):
+        return self._owner.ipc_backend == 'socket'
+
+    async def apply_input_batch(self, commands):
+        from .owner_async import apply_input_batch
+        if not self.supports_input_batch:
+            raise OwnerError('owner does not support input batches')
+        return await self._exchange(apply_input_batch, self._owner, commands)
+
+    async def _exchange(self, request, *args):
         import asyncio
         if self._closed:
             raise OwnerError('owner is closed; command outcome may be unknown')
         if self._pending is not None:
             raise OwnerError('another command is outstanding')
-        if self._owner.ipc_backend == 'socket':
-            from .owner_async import apply
-            task = asyncio.create_task(apply(self._owner, command))
-        else:
-            task = asyncio.create_task(asyncio.to_thread(self._owner.apply, command))
+        task = asyncio.create_task(request(*args))
         self._pending = task
         try:
             return await asyncio.shield(task)

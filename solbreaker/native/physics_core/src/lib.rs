@@ -1,6 +1,7 @@
 //! Stateful native physics and geometry for the experimental server branch.
 mod bullet_api;
 mod ground;
+mod static_triangles;
 mod support;
 
 use bullet_api::{Client, Contact};
@@ -238,10 +239,23 @@ impl StepInput {
     }
 }
 
+type StaticPairKey = ([u64; 6], u64, u64, i32);
+
+#[derive(Default)]
+struct StaticPairCache {
+    contacts: BTreeMap<StaticPairKey, Vec<Contact>>,
+    rows: usize,
+}
+
+const STATIC_PAIR_ENTRIES: usize = 512;
+const STATIC_PAIR_ROWS: usize = 4096;
+
 struct Body {
     native_id: i32,
     links: i32,
     turret: Option<i32>,
+    turret_bits: std::cell::Cell<u64>,
+    static_contacts: std::cell::RefCell<StaticPairCache>,
 }
 
 struct World {
@@ -250,6 +264,8 @@ struct World {
     original_ids: BTreeMap<i32, i32>,
     entities: BTreeMap<u32, i32>,
     map_bodies: BTreeSet<i32>,
+    solid_map_bodies: BTreeSet<i32>,
+    static_triangles: BTreeMap<i32, static_triangles::Tree>,
     terrain_bodies: BTreeSet<i32>,
     breakables: BTreeMap<String, Vec<i32>>,
     error: String,
@@ -283,6 +299,8 @@ impl World {
             original_ids: BTreeMap::new(),
             entities: BTreeMap::new(),
             map_bodies: BTreeSet::new(),
+            solid_map_bodies: BTreeSet::new(),
+            static_triangles: BTreeMap::new(),
             terrain_bodies: BTreeSet::new(),
             breakables: BTreeMap::new(),
             error: String::new(),
@@ -309,6 +327,15 @@ impl World {
             let original = entry["body"].as_i64().ok_or("Missing static body id")? as i32;
             world.original_ids.insert(body.native_id, original);
             let kind = entry["kind"].as_str().ok_or("Missing geometry kind")?;
+            if kind == "map" && entry.get("center").is_none() {
+                if let Some(tree) = entry["path"]
+                    .as_str()
+                    .and_then(|path| static_triangles::Tree::from_obj(std::path::Path::new(path)))
+                {
+                    world.static_triangles.insert(original, tree);
+                }
+            }
+
             if kind == "terrain" {
                 world.terrain_bodies.insert(original);
             } else {
@@ -319,6 +346,10 @@ impl World {
                 world.breakables.entry(key).or_default().push(original);
             }
             world.bodies.insert(original, body);
+        }
+        world.solid_map_bodies = world.map_bodies.clone();
+        for body in world.breakables.values().flatten() {
+            world.solid_map_bodies.remove(body);
         }
         // Match the query world's static broad-phase preparation.
         for _ in 0..10 {
@@ -479,6 +510,8 @@ impl World {
                 native_id,
                 links: links.len() as i32,
                 turret: None,
+                turret_bits: std::cell::Cell::new(0),
+                static_contacts: std::cell::RefCell::new(StaticPairCache::default()),
             })
         }
     }
@@ -506,10 +539,18 @@ impl World {
             }
             self.client.execute(command)?;
         }
+        if let (Some(_), Some(angle)) = (body.turret, turret) {
+            body.turret_bits.set(angle.to_bits());
+        }
         Ok(())
     }
 
-    fn contact_points(&self, entity: u32, skin: f64) -> Result<Vec<Contact>, String> {
+    fn contact_points(
+        &self,
+        entity: u32,
+        skin: f64,
+        ground_pose: Option<[u64; 6]>,
+    ) -> Result<Vec<Contact>, String> {
         let original = *self.entities.get(&entity).ok_or("Unknown entity")?;
         let body = &self.bodies[&original];
         let mut low = [f64::INFINITY; 3];
@@ -545,10 +586,37 @@ impl World {
             if self.terrain_bodies.contains(&other_original) {
                 continue;
             }
-            for mut point in self.client.closest(body.native_id, other, skin)? {
+            // Probes in the same Bullet world can reuse exact contacts against
+            // immutable map geometry. Vehicle and breakable pairs stay live.
+            let key = ground_pose.filter(|_| self.solid_map(other_original))
+                .map(|pose| (pose, body.turret_bits.get(), skin.to_bits(), other_original));
+            let map_ids = |mut point: Contact| {
                 point.body_a = original;
                 point.body_b = other_original;
-                points.push(point);
+                point
+            };
+            if let Some(key) = key {
+                let mut cached = body.static_contacts.borrow_mut();
+                if let Some(previous) = cached.contacts.get(&key) {
+                    points.extend(previous.iter().copied());
+                } else {
+                    let result: Vec<_> = self.client.closest(body.native_id, other, skin)?
+                        .into_iter().map(map_ids).collect();
+                    points.extend(result.iter().copied());
+                    if result.len() <= STATIC_PAIR_ROWS {
+                        if cached.contacts.len() >= STATIC_PAIR_ENTRIES
+                            || cached.rows + result.len() > STATIC_PAIR_ROWS
+                        {
+                            cached.contacts.clear();
+                            cached.rows = 0;
+                        }
+                        cached.rows += result.len();
+                        cached.contacts.insert(key, result);
+                    }
+                }
+            } else {
+                points.extend(self.client.closest(body.native_id, other, skin)?
+                    .into_iter().map(map_ids));
             }
         }
         Ok(points)
@@ -639,7 +707,7 @@ impl World {
                 if !skin.is_finite() || skin < 0. {
                     return Err("Invalid contact skin".into());
                 }
-                let points = self.contact_points(entity, skin)?;
+                let points = self.contact_points(entity, skin, None)?;
                 Ok(json!(points
                     .into_iter()
                     .map(|point| json!([
@@ -684,11 +752,7 @@ impl World {
     }
 
     fn solid_map(&self, original: i32) -> bool {
-        self.map_bodies.contains(&original)
-            && !self
-                .breakables
-                .values()
-                .any(|bodies| bodies.contains(&original))
+        self.solid_map_bodies.contains(&original)
     }
 
     fn destroy_object(&mut self, key: &str) -> Result<(), String> {

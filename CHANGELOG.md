@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.2.0 — Core Overdrive
+
+- The server groups input commands between processes by default. Movement,
+  aiming and fire commands still run in order, with physics ticks keeping
+  their place in the queue.
+- Ground movement reuses static collision queries. Rapier returns compact
+  contact and pose data to Python, reducing the cost of each physics step.
+- Run `python -m solbreaker benchmark` to measure battle tick rate, input
+  latency and UDP drops under scripted player or Classic AI load.
+- The dedicated Linux archive includes the native contact collector.
+- Fixed installation checks for paths that point to the same folder through
+  different aliases, including paths used to prepare the Proving Ground.
+
 ## 0.1.0
 
 - Classic bots can push together after a spotted opponent fires. They call

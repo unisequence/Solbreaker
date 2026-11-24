@@ -10,18 +10,22 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 
-from solbreaker import mad_games
+from solbreaker import collision, mad_games
 from solbreaker.arena import Arena
 from solbreaker.armor import ArmorHit, ShotResult
 from solbreaker.ballistics import Impact
 from solbreaker.big_boss import BigBoss, GravityTrap
-from solbreaker.collision import CollisionWorld, Destructible, Motion, Pose, matrix
+from solbreaker.collision import CollisionWorld, Destructible, Motion, Pose, matrix, quaternion
 from solbreaker.consumables import GRAVITY_JUMP_SPEC, ConsumableState
 from solbreaker.mesh_files import MeshFiles
 from solbreaker.native_physics import SensorState, StepInput, StepOutput, library_path, load_library
 from solbreaker.physics_proxy import vehicle_proxies
+from solbreaker.rapier_dynamic import (
+    RapierStepRows, _decode_packed_step, _PACKED_CONTACT, _PACKED_HEADER, _PACKED_STATE,
+)
 from solbreaker.terrain import MapTerrain
 from solbreaker.vehicle_data import MissileFlight, Shell
+from solbreaker.vector_math import cross3_f64
 
 
 def box(low, high):
@@ -513,6 +517,50 @@ class NativePhysicsTests(unittest.TestCase):
         self.assertTrue(all(point[8] > -.03
                             for point in world._contacts(pose,200,suspension=True)))
 
+    @unittest.skipUnless(getattr(collision._contact_queries, 'API_VERSION', None) == 2,
+                         'requires contact collector API 2')
+    def test_pivot_rejection_matches_full_wall_contact_validation(self):
+        world = self.world(self.assets('wall'))
+        entity = 200
+        for _ in range(32):
+            world.move(.08, 0., entity, dt=1/60)
+        previous = world.poses[entity]
+        x, height, z_wall = previous.position
+        outcomes = set()
+        for z in (z_wall - .8, z_wall, z_wall + .3, z_wall + .8):
+            for yaw in (-.02, 0., .02):
+                candidate = Pose((x, height, z), yaw)
+                with self.subTest(z=z, yaw=yaw):
+                    full, _ = world._valid(candidate, previous, entity=entity, suspension=True)
+                    early, points = world._valid(candidate, previous, entity=entity,
+                                                 suspension=True, rejection_only=True)
+                    self.assertEqual(early, full)
+                    self.assertEqual(points, [])
+                    outcomes.add(full)
+        self.assertEqual(outcomes, {False, True})
+
+    @unittest.skipUnless(getattr(collision._contact_queries, 'API_VERSION', None) == 2,
+                         'requires contact collector API 2')
+    def test_pivot_cache_preserves_contacts_as_other_tank_moves(self):
+        assets = self.assets('wall')
+        world = self.world(assets)
+        entity, peer = 200, 201
+        pose = Pose((0., .001, 2.7), .07)
+        cache = collision._PivotMapPairQueries(world, world.bodies[entity], assets)
+        peer_contact = []
+        for z in (10., 2.8, 10.):
+            world.relocate_training_body(peer, Pose((.4, 0., z), 0.))
+            for angle in (0., .37, 0.):
+                world.set_turret(angle, entity=entity)
+                cache.turret = world.gun_angles[entity][0]
+                expected = world._contacts(pose, entity, suspension=True)
+                actual = world._contacts(pose, entity, suspension=True, pair_queries=cache)
+                with self.subTest(peer_z=z, turret_angle=angle):
+                    self.assertEqual(actual, expected)
+                    self.assertTrue(any(point[2] in world.map_bodies for point in actual))
+                    peer_contact.append(any(point[2] == world.bodies[peer] for point in actual))
+        self.assertEqual(peer_contact, [False] * 3 + [True] * 3 + [False] * 3)
+
     def test_ram_scrubs_speed_after_measuring_damage_energy(self):
         world = self.world(self.assets('flat'))
         a,b = 200,201
@@ -857,6 +905,65 @@ class NativePhysicsTests(unittest.TestCase):
                 self.assertGreater(z, 2.7)
                 self.assertTrue(world.motion[200].grounded)
                 self.assertIsNone(world.last_wall_recoil)
+
+    def test_rapier_syncs_grounded_poses_once_per_tick_and_preserves_motion(self):
+        def trajectory(cross, *, resync):
+            with patch.dict(os.environ, SOLBREAKER_DYNAMIC_BACKEND='rapier'):
+                world = self.world(self.assets('wall'))
+            if world._rapier is None:
+                self.skipTest('Optional Rapier library unavailable')
+            world.relocate_training_body(200, Pose((0., .6, -3.), 0.))
+            self.assertTrue(world.set_flight_velocity(200, (0., 0., 16.), (.07, -.1, .03)))
+            sync = world._rapier.sync
+            native_step = world._rapier.step
+            motion = []
+            frames = []
+
+            def expected_rows():
+                return [
+                    dict(id=entity, position=pose.position,
+                         orientation=quaternion(pose.yaw, pose.pitch, pose.roll))
+                    for entity, pose in world.poses.items()]
+
+            def check_rows(rows):
+                self.assertEqual(rows, expected_rows())
+                return sync(rows)
+
+            def record_step(dt, *, rows=False):
+                if resync and len(frames) % steps_per_tick:
+                    sync(expected_rows())
+                result = native_step(dt, rows=rows)
+                if isinstance(result, RapierStepRows):
+                    buffer = world._rapier._output
+                    states, contacts, metadata = _PACKED_HEADER.unpack_from(buffer)
+                    size = _PACKED_HEADER.size + states * _PACKED_STATE.size
+                    size += contacts * _PACKED_CONTACT.size + metadata
+                    frame = _decode_packed_step(buffer, size)
+                    self.assertEqual(world._rapier_contacts(result.contacts, dt, result.metadata),
+                                     world._rapier_contacts(frame['contacts'], dt))
+                    frames.append(frame)
+                else:
+                    frames.append(result)
+                return result
+
+            tick_dt = 1/60
+            steps_per_tick = math.ceil(tick_dt/world.DYNAMIC_MAX_STEP)
+            packed = None if resync else world._rapier._step_packed
+            with (patch('solbreaker.collision.cross3_f64', cross),
+                  patch.object(world._rapier, '_step_packed', packed),
+                  patch.object(world._rapier, 'step', side_effect=record_step),
+                  patch.object(world._rapier, 'sync', side_effect=check_rows) as sensor_sync):
+                for step in range(32):
+                    # The other tank can move between ticks while the first is airborne.
+                    world.relocate_training_body(201, Pose((step * .01, .2, 2.), step * .001))
+                    world.dynamic_commit(tick_dt, piloted=(200,))
+                    self.assertEqual(sensor_sync.call_count, step + 1)
+                    motion.append((world.poses[200], world.motion[200].velocity, world.flight_spin(200)))
+            self.assertTrue(any(point['other'].get('id') == 201 for result in frames
+                                for point in result['contacts'] if point['other']))
+            return motion, repr(frames)
+
+        self.assertEqual(trajectory(np.cross, resync=True), trajectory(cross3_f64, resync=False))
 
     def test_red_border_removes_only_outward_air_velocity(self):
         for backend in ('bullet', 'rapier'):

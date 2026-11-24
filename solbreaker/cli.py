@@ -28,6 +28,24 @@ def main(argv=None):
     serve.add_argument('--state', type=Path, default=Path('data'))
     serve.add_argument('--log-file', type=Path)
     serve.add_argument('--diagnostic-log', nargs='?', const='auto', type=Path)
+    benchmark = commands.add_parser('benchmark', help='Measure local server stability under scripted load')
+    benchmark.add_argument('--game', type=Path, required=True, help='path to the compatible Blitz files')
+    benchmark.add_argument('--engine', choices=('owner', 'in-process'), default='owner', help='arena runtime (default: launcher owner profile)')
+    benchmark.add_argument('--cold', action='store_true', help='start arenas while launcher map metadata is still warming')
+    benchmark.add_argument('--diagnostic-dir', type=Path, help='record production timing traces to a new directory')
+    benchmark.add_argument('--maps', default='rudniki', help='comma-separated map keys')
+    benchmark.add_argument('--scenarios', default='solo,bots', help='comma-separated solo,bots,players')
+    benchmark.add_argument('--arenas', default='1', help='comma-separated concurrent arena counts (1..16)')
+    benchmark.add_argument('--input-pattern', choices=('burst', 'spread'), default='burst',
+                           help='send controls together or evenly phase them across each 30 Hz interval')
+    benchmark.add_argument('--tanks', default='auto', help='comma-separated even tank counts per arena (2..14), or auto')
+    benchmark.add_argument('--seconds', type=int, default=30, help='seconds per measured run (5..3600)')
+    benchmark.add_argument('--warmup', type=int, default=8, help='seconds per warmup (0..120)')
+    benchmark.add_argument('--repeat', type=int, default=1, help='repetitions per case (1..10)')
+    benchmark.add_argument('--seed', type=int, default=42)
+    benchmark.add_argument('--vehicle', default='usa/A116_XM551')
+    benchmark.add_argument('--output', type=Path, required=True, help='new JSON report file')
+    benchmark.add_argument('--work-dir', type=Path, help='existing folder for disposable state and caches')
     configure = commands.add_parser('configure-network', help='Apply a network TOML to idle state')
     configure.add_argument('--state', type=Path, default=Path('data'))
     configure.add_argument('--config', type=Path, required=True)
@@ -107,6 +125,9 @@ def main(argv=None):
             except ImportError as error:
                 parser.exit(1, f'Install interface dependencies with python tools/install_dependencies.py --profile {args.command}. {error}\n')
             return run(args.config)
+        elif args.command == 'benchmark':
+            from .server_benchmark import run
+            return run(args)
         elif args.command == 'launch-client':
             from .management_tasks import launch_client
             result = launch_client(args.lab, auto_login=args.auto_login,

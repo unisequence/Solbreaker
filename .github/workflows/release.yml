@@ -59,6 +59,7 @@ jobs:
           rustup toolchain install 1.85.0 --profile minimal
           export CARGO_TARGET_DIR="$RUNNER_TEMP/cargo-target"
           RUSTUP_TOOLCHAIN=1.85.0 python tools/build_native.py --jobs 2
+          python tools/build_contact_queries.py --output-dir "$RUNNER_TEMP/linux-contact"
       - name: Build Windows physics libraries from the same sources
         run: |
           sudo apt-get update
@@ -87,6 +88,7 @@ jobs:
         run: |
           git merge-base --is-ancestor HEAD origin/main
           python tools/build_release.py --tag "$GITHUB_REF_NAME" --output "$RUNNER_TEMP/solbreaker-release" \
+            --linux-contact "$RUNNER_TEMP/linux-contact/_contact_queries.abi3.so" \
             --linux-native solbreaker/native \
             --windows-physics "$RUNNER_TEMP/solbreaker_physics_core.dll" \
             --windows-rapier "$RUNNER_TEMP/tfs_rapier_dynamic.dll" \
@@ -99,6 +101,7 @@ jobs:
           python -m venv .venv
           .venv/bin/python tools/install_dependencies.py --profile tui
           .venv/bin/python -c 'from tools.setup_state import verify_native; verify_native()'
+          .venv/bin/python -c 'from solbreaker import _contact_queries; assert _contact_queries.API_VERSION == 2'
           ./start-server.sh --version
           .venv/bin/python -m unittest tests.test_terminal
       - name: Test DepotDownloader in the Linux launcher bundle
@@ -145,7 +148,7 @@ jobs:
           }
           & ./runtime/python/python.exe -c 'from solbreaker import _contact_queries; assert _contact_queries.API_VERSION == 2'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          & ./runtime/python/python.exe -m unittest tests.test_native_windows tests.test_native_physics tests.test_collision_queries tests.test_contact_queries
+          & ./runtime/python/python.exe -m unittest tests.test_native_windows tests.test_native_physics tests.test_collision_queries tests.test_contact_queries tests.test_owner_input_batch
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $dedicated = Join-Path $env:RUNNER_TEMP dedicated
           Expand-Archive -LiteralPath $serverArchives[0].FullName -DestinationPath $dedicated
@@ -185,7 +188,14 @@ jobs:
           cd "$RUNNER_TEMP/solbreaker-release"
           sha256sum --check SHA256SUMS
           version="${GITHUB_REF_NAME#v}"
-          options=(--verify-tag --title "Solbreaker $version" --notes-file "$notes")
+          title="Solbreaker $version"
+          IFS= read -r subject < "$notes"
+          if [[ "$subject" == "$title — "* ]]; then
+            title="$subject"
+            git tag -l --format='%(contents:body)' "$GITHUB_REF_NAME" > "$notes"
+            test -s "$notes"
+          fi
+          options=(--verify-tag --title "$title" --notes-file "$notes")
           if [[ "$version" == *-* ]]; then
             options+=(--prerelease)
           fi

@@ -18,6 +18,7 @@ docs/DEVELOPMENT.ru.md
 docs/INSTALL.ru.md
 docs/NATIVE_PHYSICS.md
 docs/SERVER.ru.md
+docs/SERVER_BENCHMARK.ru.md
 docs/SOURCES.md
 examples/network-public.toml
 launch-gui.cmd
@@ -428,6 +429,7 @@ solbreaker/native/physics_core/Cargo.toml
 solbreaker/native/physics_core/src/bullet_api.rs
 solbreaker/native/physics_core/src/ground.rs
 solbreaker/native/physics_core/src/lib.rs
+solbreaker/native/physics_core/src/static_triangles.rs
 solbreaker/native/physics_core/src/support.rs
 solbreaker/native/rapier_dynamic/Cargo.lock
 solbreaker/native/rapier_dynamic/Cargo.toml
@@ -489,6 +491,7 @@ solbreaker/roster.py
 solbreaker/scene_quality.py
 solbreaker/sandbox.py
 solbreaker/server.py
+solbreaker/server_benchmark.py
 solbreaker/server_identity.py
 solbreaker/setup_progress.py
 solbreaker/sim_native.py
@@ -542,6 +545,7 @@ tests/test_native_build.py
 tests/test_native_physics.py
 tests/test_native_windows.py
 tests/test_navigation_cache.py
+tests/test_owner_input_batch.py
 tests/test_packaging.py
 tests/test_profile_redirects.py
 tests/test_proving_ground_foliage.py
@@ -551,6 +555,7 @@ tests/test_proving_ground_rules.py
 tests/test_registration.py
 tests/test_runtime_flags.py
 tests/test_sandbox.py
+tests/test_server_benchmark.py
 tests/test_server_identity.py
 tests/test_setup.py
 tests/test_static_visibility.py
