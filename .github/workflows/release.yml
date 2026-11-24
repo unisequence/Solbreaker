@@ -185,8 +185,6 @@ jobs:
           notes="$RUNNER_TEMP/release-notes.md"
           git tag -l --format='%(contents)' "$GITHUB_REF_NAME" > "$notes"
           test -s "$notes"
-          cd "$RUNNER_TEMP/solbreaker-release"
-          sha256sum --check SHA256SUMS
           version="${GITHUB_REF_NAME#v}"
           title="Solbreaker $version"
           IFS= read -r subject < "$notes"
@@ -199,6 +197,8 @@ jobs:
           if [[ "$version" == *-* ]]; then
             options+=(--prerelease)
           fi
+          cd "$RUNNER_TEMP/solbreaker-release"
+          sha256sum --check SHA256SUMS
           gh release create "$GITHUB_REF_NAME" "${options[@]}" \
             "Solbreaker-$version-source.zip" "Solbreaker-$version-windows-x64.zip" \
             "Solbreaker-$version-server-windows-x64.zip" \
