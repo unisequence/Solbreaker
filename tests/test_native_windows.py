@@ -35,6 +35,10 @@ class FailingHandler(EchoHandler):
         raise NameError('failed while refilling the magazine')
 
 
+def failing_factory():
+    raise RuntimeError('failed to build vehicle collision shape')
+
+
 class NativeWindowsTests(unittest.TestCase):
     def test_rapier_selects_native_windows_dll(self):
         with patch('solbreaker.rapier_dynamic.sys.platform', 'win32'):
@@ -48,6 +52,12 @@ class NativeWindowsTests(unittest.TestCase):
         with ArenaOwner(EchoHandler, ipc='socket', timeout=10) as owner:
             result = owner.apply(Command('control', 1., 1, b'\x01\x00'))
             self.assertEqual(result.state, b'\x01\x00')
+
+    def test_startup_reports_the_factory_exception(self):
+        for ipc in ('socket', 'queue'):
+            with self.subTest(ipc=ipc), self.assertRaisesRegex(
+                    OwnerError, 'owner failed to initialize: RuntimeError: failed to build vehicle collision shape'):
+                ArenaOwner(failing_factory, ipc=ipc)
 
     def test_startup_timeout_does_not_extend_command_timeout(self):
         async def run_owner():

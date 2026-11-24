@@ -328,6 +328,9 @@ class ArenaOwner:
                 self.startup_metrics = {}
             elif type(reply) is tuple and len(reply) == 2 and reply[0] == 'ready' and type(reply[1]) is dict:
                 self.startup_metrics = reply[1]
+            elif (type(reply) is tuple and len(reply) == 3 and reply[0] == 'error'
+                  and type(reply[1]) is str and type(reply[2]) is str):
+                raise OwnerError(f'owner failed to initialize: {reply[1]}: {reply[2]}')
             else:
                 raise OwnerError('owner failed to initialize')
         except BaseException:

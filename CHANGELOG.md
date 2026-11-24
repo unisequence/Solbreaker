@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.1
+
+- Fixed server error 8 when entering battle with the T110E5. The armor loader
+  skips faces without an assigned material. [Issue #15](https://github.com/unisequence/Solbreaker/issues/15)
+- The server log now includes the original error when an arena worker fails to start.
+
 ## 0.2.0 — Core Overdrive
 
 - The server groups input commands between processes by default. Movement,

@@ -651,7 +651,12 @@ class ArmorModel:
                 if np.any(ids != ids[:,0,None]):
                     raise ValueError('Armor triangle crosses material indices')
                 armor = selected[name]
-                ids = ids[:,0]
+                # T110E5 has unassigned faces mixed with its indexed hull
+                # and gun armor. Only indexed faces contribute to armor rays.
+                indexed = ids[:,0] != -1
+                ids = ids[indexed,0]
+                if not ids.size:
+                    continue
                 thickness, factors = [],[]
                 for ident in ids:
                     item = armor.material(f'armor_{ident}')
@@ -662,7 +667,7 @@ class ArmorModel:
                 vertices = world_vertices(mesh.vertices,comps.get('TransformComponent',{}))
                 if name == definition.hull.geometry:
                     vertices = vertices + definition.hull_position
-                triangles = vertices[mesh.triangles[:,(0,2,1)]]
+                triangles = vertices[mesh.triangles[indexed][:,(0,2,1)]]
                 self.parts.append((name,triangles,ids,np.array(thickness),np.array(factors)))
         # Chassis has no separate armor mesh in this build. Use its visible
         # track surfaces as external modules, with armor from the vehicle XML.

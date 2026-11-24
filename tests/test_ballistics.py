@@ -3,7 +3,9 @@ from math import hypot
 from random import Random
 from types import SimpleNamespace
 from unittest import TestCase
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
+
+import numpy as np
 
 from solbreaker.aiming import GunAim, disperse_shot
 from solbreaker.arena import Arena
@@ -11,7 +13,51 @@ from solbreaker.armor import ArmorHit, ArmorModel, MovableArmorStateSnapshot, Sh
 from solbreaker.ballistics import BodyState, Projectile, SweepCache, advance
 from solbreaker.battle import event_messages, received_damage_message
 from solbreaker.collision import Pose
-from solbreaker.vehicle_data import Shell
+from solbreaker.dava_scene import Mesh
+from solbreaker.vehicle_data import ArmorMaterial, Component, Shell
+
+
+class ArmorMaterialTests(TestCase):
+    def test_unassigned_faces_do_not_replace_indexed_vehicle_armor(self):
+        def entity(name, mesh):
+            return {'name': name, 'components': {'render': {
+                'comp.typename': 'RenderComponent',
+                'rc.renderObj': {'ro.batches': {'0': {'rb.datasource': mesh}}},
+            }}}
+
+        hull, turret, gun = (Component(name, 1, 1., 100, name, (ArmorMaterial('armor_1', 50., 1.),))
+                             for name in ('hull', 'turret_02', 'gun_06'))
+        tracks = Component('chassis', 1, 1., 100, None, (
+            ArmorMaterial('leftTrack', 10., 0.), ArmorMaterial('rightTrack', 10., 0.)))
+        definition = SimpleNamespace(hull=hull, turret=turret, gun=gun, chassis=tracks, health=100,
+                                     hull_position=(0., 0., 0.), collision_asset='collision',
+                                     visual_asset='visual', weapon=SimpleNamespace(shells=(None,)),
+                                     aiming=SimpleNamespace(turret_position=(0., 0., 0.), gun_position=(0., 0., 0.)))
+        collision = {'#hierarchy': [entity(part.geometry, i) for i, part in enumerate((hull, turret, gun))]}
+        visual = {'#hierarchy': [entity(name, 0) for name in ('chassis_track_L', 'chassis_track_R')]}
+        vertices = np.array([(0., 0., 0.), (1., 0., 0.), (0., 1., 0.),
+                             (0., 0., 2.), (1., 0., 2.), (0., 1., 2.)])
+        triangles = np.array([(0, 1, 2), (3, 4, 5)])
+        indexed = Mesh(vertices, triangles[:1], np.ones(6, dtype=int))
+
+        def load(gun_ids):
+            meshes = {0: Mesh(vertices, triangles, np.array([1, 1, 1, -1, -1, -1])),
+                      1: indexed, 2: Mesh(vertices, triangles, np.array(gun_ids))}
+            with (patch('solbreaker.armor.scene', side_effect=(collision, visual)),
+                  patch('solbreaker.armor.geometry', side_effect=(meshes, {0: indexed}))):
+                return ArmorModel(None, definition)
+
+        armor = load([1, 1, 1, -1, -1, -1])
+        for name, faces, materials, thickness, _ in armor.parts:
+            if name in (hull.geometry, gun.geometry):
+                self.assertEqual(len(faces), 1)
+                np.testing.assert_array_equal(materials, [1])
+                np.testing.assert_array_equal(thickness, [50.])
+                np.testing.assert_array_equal(faces[0], [[0., 0., 0.], [0., 0., 1.], [1., 0., 0.]])
+        with self.assertRaisesRegex(ValueError, 'No armor definition: gun_06/99'):
+            load([1, 1, 1, 99, 99, 99])
+        with self.assertRaisesRegex(ValueError, 'Armor triangle crosses material indices'):
+            load([1, 1, 1, -1, -1, 1])
 
 
 class ShotDispersionTests(TestCase):
