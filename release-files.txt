@@ -307,6 +307,7 @@ solbreaker/arena_retirement.py
 solbreaker/arena_time_stop.py
 solbreaker/armor.py
 solbreaker/armor_native.py
+solbreaker/assets/benchmark-report.html
 solbreaker/assets/build-11.21.0.1235_7376187-files.json.gz
 solbreaker/assets/icon-source.json
 solbreaker/assets/launcher-cover-source.json
@@ -331,6 +332,7 @@ solbreaker/battle_rewards.py
 solbreaker/battle_setup.py
 solbreaker/battle_settings.py
 solbreaker/battle_settings_wire.py
+solbreaker/benchmark_report.py
 solbreaker/big_boss.py
 solbreaker/bootstrap.py
 solbreaker/bot_ai.py

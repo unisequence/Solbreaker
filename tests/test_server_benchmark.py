@@ -1,4 +1,7 @@
 import asyncio
+import json
+from pathlib import Path
+from tempfile import TemporaryDirectory
 import socket
 import sys
 from types import SimpleNamespace
@@ -6,13 +9,68 @@ import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
 from solbreaker.base import BaseEndpoint
+from solbreaker.benchmark_report import build_html, convert, html_output
 from solbreaker.cipher import decrypt_packet, encrypt_packet
 from solbreaker.datagram import SourceDatagramTransport, open_datagram
 from solbreaker.mercury import base_elements, encode_packet, parse_packet
-from solbreaker.server_benchmark import _control_offsets, _wait_for_battle, MotionSample, Peer, _verdict, durations, tank_count
+from solbreaker.server_benchmark import (_control_offsets, _wait_for_battle, MotionSample,
+                                         Peer, Timeline, _verdict, durations, tank_count)
 
 
 class ServerBenchmarkTests(unittest.TestCase):
+    def test_timeline_records_windowed_cpu_memory_steps_and_latency(self):
+        arena = SimpleNamespace(result_id='arena', step_count=100)
+        endpoint = SimpleNamespace(ticks=[], input_wait={'arena': []})
+        with (patch('solbreaker.server_benchmark.time.monotonic', side_effect=(10, 10.8, 11.2, 11.7)),
+              patch('solbreaker.server_benchmark.time.process_time', side_effect=(2, 2.6, 2.8)),
+              patch('solbreaker.server_benchmark.owner_cpu_times', side_effect=({7: 8}, {7: 9.2}, {})),
+              patch('solbreaker.server_benchmark.process_memory', side_effect=((40, 50), (60, 70),
+                                                                             (None, None), (65, 70)))):
+            timeline = Timeline(endpoint, [arena], [7])
+            timeline.sample([])
+            self.assertEqual(timeline.rows, [])
+            arena.step_count += 72
+            endpoint.ticks.extend((.002, .003))
+            endpoint.input_wait['arena'].append(.017)
+            timeline.sample([.004])
+            arena.step_count += 29
+            timeline.sample([.004, .006], final=True)
+        first, last = timeline.rows
+        self.assertEqual(first['steps_per_second'], [60])
+        self.assertEqual(first['server_cpu_cores'], .5)
+        self.assertEqual(first['worker_cpu_cores'], 1)
+        self.assertEqual(first['worker_rss_bytes_sum'], 40)
+        self.assertEqual(first['server_rss_bytes'], 60)
+        self.assertEqual(first['tick_p99_ms'], 3)
+        self.assertEqual(first['input_p99_ms'], [17])
+        self.assertEqual(last['loop_delay_p99_ms'], 6)
+        self.assertEqual(last['input_p99_ms'], [None])
+        self.assertIsNone(last['worker_cpu_cores'])
+        self.assertIsNone(last['worker_rss_bytes_sum'])
+
+    def test_report_preserves_legacy_windows_and_escapes_data(self):
+        window = {'elapsed_seconds': 10, 'steps_per_second': [60],
+                  'label': '</script><script>alert(1)</script>'}
+        data = {'schema': 1, 'complete': True, 'version': '<0.3>',
+                'runs': [{'map': '<b>map</b>', 'scenario': 'bots', 'verdict': 'ok',
+                          'arenas': [{'steps_per_second': 60}], 'windows': [window]}]}
+        html = build_html(data)
+        self.assertIn('1 of 1 runs passed', html)
+        self.assertIn('&lt;b&gt;map&lt;/b&gt;', html)
+        self.assertNotIn('<script>alert(1)</script>', html)
+        self.assertIn('"legacy": true', html)
+        self.assertIn('"steps_per_second": [60]', html)
+        self.assertNotIn('<script src=', html)
+        self.assertNotIn('<link ', html)
+        with TemporaryDirectory() as folder:
+            source = Path(folder) / 'results.json'
+            source.write_text(json.dumps(data))
+            self.assertEqual(convert(source), html_output(source))
+            self.assertEqual(html_output(source).read_text(), html)
+            with self.assertRaises(FileExistsError):
+                convert(source)
+            self.assertEqual(json.loads(source.read_text()), data)
+
     def test_spread_offsets_interleave_arenas(self):
         left, right = (SimpleNamespace(result_id=name) for name in ('left', 'right'))
         offsets = _control_offsets([(left,), (left,), (right,), (right,)])

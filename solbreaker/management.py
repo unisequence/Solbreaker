@@ -9,6 +9,7 @@ import subprocess
 import sys
 import threading
 
+from .benchmark_report import html_output
 from .connection import atomic_write
 from .client_atmosphere import PRESETS
 
@@ -204,8 +205,9 @@ def command(action, settings, *, windows=None, interface=None, replay=None, depo
         if not (Path(game)/'wotblitz.exe').is_file():
             raise ValueError('Укажи папку совместимой сборки игры в параметрах.')
         output = Path(output).resolve()
-        if not output.parent.is_dir() or output.exists():
-            raise ValueError('Выбери новый файл для отчёта бенчмарка.')
+        html = html_output(output)
+        if (not output.parent.is_dir() or output.exists() or html.exists() or html.is_symlink()):
+            raise ValueError('Выбери новое имя для отчётов HTML и JSON.')
         args = cli + ['benchmark', '--game', game, '--output', str(output)]
         for name in ('maps', 'scenarios', 'arenas', 'tanks', 'seconds', 'warmup', 'repeat',
                      'engine', 'input-pattern', 'vehicle', 'seed'):
@@ -359,6 +361,7 @@ class Manager:
         self.output = queue.Queue(maxsize=2000)
         self.history = deque(maxlen=2000)
         self.job = None
+        self.benchmark_report = None
         self.server = None
         self.client = None
         self._client_log = None
@@ -466,6 +469,8 @@ class Manager:
                 raise ValueError('Сначала останови локальный сервер')
             self.job = Job(action, command(action, job_settings, interface=interface, depot=depot,
                                            benchmark=benchmark), self.output)
+            if action == 'benchmark':
+                self.benchmark_report = html_output(Path(benchmark[0]).resolve())
         self.notice = {'server': 'Сервер запускается', 'prepare-server': 'Подготовка сервера',
                        'prepare-client': 'Подготовка клиента', 'play': self.notice,
                        'benchmark': 'Бенчмарк выполняется'}.get(action, 'Операция выполняется')
@@ -519,7 +524,7 @@ class Manager:
                                f'Сервер завершился с ошибкой {self.server.returncode}. Открой журнал')
                 self._server_exit_reported = True
         if self.job is not None and self.job.returncode is not None:
-            success = 'Отчёт бенчмарка сохранён. Путь указан в журнале.' if self.job.action == 'benchmark' else 'Готово'
+            success = 'Отчёты HTML и JSON сохранены. Пути указаны в журнале.' if self.job.action == 'benchmark' else 'Готово'
             self.notice = (success if self.job.returncode == 0
                            else self.job.resource_error or self.job.failure_notice or
                            f'Операция завершилась с ошибкой {self.job.returncode}. Подробности в журнале')

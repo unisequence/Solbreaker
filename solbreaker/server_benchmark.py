@@ -373,7 +373,56 @@ def _control_offsets(actors):
             for slot, (_, index) in enumerate(sorted(slots))}
 
 
-async def _drive(endpoint, actors, arenas, samples, duration, started, *, measure=False, windows=None, pattern='burst'):
+class Timeline:
+    """Record one-second windows during the measured part of a case."""
+
+    def __init__(self, endpoint, arenas, pids):
+        self.endpoint = endpoint
+        self.arenas = arenas
+        self.pids = pids
+        self.rows = []
+        self.started = self.last = time.monotonic()
+        self.cpu = time.process_time()
+        self.worker_cpu = owner_cpu_times(pids)
+        self.steps = [arena.step_count for arena in arenas]
+        self.inputs = [0] * len(arenas)
+        self.ticks = self.lags = 0
+
+    def sample(self, lags, *, final=False):
+        now = time.monotonic()
+        span = now - self.last
+        if span < (.25 if final else 1.0):
+            return
+        cpu = time.process_time()
+        workers = owner_cpu_times(self.pids)
+        worker_rss = [process_memory(pid)[0] for pid in self.pids]
+        steps = [arena.step_count for arena in self.arenas]
+        inputs = [self.endpoint.input_wait[arena.result_id] for arena in self.arenas]
+        ticks = self.endpoint.ticks
+        self.rows.append({
+            'elapsed_seconds': round(now - self.started, 3),
+            'window_seconds': round(span, 3),
+            'server_cpu_cores': round((cpu - self.cpu) / span, 3),
+            'server_rss_bytes': process_memory()[0],
+            'worker_cpu_cores': (round(sum(workers[pid] - self.worker_cpu[pid]
+                                           for pid in self.pids) / span, 3)
+                                 if self.pids and len(workers) == len(self.worker_cpu) == len(self.pids)
+                                 else None),
+            'worker_rss_bytes_sum': (sum(worker_rss) if worker_rss and None not in worker_rss else None),
+            'steps_per_second': [round((value - previous) / span, 3)
+                                 for value, previous in zip(steps, self.steps, strict=True)],
+            'input_p99_ms': [durations(values[offset:])['p99_ms']
+                             for values, offset in zip(inputs, self.inputs, strict=True)],
+            'tick_p99_ms': durations(ticks[self.ticks:])['p99_ms'],
+            'loop_delay_p99_ms': durations(lags[self.lags:])['p99_ms'],
+        })
+        self.last, self.cpu, self.worker_cpu, self.steps = now, cpu, workers, steps
+        self.inputs = [len(values) for values in inputs]
+        self.ticks, self.lags = len(ticks), len(lags)
+
+
+async def _drive(endpoint, actors, arenas, samples, duration, started, *, measure=False,
+                 windows=None, timeline=None, pattern='burst'):
     first = scheduled = time.monotonic()
     end = first + duration
     probe = first
@@ -428,6 +477,8 @@ async def _drive(endpoint, actors, arenas, samples, duration, started, *, measur
             probe = now + .1
             for arena in arenas:
                 samples[arena.result_id].observe(arena, now)
+        if timeline is not None:
+            timeline.sample(lags)
         if windows is not None and now - window_start >= 10:
             deltas = [(arena.step_count - last) / (now - window_start)
                       for arena, last in zip(arenas, window_steps, strict=True)]
@@ -446,6 +497,8 @@ async def _drive(endpoint, actors, arenas, samples, duration, started, *, measur
         scheduled += CONTROL_INTERVAL * max(1, math.floor((now - scheduled) / CONTROL_INTERVAL) + 1)
     try:
         await asyncio.sleep(max(0., end - time.monotonic()))
+        if timeline is not None:
+            timeline.sample(lags, final=True)
     finally:
         for handle in pending:
             handle.cancel()
@@ -590,8 +643,9 @@ async def _scenario(state, map_key, scenario, count, requested_tanks, seconds, w
         measure_epoch = time.time()
         begin, cpu = time.monotonic(), time.process_time()
         windows = []
+        timeline = Timeline(endpoint, arenas, worker_pids)
         lags = await _drive(endpoint, actors, arenas, samples, seconds, started,
-                            measure=True, windows=windows, pattern=pattern)
+                            measure=True, windows=windows, timeline=timeline, pattern=pattern)
         wall = time.monotonic() - begin
         cpu = (time.process_time() - cpu) / wall
         endpoint.measuring = False
@@ -665,7 +719,7 @@ async def _scenario(state, map_key, scenario, count, requested_tanks, seconds, w
                 'reliable_retransmissions': sum(c.retransmissions for _, _, c, _ in actors) - retry_baseline,
                 'server_rtt_at_end': durations([c.smoothed_rtt for _, _, c, _ in actors
                                                 if c.smoothed_rtt is not None]),
-                'windows': windows, 'faults': faults, 'verdict': _verdict(details, faults), 'arenas': details}
+                'windows': windows, 'timeline': timeline.rows, 'faults': faults, 'verdict': _verdict(details, faults), 'arenas': details}
     finally:
         cleanup_started = time.monotonic()
         try:
@@ -705,6 +759,10 @@ def run(args):
         raise ValueError('Benchmark output directory does not exist')
     if args.output.exists():
         raise ValueError('Choose a new output file for the benchmark report')
+    from .benchmark_report import html_output, write_html
+    html = html_output(args.output)
+    if html.exists() or html.is_symlink():
+        raise ValueError('Choose a new HTML file for the benchmark report')
     # Launcher defaults for the owner profile. In-process is retained as a control.
     os.environ['SOLBREAKER_ARENA_OWNERS'] = '1' if args.engine == 'owner' else '0'
     if args.engine == 'owner':
@@ -764,5 +822,7 @@ def run(args):
             checkpoint()
         report['complete'] = True
         checkpoint()
-    print(f'Benchmark report: {args.output}')
+    print(f'Benchmark JSON: {args.output}')
+    write_html(report, html)
+    print(f'Benchmark HTML: {html}')
     return 1 if any(run['verdict'] == 'error' for run in report['runs']) else 0

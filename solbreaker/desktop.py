@@ -1175,7 +1175,12 @@ class Window(QMainWindow):
         self.log.setMaximumBlockCount(2000)
         self.log.setFont(QFont('Monospace', 10))
         column.addWidget(self.log, 1)
-        column.addWidget(button(tr('Прочитать журнал сервера'), self.load_log))
+        actions = QHBoxLayout()
+        actions.addWidget(button(tr('Прочитать журнал сервера'), self.load_log))
+        self.benchmark_report_button = button(tr('Открыть отчёт бенчмарка'), self.open_benchmark_report)
+        actions.addWidget(self.benchmark_report_button)
+        actions.addStretch()
+        column.addLayout(actions)
 
     def browse(self, key, kind):
         current = self.fields[key].text()
@@ -1394,6 +1399,11 @@ class Window(QMainWindow):
                   bool(settings.server_url.strip() or document(remote_profile(settings)).get('server_id')))
         return (game/'wotblitz.exe').is_file(), prepared_client(settings), server
 
+    def open_benchmark_report(self):
+        path = self.manager.benchmark_report
+        if path is not None and path.is_file() and not QDesktopServices.openUrl(QUrl.fromLocalFile(str(path))):
+            self.error('Не удалось открыть HTML-отчёт.')
+
     def change_update_channel(self):
         try:
             updates.save_channel(self.config, self.update_channel.currentData())
@@ -1420,7 +1430,7 @@ class Window(QMainWindow):
         if not path:
             return
         path = Path(path)
-        if not path.suffix:
+        if path.suffix.lower() != '.json':
             path = path.with_suffix('.json')
         try:
             self.manager.run('benchmark', benchmark=(path, dialog.options))
@@ -1519,6 +1529,8 @@ class Window(QMainWindow):
                 self.manager.notice = (friendly_error(detail) or
                                        'Установка обновления не удалась. См. runtime/launcher-update.log.')
             self.update_result = ''
+        path = self.manager.benchmark_report
+        self.benchmark_report_button.setVisible(not self.manager.busy and path is not None and path.is_file())
         self.progress.setVisible(self.manager.busy or starting or self.update_task is not None)
         self.notice.setText(self.update_detail or tr(self.manager.notice))
         self.notice.setVisible(bool(self.update_detail) or self.manager.notice not in ('Выбери действие', 'Готово'))

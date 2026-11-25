@@ -44,8 +44,11 @@ def main(argv=None):
     benchmark.add_argument('--repeat', type=int, default=1, help='repetitions per case (1..10)')
     benchmark.add_argument('--seed', type=int, default=42)
     benchmark.add_argument('--vehicle', default='usa/A116_XM551')
-    benchmark.add_argument('--output', type=Path, required=True, help='new JSON report file')
+    benchmark.add_argument('--output', type=Path, required=True, help='new JSON report file; HTML is written next to it')
     benchmark.add_argument('--work-dir', type=Path, help='existing folder for disposable state and caches')
+    report = commands.add_parser('benchmark-report', help='Render an existing benchmark JSON report as offline HTML')
+    report.add_argument('input', type=Path)
+    report.add_argument('--output', type=Path, help='new HTML file (default: next to the JSON)')
     configure = commands.add_parser('configure-network', help='Apply a network TOML to idle state')
     configure.add_argument('--state', type=Path, default=Path('data'))
     configure.add_argument('--config', type=Path, required=True)
@@ -128,6 +131,10 @@ def main(argv=None):
         elif args.command == 'benchmark':
             from .server_benchmark import run
             return run(args)
+        elif args.command == 'benchmark-report':
+            from .benchmark_report import convert
+            print(f'Benchmark HTML: {convert(args.input, args.output)}')
+            return
         elif args.command == 'launch-client':
             from .management_tasks import launch_client
             result = launch_client(args.lab, auto_login=args.auto_login,
