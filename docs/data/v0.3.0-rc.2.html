@@ -1,0 +1,319 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
+<title>Solbreaker benchmark report</title>
+<style>
+:root {
+  color-scheme: dark;
+  --bg: #121820; --surface: #19222c; --line: #35434f; --grid: #283744;
+  --ink: #edf3f7; --muted: #adbbc8; --cyan: #75dce8;
+  --green: #a9dfaa; --amber: #ffd28a; --red: #ffacb2;
+  font: 15px/1.5 "Segoe UI", system-ui, sans-serif;
+}
+* { box-sizing: border-box; }
+body { margin: 0; color: var(--ink); background: var(--bg); }
+main { max-width: 1220px; padding: 3rem 2.5rem 3.5rem; margin: auto; }
+.hero { border-top: 3px solid var(--cyan); padding-top: 1.7rem; }
+.hero, .run-heading, .picker, .summary { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+h1, h2, h3, p, dl, figure { margin: 0; }
+h1 { font-size: clamp(2rem, 5vw, 3.5rem); line-height: 1.08; letter-spacing: -.035em; }
+h2 { font-size: clamp(1.5rem, 3.1vw, 2.2rem); line-height: 1.2; overflow-wrap: anywhere; }
+h3 { font-size: 1.1rem; margin: 1.8rem 0 .65rem; }
+.hero p, .run-heading p { color: var(--muted); margin-top: .45rem; }
+.summary { font-size: .9rem; color: var(--muted); justify-content: flex-start; gap: .6rem; }
+.status { display: inline-block; color: var(--muted); border: 1px solid currentColor; border-radius: 4px;
+          font-size: .82rem; font-weight: 650; padding: .2rem .55rem; white-space: nowrap; }
+.status.ok { color: var(--green); } .status.warn { color: var(--amber); } .status.bad { color: var(--red); }
+.metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); padding: .9rem 0;
+           border-block: 1px solid var(--line); }
+.metrics.host { margin: 1.7rem 0; }
+.metrics div { min-width: 0; padding: .25rem .95rem; border-left: 1px solid var(--line); }
+.metrics div:first-child { border-left: 0; padding-left: 0; }
+.metrics dt, .metrics p { color: var(--muted); font-size: .8rem; }
+.metrics dd { margin: .18rem 0 0; font-size: 1.5rem; font-weight: 600; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.metrics.host dd { font-size: 1rem; }
+.picker { justify-content: flex-start; margin: 1.45rem 0 1.9rem; }
+select { max-width: 100%; padding: .6rem .75rem; border-radius: 5px; border: 1px solid var(--line);
+         background: var(--surface); color: var(--ink); font: inherit; }
+:focus-visible { outline: 2px solid var(--cyan); outline-offset: 3px; }
+.run + .run { margin-top: 2.75rem; }
+.run-heading { margin-bottom: .9rem; }
+.plots { margin-top: 1.5rem; }
+.plot-heading { display: flex; justify-content: space-between; align-items: end; gap: .5rem 1rem; flex-wrap: wrap; }
+.plot-heading h3 { margin-top: 0; }
+.plot-heading p, .muted, .empty { color: var(--muted); font-size: .85rem; }
+.plot-heading p { margin-bottom: .65rem; }
+.plot-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; border: 1px solid var(--line);
+             background: var(--line); }
+figure { background: var(--surface); padding: .9rem 1rem .75rem; min-width: 0; }
+figcaption { font-size: .9rem; font-weight: 600; }
+canvas { display: block; width: 100%; height: 157px; margin: .4rem 0 .2rem; }
+.series { display: flex; flex-wrap: wrap; gap: .16rem .75rem; font-size: .76rem; color: var(--muted); min-height: 1.4em; }
+.series span::before { content: ""; display: inline-block; width: .7em; height: 2px; margin: 0 .35em .2em 0; background: var(--series); }
+.series span.target::before { background: none; border-top: 1px dashed var(--series); }
+output { display: block; color: var(--ink); font-size: .77rem; min-height: 1.4em; margin-bottom: .25rem;
+         font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.table-wrap { overflow-x: auto; background: var(--surface); border-block: 1px solid var(--line); }
+table { width: 100%; border-collapse: collapse; color: var(--ink); font-size: .86rem; font-variant-numeric: tabular-nums; }
+th, td { text-align: right; padding: .62rem .64rem; }
+thead th { color: var(--muted); font-weight: 550; font-size: .76rem; }
+tbody tr { border-top: 1px solid var(--line); }
+tbody th { color: var(--cyan); }
+th:first-child { text-align: left; }
+.metrics.network { grid-template-columns: repeat(6, minmax(0,1fr)); }
+.muted { margin-top: .6rem; }
+.empty { margin: .75rem 0; }
+.faults { color: var(--red); padding-left: 1.25rem; }
+[hidden] { display: none !important; }
+@media(max-width: 780px) {
+  main { padding: 1.6rem 1.25rem 2rem; }
+  .metrics, .metrics.network { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .6rem 0; }
+  .metrics div:nth-child(odd) { border: 0; padding-left: 0; }
+}
+@media(max-width: 610px) { .plot-grid { grid-template-columns: minmax(0, 1fr); } }
+</style>
+</head>
+<body>
+<main>
+<header class="hero">
+  <div><h1>Solbreaker benchmark</h1><p>Solbreaker 0.3.0rc2 · Game build 11.21.0.1235_7376187</p></div>
+  <div class="summary"><span class="status ok">Passed</span><span>2 of 2 runs passed</span></div>
+</header>
+<dl class="metrics host"><div><dt>Processor</dt><dd>13th Gen Intel(R) Core(TM) i5-13400F</dd></div><div><dt>Host RAM</dt><dd>48,010.7</dd><p>MiB</p></div><div><dt>Target simulation</dt><dd>60</dd><p>Hz</p></div><div><dt>Run configuration</dt><dd>owner</dd><p>20 s per run</p></div></dl>
+<div class="picker" hidden>
+  <label for="run-picker">Benchmark run</label>
+  <select id="run-picker"><option value="0">01 · rudniki / players · 1 arenas</option><option value="1">02 · rudniki / players · 2 arenas</option></select>
+</div>
+
+<section class="run" data-run="0" aria-labelledby="run-0">
+  <div class="run-heading">
+    <div><h2 id="run-0">rudniki / players</h2>
+    <p>1 arenas · 20 s measured · Seed 42</p></div>
+    <span class="status ok">Passed</span>
+  </div>
+
+  <dl class="metrics"><div><dt>Lowest arena frequency</dt><dd>60.05</dd><p>Hz</p></div><div><dt>Tick work p99</dt><dd>0.13</dd><p>ms per server tick</p></div><div><dt>Server CPU average</dt><dd>0.06</dd><p>logical cores</p></div><div><dt>Server RAM at finish</dt><dd>246.6</dd><p>MiB resident</p></div></dl>
+  <div class="chart-anchor"></div>
+  <h3>Per-arena statistics</h3>
+  <div class="table-wrap" tabindex="0" role="region" aria-label="Arena statistics"><table><thead><tr><th scope="col">Arena</th><th scope="col">Players</th><th scope="col">Bots</th><th scope="col">Tanks</th><th scope="col">Hz</th><th scope="col">Dropped s</th><th scope="col">Input p99 ms</th><th scope="col">Motion gap p99 ms</th><th scope="col">Worker step p99 ms</th><th scope="col">Controls queued / sent</th><th scope="col">Queue overflows</th><th scope="col">Worker CPU cores</th><th scope="col">Build s</th></tr></thead><tbody><tr><th scope="row">01</th><td>6</td><td>0</td><td>6</td><td>60.05</td><td>0</td><td>1.85</td><td>46.79</td><td>10.29</td><td>3,600 / 3,600</td><td>0</td><td>0.27</td><td>6.07</td></tr></tbody></table></div>
+  <h3>Loopback network</h3>
+  <dl class="metrics network"><div><dt>Server receive drops</dt><dd>0</dd><p>packets</p></div><div><dt>Client receive drops</dt><dd>0</dd><p>packets</p></div><div><dt>Reliable retransmits</dt><dd>0</dd><p>packets</p></div><div><dt>Server → clients</dt><dd>3,855</dd><p>packets</p></div><div><dt>Clients → server</dt><dd>3,855</dd><p>packets</p></div><div><dt>Smoothed RTT p99</dt><dd>0.31</dd><p>ms at finish</p></div></dl>
+  <p class="muted">Receive drops are socket counters where supported. Retransmits and packet totals measure separate events.</p>
+
+</section>
+<section class="run" data-run="1" aria-labelledby="run-1">
+  <div class="run-heading">
+    <div><h2 id="run-1">rudniki / players</h2>
+    <p>2 arenas · 20 s measured · Seed 42</p></div>
+    <span class="status ok">Passed</span>
+  </div>
+
+  <dl class="metrics"><div><dt>Lowest arena frequency</dt><dd>60</dd><p>Hz</p></div><div><dt>Tick work p99</dt><dd>0.14</dd><p>ms per server tick</p></div><div><dt>Server CPU average</dt><dd>0.09</dd><p>logical cores</p></div><div><dt>Server RAM at finish</dt><dd>252.9</dd><p>MiB resident</p></div></dl>
+  <div class="chart-anchor"></div>
+  <h3>Per-arena statistics</h3>
+  <div class="table-wrap" tabindex="0" role="region" aria-label="Arena statistics"><table><thead><tr><th scope="col">Arena</th><th scope="col">Players</th><th scope="col">Bots</th><th scope="col">Tanks</th><th scope="col">Hz</th><th scope="col">Dropped s</th><th scope="col">Input p99 ms</th><th scope="col">Motion gap p99 ms</th><th scope="col">Worker step p99 ms</th><th scope="col">Controls queued / sent</th><th scope="col">Queue overflows</th><th scope="col">Worker CPU cores</th><th scope="col">Build s</th></tr></thead><tbody><tr><th scope="row">01</th><td>6</td><td>0</td><td>6</td><td>60.05</td><td>0</td><td>2.44</td><td>52.77</td><td>10.59</td><td>3,600 / 3,600</td><td>0</td><td>0.23</td><td>2.68</td></tr><tr><th scope="row">02</th><td>6</td><td>0</td><td>6</td><td>60</td><td>0</td><td>1.96</td><td>35.24</td><td>6.38</td><td>3,600 / 3,600</td><td>0</td><td>0.25</td><td>2.65</td></tr></tbody></table></div>
+  <h3>Loopback network</h3>
+  <dl class="metrics network"><div><dt>Server receive drops</dt><dd>0</dd><p>packets</p></div><div><dt>Client receive drops</dt><dd>0</dd><p>packets</p></div><div><dt>Reliable retransmits</dt><dd>0</dd><p>packets</p></div><div><dt>Server → clients</dt><dd>7,794</dd><p>packets</p></div><div><dt>Clients → server</dt><dd>7,788</dd><p>packets</p></div><div><dt>Smoothed RTT p99</dt><dd>0.39</dd><p>ms at finish</p></div></dl>
+  <p class="muted">Receive drops are socket counters where supported. Retransmits and packet totals measure separate events.</p>
+
+</section>
+<section class="plots" hidden aria-label="Measurement timeline">
+  <div class="plot-heading">
+    <h3>Measurement timeline</h3>
+    <p class="plot-note">Elapsed time in seconds. Hover or use the arrow keys on a chart.</p>
+  </div>
+  <div class="plot-grid">
+    <figure><figcaption>CPU · logical cores</figcaption><canvas role="img" aria-label="CPU usage timeline" tabindex="0"></canvas><output aria-live="off"></output><div class="series"></div></figure>
+    <figure><figcaption>RAM · resident MiB</figcaption><canvas role="img" aria-label="Resident memory timeline" tabindex="0"></canvas><output aria-live="off"></output><div class="series"></div></figure>
+    <figure><figcaption>Simulation · Hz per arena</figcaption><canvas role="img" aria-label="Arena simulation frequency timeline" tabindex="0"></canvas><output aria-live="off"></output><div class="series"></div></figure>
+    <figure><figcaption>Latency · p99 ms</figcaption><canvas role="img" aria-label="Tick work, loop delay and input latency timeline" tabindex="0"></canvas><output aria-live="off"></output><div class="series"></div></figure>
+  </div>
+  <p class="muted">Server CPU and RAM include the benchmark harness. Worker RSS totals may count shared pages more than once.</p>
+</section>
+</main>
+<script type="application/json" id="benchmark-data">{"target": 60, "runs": [{"arenaCount": 1, "rows": [{"elapsed_seconds": 1.001, "window_seconds": 1.001, "server_cpu_cores": 0.065, "server_rss_bytes": 258629632, "worker_cpu_cores": 0.19, "worker_rss_bytes_sum": 1263296512, "tick_p99_ms": 0.112, "loop_delay_p99_ms": 2.072, "steps_per_second": [59.929], "input_p99_ms": [2.156]}, {"elapsed_seconds": 2.034, "window_seconds": 1.032, "server_cpu_cores": 0.071, "server_rss_bytes": 258629632, "worker_cpu_cores": 0.271, "worker_rss_bytes_sum": 1263296512, "tick_p99_ms": 0.22, "loop_delay_p99_ms": 1.085, "steps_per_second": [60.055], "input_p99_ms": [2.192]}, {"elapsed_seconds": 3.067, "window_seconds": 1.034, "server_cpu_cores": 0.059, "server_rss_bytes": 258629632, "worker_cpu_cores": 0.252, "worker_rss_bytes_sum": 1263296512, "tick_p99_ms": 0.218, "loop_delay_p99_ms": 1.208, "steps_per_second": [59.986], "input_p99_ms": [1.671]}, {"elapsed_seconds": 4.068, "window_seconds": 1.0, "server_cpu_cores": 0.059, "server_rss_bytes": 258629632, "worker_cpu_cores": 0.26, "worker_rss_bytes_sum": 1263300608, "tick_p99_ms": 0.118, "loop_delay_p99_ms": 1.141, "steps_per_second": [59.975], "input_p99_ms": [1.71]}, {"elapsed_seconds": 5.068, "window_seconds": 1.0, "server_cpu_cores": 0.068, "server_rss_bytes": 258629632, "worker_cpu_cores": 0.31, "worker_rss_bytes_sum": 1263300608, "tick_p99_ms": 0.145, "loop_delay_p99_ms": 1.306, "steps_per_second": [59.994], "input_p99_ms": [2.035]}, {"elapsed_seconds": 6.068, "window_seconds": 1.0, "server_cpu_cores": 0.067, "server_rss_bytes": 258629632, "worker_cpu_cores": 0.35, "worker_rss_bytes_sum": 1263300608, "tick_p99_ms": 0.134, "loop_delay_p99_ms": 1.208, "steps_per_second": [59.999], "input_p99_ms": [1.88]}, {"elapsed_seconds": 7.1, "window_seconds": 1.033, "server_cpu_cores": 0.061, "server_rss_bytes": 258629632, "worker_cpu_cores": 0.3, "worker_rss_bytes_sum": 1263300608, "tick_p99_ms": 0.163, "loop_delay_p99_ms": 1.478, "steps_per_second": [60.043], "input_p99_ms": [1.749]}, {"elapsed_seconds": 8.101, "window_seconds": 1.001, "server_cpu_cores": 0.057, "server_rss_bytes": 258629632, "worker_cpu_cores": 0.24, "worker_rss_bytes_sum": 1263300608, "tick_p99_ms": 0.124, "loop_delay_p99_ms": 1.091, "steps_per_second": [59.967], "input_p99_ms": [1.603]}, {"elapsed_seconds": 9.134, "window_seconds": 1.034, "server_cpu_cores": 0.058, "server_rss_bytes": 258629632, "worker_cpu_cores": 0.261, "worker_rss_bytes_sum": 1263300608, "tick_p99_ms": 0.159, "loop_delay_p99_ms": 1.139, "steps_per_second": [59.985], "input_p99_ms": [1.704]}, {"elapsed_seconds": 10.167, "window_seconds": 1.033, "server_cpu_cores": 0.067, "server_rss_bytes": 258629632, "worker_cpu_cores": 0.261, "worker_rss_bytes_sum": 1263300608, "tick_p99_ms": 0.123, "loop_delay_p99_ms": 1.172, "steps_per_second": [60.031], "input_p99_ms": [2.823]}, {"elapsed_seconds": 11.168, "window_seconds": 1.0, "server_cpu_cores": 0.06, "server_rss_bytes": 258629632, "worker_cpu_cores": 0.23, "worker_rss_bytes_sum": 1263300608, "tick_p99_ms": 0.126, "loop_delay_p99_ms": 1.194, "steps_per_second": [59.976], "input_p99_ms": [1.733]}, {"elapsed_seconds": 12.201, "window_seconds": 1.033, "server_cpu_cores": 0.06, "server_rss_bytes": 258629632, "worker_cpu_cores": 0.281, "worker_rss_bytes_sum": 1263300608, "tick_p99_ms": 0.118, "loop_delay_p99_ms": 1.248, "steps_per_second": [59.056], "input_p99_ms": [1.542]}, {"elapsed_seconds": 13.201, "window_seconds": 1.0, "server_cpu_cores": 0.064, "server_rss_bytes": 258629632, "worker_cpu_cores": 0.27, "worker_rss_bytes_sum": 1263300608, "tick_p99_ms": 0.213, "loop_delay_p99_ms": 1.31, "steps_per_second": [60.991], "input_p99_ms": [1.671]}, {"elapsed_seconds": 14.201, "window_seconds": 1.0, "server_cpu_cores": 0.063, "server_rss_bytes": 258629632, "worker_cpu_cores": 0.27, "worker_rss_bytes_sum": 1263300608, "tick_p99_ms": 0.131, "loop_delay_p99_ms": 1.07, "steps_per_second": [59.997], "input_p99_ms": [1.672]}, {"elapsed_seconds": 15.201, "window_seconds": 1.0, "server_cpu_cores": 0.061, "server_rss_bytes": 258629632, "worker_cpu_cores": 0.32, "worker_rss_bytes_sum": 1263300608, "tick_p99_ms": 0.198, "loop_delay_p99_ms": 1.136, "steps_per_second": [59.998], "input_p99_ms": [4.414]}, {"elapsed_seconds": 16.235, "window_seconds": 1.034, "server_cpu_cores": 0.06, "server_rss_bytes": 258629632, "worker_cpu_cores": 0.232, "worker_rss_bytes_sum": 1263300608, "tick_p99_ms": 0.121, "loop_delay_p99_ms": 1.269, "steps_per_second": [59.968], "input_p99_ms": [1.616]}, {"elapsed_seconds": 17.268, "window_seconds": 1.033, "server_cpu_cores": 0.055, "server_rss_bytes": 258629632, "worker_cpu_cores": 0.252, "worker_rss_bytes_sum": 1263300608, "tick_p99_ms": 0.181, "loop_delay_p99_ms": 1.128, "steps_per_second": [60.011], "input_p99_ms": [1.343]}, {"elapsed_seconds": 18.301, "window_seconds": 1.033, "server_cpu_cores": 0.056, "server_rss_bytes": 258629632, "worker_cpu_cores": 0.348, "worker_rss_bytes_sum": 1263300608, "tick_p99_ms": 0.124, "loop_delay_p99_ms": 1.256, "steps_per_second": [60.007], "input_p99_ms": [2.216]}, {"elapsed_seconds": 19.334, "window_seconds": 1.033, "server_cpu_cores": 0.053, "server_rss_bytes": 258629632, "worker_cpu_cores": 0.242, "worker_rss_bytes_sum": 1263300608, "tick_p99_ms": 0.117, "loop_delay_p99_ms": 1.095, "steps_per_second": [59.998], "input_p99_ms": [1.415]}, {"elapsed_seconds": 20.001, "window_seconds": 0.667, "server_cpu_cores": 0.05, "server_rss_bytes": 258629632, "worker_cpu_cores": 0.195, "worker_rss_bytes_sum": 1263300608, "tick_p99_ms": 0.115, "loop_delay_p99_ms": 1.245, "steps_per_second": [61.5], "input_p99_ms": [0.775]}], "legacy": false}, {"arenaCount": 2, "rows": [{"elapsed_seconds": 1.0, "window_seconds": 1.0, "server_cpu_cores": 0.088, "server_rss_bytes": 265170944, "worker_cpu_cores": 0.41, "worker_rss_bytes_sum": 2425307136, "tick_p99_ms": 0.153, "loop_delay_p99_ms": 1.02, "steps_per_second": [58.977, 59.977], "input_p99_ms": [1.904, 1.985]}, {"elapsed_seconds": 2.034, "window_seconds": 1.034, "server_cpu_cores": 0.087, "server_rss_bytes": 265170944, "worker_cpu_cores": 0.464, "worker_rss_bytes_sum": 2425442304, "tick_p99_ms": 0.278, "loop_delay_p99_ms": 1.029, "steps_per_second": [60.941, 59.973], "input_p99_ms": [1.785, 1.921]}, {"elapsed_seconds": 3.067, "window_seconds": 1.033, "server_cpu_cores": 0.085, "server_rss_bytes": 265170944, "worker_cpu_cores": 0.484, "worker_rss_bytes_sum": 2425511936, "tick_p99_ms": 0.167, "loop_delay_p99_ms": 1.164, "steps_per_second": [60.029, 60.029], "input_p99_ms": [1.72, 1.862]}, {"elapsed_seconds": 4.067, "window_seconds": 1.0, "server_cpu_cores": 0.092, "server_rss_bytes": 265170944, "worker_cpu_cores": 0.58, "worker_rss_bytes_sum": 2425593856, "tick_p99_ms": 0.122, "loop_delay_p99_ms": 1.045, "steps_per_second": [59.995, 59.995], "input_p99_ms": [2.474, 2.829]}, {"elapsed_seconds": 5.1, "window_seconds": 1.033, "server_cpu_cores": 0.089, "server_rss_bytes": 265170944, "worker_cpu_cores": 0.571, "worker_rss_bytes_sum": 2426683392, "tick_p99_ms": 0.216, "loop_delay_p99_ms": 1.029, "steps_per_second": [60.014, 60.014], "input_p99_ms": [1.922, 1.928]}, {"elapsed_seconds": 6.101, "window_seconds": 1.001, "server_cpu_cores": 0.086, "server_rss_bytes": 265170944, "worker_cpu_cores": 0.52, "worker_rss_bytes_sum": 2426728448, "tick_p99_ms": 0.128, "loop_delay_p99_ms": 1.065, "steps_per_second": [59.961, 59.961], "input_p99_ms": [1.809, 1.917]}, {"elapsed_seconds": 7.101, "window_seconds": 1.0, "server_cpu_cores": 0.09, "server_rss_bytes": 265170944, "worker_cpu_cores": 0.44, "worker_rss_bytes_sum": 2426765312, "tick_p99_ms": 0.206, "loop_delay_p99_ms": 1.195, "steps_per_second": [60.995, 59.995], "input_p99_ms": [2.289, 1.544]}, {"elapsed_seconds": 8.134, "window_seconds": 1.033, "server_cpu_cores": 0.087, "server_rss_bytes": 265170944, "worker_cpu_cores": 0.455, "worker_rss_bytes_sum": 2426908672, "tick_p99_ms": 0.134, "loop_delay_p99_ms": 1.11, "steps_per_second": [59.04, 60.008], "input_p99_ms": [1.793, 1.916]}, {"elapsed_seconds": 9.167, "window_seconds": 1.033, "server_cpu_cores": 0.091, "server_rss_bytes": 265170944, "worker_cpu_cores": 0.542, "worker_rss_bytes_sum": 2427076608, "tick_p99_ms": 0.204, "loop_delay_p99_ms": 0.997, "steps_per_second": [60.966, 59.998], "input_p99_ms": [2.166, 1.877]}, {"elapsed_seconds": 10.201, "window_seconds": 1.033, "server_cpu_cores": 0.09, "server_rss_bytes": 265170944, "worker_cpu_cores": 0.29, "worker_rss_bytes_sum": 2427080704, "tick_p99_ms": 0.127, "loop_delay_p99_ms": 1.104, "steps_per_second": [60.013, 60.013], "input_p99_ms": [2.857, 4.423]}, {"elapsed_seconds": 11.201, "window_seconds": 1.0, "server_cpu_cores": 0.088, "server_rss_bytes": 265170944, "worker_cpu_cores": 0.36, "worker_rss_bytes_sum": 2427088896, "tick_p99_ms": 0.203, "loop_delay_p99_ms": 1.077, "steps_per_second": [58.979, 59.978], "input_p99_ms": [2.199, 1.774]}, {"elapsed_seconds": 12.234, "window_seconds": 1.033, "server_cpu_cores": 0.095, "server_rss_bytes": 265170944, "worker_cpu_cores": 0.523, "worker_rss_bytes_sum": 2427097088, "tick_p99_ms": 0.133, "loop_delay_p99_ms": 1.041, "steps_per_second": [59.062, 60.03], "input_p99_ms": [3.039, 2.357]}, {"elapsed_seconds": 13.234, "window_seconds": 1.0, "server_cpu_cores": 0.093, "server_rss_bytes": 265170944, "worker_cpu_cores": 0.61, "worker_rss_bytes_sum": 2427113472, "tick_p99_ms": 0.247, "loop_delay_p99_ms": 1.077, "steps_per_second": [61.984, 59.985], "input_p99_ms": [2.505, 2.081]}, {"elapsed_seconds": 14.234, "window_seconds": 1.0, "server_cpu_cores": 0.094, "server_rss_bytes": 265170944, "worker_cpu_cores": 0.52, "worker_rss_bytes_sum": 2427142144, "tick_p99_ms": 0.139, "loop_delay_p99_ms": 1.062, "steps_per_second": [59.99, 59.99], "input_p99_ms": [4.561, 1.835]}, {"elapsed_seconds": 15.267, "window_seconds": 1.033, "server_cpu_cores": 0.084, "server_rss_bytes": 265170944, "worker_cpu_cores": 0.542, "worker_rss_bytes_sum": 2427805696, "tick_p99_ms": 0.194, "loop_delay_p99_ms": 1.114, "steps_per_second": [59.049, 60.017], "input_p99_ms": [2.31, 2.031]}, {"elapsed_seconds": 16.301, "window_seconds": 1.033, "server_cpu_cores": 0.093, "server_rss_bytes": 265170944, "worker_cpu_cores": 0.494, "worker_rss_bytes_sum": 2427834368, "tick_p99_ms": 0.135, "loop_delay_p99_ms": 1.062, "steps_per_second": [59.994, 59.994], "input_p99_ms": [2.128, 1.869]}, {"elapsed_seconds": 17.301, "window_seconds": 1.001, "server_cpu_cores": 0.089, "server_rss_bytes": 265170944, "worker_cpu_cores": 0.5, "worker_rss_bytes_sum": 2428248064, "tick_p99_ms": 0.212, "loop_delay_p99_ms": 1.085, "steps_per_second": [59.967, 59.967], "input_p99_ms": [2.82, 1.927]}, {"elapsed_seconds": 18.334, "window_seconds": 1.033, "server_cpu_cores": 0.082, "server_rss_bytes": 265170944, "worker_cpu_cores": 0.571, "worker_rss_bytes_sum": 2429046784, "tick_p99_ms": 0.129, "loop_delay_p99_ms": 1.057, "steps_per_second": [60.032, 60.032], "input_p99_ms": [1.718, 1.802]}, {"elapsed_seconds": 19.335, "window_seconds": 1.001, "server_cpu_cores": 0.083, "server_rss_bytes": 265170944, "worker_cpu_cores": 0.42, "worker_rss_bytes_sum": 2429173760, "tick_p99_ms": 0.217, "loop_delay_p99_ms": 1.033, "steps_per_second": [59.964, 59.964], "input_p99_ms": [2.124, 1.962]}, {"elapsed_seconds": 20.0, "window_seconds": 0.666, "server_cpu_cores": 0.085, "server_rss_bytes": 265170944, "worker_cpu_cores": 0.375, "worker_rss_bytes_sum": 2429194240, "tick_p99_ms": 0.105, "loop_delay_p99_ms": 1.064, "steps_per_second": [61.575, 60.073], "input_p99_ms": [1.183, 1.001]}], "legacy": false}]}</script>
+<script>
+'use strict';
+const data = JSON.parse(document.querySelector('#benchmark-data').textContent);
+const sections = [...document.querySelectorAll('section.run')];
+const picker = document.querySelector('#run-picker');
+const board = document.querySelector('.plots');
+const note = board.querySelector('.plot-note');
+const plots = [...board.querySelectorAll('figure')];
+const colors = ['#75dce8', '#ffc87e', '#c5aeff', '#a9dfaa', '#ffacb2', '#a8c5ff', '#f4a7e0', '#e5da8c'];
+const attributes = getComputedStyle(document.documentElement);
+const gridColor = attributes.getPropertyValue('--grid').trim();
+const muted = attributes.getPropertyValue('--muted').trim();
+const format = new Intl.NumberFormat('en', {maximumFractionDigits: 2});
+const finite = Number.isFinite;
+let run, rows = [], cursor = null, chartSeries = [], bounds = [], scheduled = false;
+const named = (name, color, values) => ({name, color, values});
+const by = key => rows.map(row => row[key]);
+const arenaSeries = (key, label, shift = 0) => Array.from({length: run.arenaCount}, (_, index) => {
+  const series = named(label + ' ' + (index + 1), colors[(index + shift) % colors.length],
+                       rows.map(row => row[key]?.[index]));
+  if (index + shift >= colors.length) series.dash = [4, 3];
+  return series;
+});
+function updateRun(index) {
+  run = data.runs[index];
+  rows = run.rows.filter(row => finite(row.elapsed_seconds));
+  cursor = null;
+  chartSeries = [
+    [named('Server', colors[0], by('server_cpu_cores')), named('Arena workers', colors[1], by('worker_cpu_cores'))],
+    [named('Server', colors[0], by('server_rss_bytes').map(value => finite(value) ? value / 1048576 : null)),
+     named('Arena workers', colors[1], by('worker_rss_bytes_sum').map(value => finite(value) ? value / 1048576 : null))],
+    [...arenaSeries('steps_per_second', 'Arena'),
+     {...named('Target', muted, rows.map(() => data.target)), target: true, dash: [3, 4]}],
+    [named('Tick work', colors[0], by('tick_p99_ms')), named('Event loop', colors[1], by('loop_delay_p99_ms')),
+     ...arenaSeries('input_p99_ms', 'Input arena', 2)]
+  ].map(series => series.filter(item => item.values.some(finite)));
+  sections.forEach((section, i) => { section.hidden = i !== index; });
+  sections[index].querySelector('.chart-anchor').append(board);
+  note.textContent = run.legacy ? 'Earlier report format. Only recorded timing windows are shown.'
+    : 'Elapsed time in seconds. Hover or use the arrow keys on a chart.';
+  board.hidden = false;
+  plots.forEach((plot, index) => {
+    const legends = chartSeries[index].map(item => {
+      const span = document.createElement('span');
+      span.style.setProperty('--series', item.color);
+      span.classList.toggle('target', Boolean(item.target));
+      span.textContent = item.name;
+      return span;
+    });
+    plot.querySelector('.series').replaceChildren(...legends);
+  });
+  draw();
+}
+function draw() {
+  bounds = plots.map((plot, index) => render(plot, chartSeries[index], index));
+}
+function render(plot, series, index) {
+  const canvas = plot.querySelector('canvas');
+  const readout = plot.querySelector('output');
+  const {width, height} = canvas.getBoundingClientRect();
+  if (!width || !height) return null;
+  const ratio = window.devicePixelRatio || 1;
+  canvas.width = Math.round(width * ratio);
+  canvas.height = Math.round(height * ratio);
+  const ctx = canvas.getContext('2d');
+  ctx.scale(ratio, ratio);
+  ctx.font = '11px system-ui, sans-serif';
+  ctx.fillStyle = muted;
+  readout.textContent = '';
+  if (!series.length) {
+    ctx.textAlign = 'center';
+    ctx.fillText('No timeline samples', width / 2, height / 2);
+    canvas.tabIndex = -1;
+    return null;
+  }
+  canvas.tabIndex = 0;
+  let max = 0, min = Infinity;
+  for (const item of series) for (const value of item.values) {
+    if (finite(value)) { max = Math.max(value, max); min = Math.min(value, min); }
+  }
+  const baseline = index === 2 ? Math.max(0, Math.floor(min - 2)) : 0;
+  const magnitude = 10 ** Math.floor(Math.log10(Math.max(.01, max - baseline) / 3));
+  const gridStep = [1, 2, 2.5, 5, 10].map(value => value * magnitude)
+    .find(step => step >= Math.max(.01, max - baseline) / 3);
+  const ceiling = Math.max(baseline + gridStep, Math.ceil(max / gridStep) * gridStep);
+  const left = 49, right = width - 11, top = 10, bottom = height - 23;
+  const span = rows.reduce((last, row) => Math.max(last, row.elapsed_seconds), .001);
+  const x = seconds => left + seconds / span * (right - left);
+  const y = value => bottom - (value - baseline) / (ceiling - baseline) * (bottom - top);
+  ctx.strokeStyle = gridColor;
+  ctx.textAlign = 'right';
+  for (let i = 0; i <= 3; i++) {
+    const value = baseline + (ceiling - baseline) * i / 3;
+    const ordinate = y(value);
+    ctx.beginPath(); ctx.moveTo(left, ordinate); ctx.lineTo(right, ordinate); ctx.stroke();
+    ctx.fillText(format.format(value), left - 7, ordinate + 4);
+  }
+  [0, span / 2, span].forEach((time, i) => {
+    ctx.textAlign = ['left', 'center', 'right'][i];
+    ctx.fillText(format.format(time) + ' s', x(time), height - 5);
+  });
+  for (const item of series) {
+    ctx.strokeStyle = ctx.fillStyle = item.color;
+    ctx.setLineDash(item.dash || []);
+    ctx.lineWidth = item.target ? 1 : 1.7;
+    ctx.beginPath();
+    if (item.target) {
+      ctx.moveTo(left, y(data.target)); ctx.lineTo(right, y(data.target)); ctx.stroke();
+      continue;
+    }
+    const dots = [];
+    let connected = false;
+    for (let i = 0; i < rows.length; i++) {
+      const value = item.values[i];
+      if (!finite(value)) { connected = false; continue; }
+      const point = [x(rows[i].elapsed_seconds), y(value)];
+      if (connected) ctx.lineTo(...point);
+      else {
+        ctx.moveTo(...point);
+        if (!finite(item.values[i + 1])) dots.push(point);
+      }
+      connected = true;
+    }
+    ctx.stroke();
+    for (const point of dots) {
+      ctx.beginPath(); ctx.arc(...point, 2.1, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+  ctx.setLineDash([]);
+  if (cursor !== null) {
+    const at = rows[cursor].elapsed_seconds;
+    const picked = x(at);
+    ctx.strokeStyle = muted;
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(picked, top); ctx.lineTo(picked, bottom); ctx.stroke();
+    readout.textContent = [format.format(at) + ' s', ...series.filter(item => !item.target && finite(item.values[cursor]))
+      .map(item => item.name + ': ' + format.format(item.values[cursor]))].join(' · ');
+  }
+  return {left, right, span};
+}
+function queueDraw() {
+  if (scheduled) return;
+  scheduled = true;
+  requestAnimationFrame(() => { scheduled = false; draw(); });
+}
+function setCursor(index) {
+  if (cursor === index) return;
+  cursor = index;
+  queueDraw();
+}
+plots.forEach((plot, index) => {
+  const canvas = plot.querySelector('canvas');
+  canvas.addEventListener('pointermove', event => {
+    if (!bounds[index]) return;
+    const {left, right, span} = bounds[index];
+    const seconds = (event.clientX - canvas.getBoundingClientRect().left - left) * span / (right - left);
+    let closest = 0;
+    rows.forEach((row, i) => {
+      if (Math.abs(row.elapsed_seconds - seconds) < Math.abs(rows[closest].elapsed_seconds - seconds)) closest = i;
+    });
+    setCursor(closest);
+  });
+  canvas.addEventListener('pointerleave', () => setCursor(null));
+  canvas.addEventListener('blur', () => setCursor(null));
+  canvas.addEventListener('keydown', event => {
+    if (event.key === 'Escape') { setCursor(null); return; }
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? rows.length - 1
+      : (cursor ?? (event.key === 'ArrowLeft' ? rows.length : -1)) + (event.key === 'ArrowLeft' ? -1 : 1);
+    setCursor(Math.max(0, Math.min(next, rows.length - 1)));
+  });
+});
+if (sections.length) {
+  if (sections.length > 1) picker.parentElement.hidden = false;
+  picker.addEventListener('change', () => updateRun(Number(picker.value)));
+  window.addEventListener('resize', queueDraw);
+  updateRun(Number(picker.value));
+}
+</script>
+</body>
+</html>
