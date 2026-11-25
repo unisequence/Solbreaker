@@ -2,9 +2,16 @@
 
 ## 0.3.0-rc.2
 
-- Added stable and preview update channels to the launcher.
-- Added a server benchmark dialog with configurable scenarios, maps and load.
-  The launcher writes the results to a JSON report.
+- The launcher can switch between stable and preview updates.
+- Open **Server benchmark** from the launcher sidebar to choose maps, scenarios,
+  and load. The journal shows time remaining and CPU and memory use. You can
+  stop a run from the journal.
+- Completed runs produce an offline HTML report and a JSON file. The launcher
+  opens the HTML report in the browser.
+- Use **Submit result** after a run to share a summary in the
+  [community benchmark table](https://unisequence.github.io/Solbreaker/#community).
+  Submissions require confirmation and no player account. The table can filter
+  by version and workload and sort by column.
 
 ## 0.3.0-rc.1 — Chat Update
 
