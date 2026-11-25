@@ -8,6 +8,8 @@ from urllib.error import HTTPError
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
+from . import __version__
+
 DISCOVERY_URL = 'https://unisequence.github.io/Solbreaker/data/community-api.json'
 MAX_REPORT = 64 << 20
 MAX_RESPONSE = 4096
@@ -87,6 +89,9 @@ class NoRedirect(HTTPRedirectHandler):
 
 
 def request_json(request):
+    if isinstance(request, str):
+        request = Request(request)
+    request.add_header('User-Agent', f'Solbreaker/{__version__} (+https://github.com/unisequence/Solbreaker)')
     with build_opener(NoRedirect()).open(request, timeout=12) as response:
         body = response.read(MAX_RESPONSE + 1)
         if len(body) > MAX_RESPONSE:
