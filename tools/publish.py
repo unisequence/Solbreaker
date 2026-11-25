@@ -14,7 +14,8 @@ from tempfile import TemporaryDirectory
 from report import write_html
 
 REPO = 'unisequence/Solbreaker'
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(os.environ.get('SOLBREAKER_BENCHMARK_PAGES_ROOT',
+                           Path(__file__).resolve().parents[1])).resolve()
 DATA = ROOT / 'docs' / 'data'
 INDEX = DATA / 'index.json'
 TAG = re.compile(r'v(\d+)\.(\d+)\.(\d+)(?:-(alpha|beta|rc)\.(\d+))?')
