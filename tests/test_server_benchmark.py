@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 from solbreaker.base import BaseEndpoint
 from solbreaker.benchmark_report import build_html, convert, html_output
+from solbreaker.benchmark_submission import SubmissionError, public_summary
 from solbreaker.cipher import decrypt_packet, encrypt_packet
 from solbreaker.datagram import SourceDatagramTransport, open_datagram
 from solbreaker.mercury import base_elements, encode_packet, parse_packet
@@ -56,6 +57,35 @@ class ServerBenchmarkTests(unittest.TestCase):
         self.assertEqual(last['input_p99_ms'], [None])
         self.assertIsNone(last['worker_cpu_cores'])
         self.assertIsNone(last['worker_rss_bytes_sum'])
+
+    def test_community_upload_uses_only_a_public_summary(self):
+        with TemporaryDirectory() as folder:
+            path = Path(folder) / 'result.json'
+            record = {
+                'schema': 1, 'version': '0.3.0rc2', 'game_build': '11.21.0.1235_7376187',
+                'mode': 'owner_udp_loopback_scripted_clients', 'dynamic_backend': 'rapier',
+                'complete': True, 'requested_seconds': 5, 'warmup_seconds': 0, 'input_pattern': 'burst',
+                'host': {'cpu': 'Example CPU', 'os': 'Linux', 'logical_cpus': 8,
+                         'physical_memory_bytes': 8 << 30, 'hostname': 'private-name'},
+                'path': str(path), 'runs': [{'map': 'rudniki', 'scenario': 'solo', 'verdict': 'ok',
+                    'cpu_cores_avg': .3, 'arena_worker_cpu_cores_avg': .4,
+                    'server_udp_receive_drops': 0, 'peer_udp_receive_drops': 0,
+                    'process_rss_bytes': 2 << 20, 'arena_worker_rss_bytes_sum': 3 << 20,
+                    'arenas': [{'vehicles': 2, 'steps_per_second': 60, 'worker_pid': 123456,
+                                'input_queue': {'p99_ms': 10}}]}],
+            }
+            path.write_text(json.dumps(record))
+            summary = public_summary(path)
+            self.assertNotIn('host', summary)
+            self.assertNotIn('private-name', json.dumps(summary))
+            self.assertNotIn('123456', json.dumps(summary))
+            self.assertNotIn(str(path), json.dumps(summary))
+            self.assertEqual(summary['runs'][0]['cpu_cores'], .7)
+            self.assertEqual(summary['runs'][0]['rss_mib'], 5)
+            self.assertEqual(summary['runs'][0]['udp_drops'], 0)
+            path.write_text(json.dumps(record | {'complete': False}))
+            with self.assertRaises(SubmissionError):
+                public_summary(path)
 
     def test_report_preserves_legacy_windows_and_escapes_data(self):
         window = {'elapsed_seconds': 10, 'steps_per_second': [60],

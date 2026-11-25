@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog, QFil
     QProgressBar, QPushButton, QRadioButton, QScrollArea, QSpinBox, QStackedWidget,
     QVBoxLayout, QWidget)
 
-from . import __version__, discovery, updates
+from . import __version__, benchmark_submission, discovery, updates
 from .management import PROJECT, Manager, Settings, friendly_error, log_tail, read_log
 from .build_info import COMPATIBILITY
 from .connection import atomic_write
@@ -772,6 +772,7 @@ class Window(QMainWindow):
         self.update_kind = updates.package_kind(PROJECT)
         self.update_task = None
         self.benchmark_dialog = None
+        self.benchmark_submit_task = None
         self.replay_view_task = None
         self.update_detail = ''
         self.update_progress.connect(self.show_update_progress, Qt.QueuedConnection)
@@ -1180,6 +1181,8 @@ class Window(QMainWindow):
         actions.addWidget(button(tr('Прочитать журнал сервера'), self.load_log))
         self.benchmark_report_button = button(tr('Открыть отчёт бенчмарка'), self.open_benchmark_report)
         actions.addWidget(self.benchmark_report_button)
+        self.benchmark_submit_button = button(tr('Отправить результат'), self.submit_benchmark)
+        actions.addWidget(self.benchmark_submit_button)
         self.benchmark_stop_button = button(tr('Остановить'), self.stop_benchmark)
         actions.addWidget(self.benchmark_stop_button)
         self.benchmark_metrics = label('', 'benchmarkMetrics')
@@ -1404,6 +1407,35 @@ class Window(QMainWindow):
                   bool(settings.server_url.strip() or document(remote_profile(settings)).get('server_id')))
         return (game/'wotblitz.exe').is_file(), prepared_client(settings), server
 
+    def submit_benchmark(self):
+        path = self.manager.benchmark_report
+        if path is None or self.benchmark_submit_task is not None:
+            return
+        try:
+            summary = benchmark_submission.public_summary(path.with_suffix('.json'))
+        except benchmark_submission.SubmissionError as error:
+            self.error(error)
+            return
+        consent = tr('В таблице сообщества будут видны модель процессора, ОС, число логических ядер, объём ОЗУ, версии Solbreaker и игры, параметры и результаты прогонов. Отправить результат?')
+        if QMessageBox.question(self, tr('Отправить результат'), consent, QMessageBox.Yes | QMessageBox.No,
+                                QMessageBox.No) != QMessageBox.Yes:
+            return
+        executor = ThreadPoolExecutor(max_workers=1)
+        self.benchmark_submit_task = executor.submit(benchmark_submission.submit, summary)
+        executor.shutdown(wait=False)
+        self.manager.notice = 'Отправляем результат…'
+        self.poll()
+
+    def finish_benchmark_submission(self):
+        task, self.benchmark_submit_task = self.benchmark_submit_task, None
+        try:
+            duplicate = task.result()
+        except benchmark_submission.SubmissionError as error:
+            self.manager.notice = str(error)
+        else:
+            self.manager.notice = ('Этот результат уже в таблице.' if duplicate
+                                   else 'Результат опубликован в таблице сообщества.')
+
     def stop_benchmark(self):
         self.manager.stop_benchmark()
         self.poll()
@@ -1570,8 +1602,13 @@ class Window(QMainWindow):
                 self.manager.notice = (friendly_error(detail) or
                                        'Установка обновления не удалась. См. runtime/launcher-update.log.')
             self.update_result = ''
+        if self.benchmark_submit_task is not None and self.benchmark_submit_task.done():
+            self.finish_benchmark_submission()
         path = self.manager.benchmark_report
-        self.benchmark_report_button.setVisible(not self.manager.busy and path is not None and path.is_file())
+        report_ready = not self.manager.busy and path is not None and path.is_file()
+        self.benchmark_report_button.setVisible(report_ready)
+        self.benchmark_submit_button.setVisible(report_ready and path.with_suffix('.json').is_file())
+        self.benchmark_submit_button.setEnabled(self.benchmark_submit_task is None)
         self.progress.setVisible(self.manager.busy or starting or self.update_task is not None)
         self.notice.setText(self.update_detail or tr(self.manager.notice))
         self.notice.setVisible(bool(self.update_detail) or self.manager.notice not in ('Выбери действие', 'Готово'))

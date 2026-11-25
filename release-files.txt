@@ -333,6 +333,7 @@ solbreaker/battle_setup.py
 solbreaker/battle_settings.py
 solbreaker/battle_settings_wire.py
 solbreaker/benchmark_report.py
+solbreaker/benchmark_submission.py
 solbreaker/big_boss.py
 solbreaker/bootstrap.py
 solbreaker/bot_ai.py
