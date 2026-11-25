@@ -1399,10 +1399,15 @@ class Window(QMainWindow):
                   bool(settings.server_url.strip() or document(remote_profile(settings)).get('server_id')))
         return (game/'wotblitz.exe').is_file(), prepared_client(settings), server
 
-    def open_benchmark_report(self):
+    def open_benchmark_report(self, *, automatic=False):
         path = self.manager.benchmark_report
-        if path is not None and path.is_file() and not QDesktopServices.openUrl(QUrl.fromLocalFile(str(path))):
-            self.error('Не удалось открыть HTML-отчёт.')
+        if path is None or not path.is_file() or QDesktopServices.openUrl(QUrl.fromLocalFile(str(path))):
+            return
+        message = 'Не удалось открыть HTML-отчёт.'
+        if automatic:
+            self.log.appendPlainText(tr(message))
+        else:
+            self.error(message)
 
     def change_update_channel(self):
         try:
@@ -1510,9 +1515,12 @@ class Window(QMainWindow):
             QApplication.instance().exit(updates.RESTART)
 
     def poll(self):
+        job = self.manager.job
         lines = self.manager.drain()
         if lines:
             self.log.appendPlainText('\n'.join(lines))
+        if job is not None and job.action == 'benchmark' and job is not self.manager.job:
+            self.open_benchmark_report(automatic=True)
         if self.wizard is not None and self.wizard.isVisible():
             self.wizard.update_job(lines)
         starting = self.manager.server is not None and self.manager.server.running and not self.manager.server.started

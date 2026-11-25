@@ -65,6 +65,36 @@ class DesktopTests(unittest.TestCase):
                             ('seconds', '20'), ('maps', 'rudniki,canal')):
             self.assertEqual(argv[argv.index(f'--{name}')+1], value)
 
+    def test_benchmark_report_opens_once_after_completion(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from solbreaker.desktop import QDesktopServices
+
+        report = self.root / 'benchmark report.html'
+        self.window.manager.benchmark_report = report
+        self.window.select(3)
+        with patch.object(QDesktopServices, 'openUrl', return_value=True) as opened:
+            job = SimpleNamespace(action='benchmark', returncode=None, running=True,
+                                  resource_error='', failure_notice='')
+            self.window.manager.job = job
+            self.window.poll()
+            opened.assert_not_called()
+
+            report.write_text('<title>Benchmark</title>')
+            job.running = False
+            job.returncode = 1  # A failed case can also produce a diagnostic HTML report.
+            self.window.poll()
+            self.window.poll()
+            opened.assert_called_once()
+            self.assertEqual(opened.call_args.args[0].toLocalFile(), str(report))
+
+            self.window.benchmark_report_button.click()
+            self.assertEqual(opened.call_count, 2)
+            self.window.manager.benchmark_report = self.root / 'missing.html'
+            self.window.manager.job = job
+            self.window.poll()
+            self.assertEqual(opened.call_count, 2)
+
     def test_first_run_has_one_setup_action_and_explains_missing_client(self):
         self.assertEqual(self.window.play_button.text(), 'Настроить игру')
         self.assertTrue(self.window.play_button.isEnabled())
