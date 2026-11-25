@@ -82,6 +82,7 @@ ENGLISH = {
     'Параметры': 'Settings',
     'Журнал': 'Logs',
     'Обновить': 'Update',
+    'Обновления': 'Updates',
     'Канал обновлений': 'Update channel',
     'Стабильный': 'Stable',
     'Предварительный': 'Preview',

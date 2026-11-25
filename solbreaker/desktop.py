@@ -62,7 +62,18 @@ QPushButton:disabled { color: #a39aaa; background: #f1eef5; border-color: #e7e1e
 QPushButton#primary { background: #8364a4; color: #ffffff; border-color: #8364a4; font-weight: 600; }
 QPushButton#primary:hover { background: #70518e; }
 QPushButton#primary:disabled { background: #c8bbd7; border-color: #c8bbd7; }
-QPushButton#nav { text-align: left; background: transparent; border: 0; padding: 13px 15px; color: #7c708c; }
+QPushButton#nav, QPushButton#benchmarkNav { text-align: left; background: transparent; border: 0; padding: 13px 15px; color: #7c708c; }
+QPushButton#benchmarkNav:hover { background: #f0ebf7; color: #54396f; }
+QPushButton#benchmarkNav:focus { border: 1px solid #9675b4; padding: 12px 14px; }
+QPushButton#benchmarkNav:disabled { background: transparent; color: #a39aaa; }
+QLabel#updateTitle { font-size: 13px; font-weight: 600; }
+QLabel#updateVersion { font-size: 12px; color: #776d85; }
+QComboBox#updateChannel { padding: 7px 9px; }
+QPushButton#updateAction { background: #e5dcee; color: #54396f; border-color: #d5cce2;
+    padding: 8px 12px; font-weight: 600; }
+QPushButton#updateAction:hover { background: #f0ebf7; border-color: #b29cc9; }
+QPushButton#updateAction:focus { border-color: #9675b4; }
+QPushButton#updateAction:disabled { color: #a39aaa; background: #f1eef5; border-color: #e7e1ee; }
 QPushButton#nav:checked { background: #e5dcee; color: #54396f; font-weight: 600; }
 QLineEdit, QSpinBox, QComboBox { background: #ffffff; border: 1px solid #d5cce2; border-radius: 5px; padding: 9px; selection-background-color: #dac8ee; }
 QLineEdit:focus, QSpinBox:focus, QComboBox:focus { border-color: #9675b4; }
@@ -818,22 +829,13 @@ class Window(QMainWindow):
             item.clicked.connect(lambda checked=False, page=index: self.select(page))
             navigation.addWidget(item)
             self.nav.append(item)
+        navigation.addSpacing(8)
+        self.benchmark_button = button(tr('Бенчмарк сервера'), self.start_benchmark)
+        self.benchmark_button.setObjectName('benchmarkNav')
+        navigation.addWidget(self.benchmark_button)
         navigation.addStretch()
         if self.update_kind:
-            installed_version = label(f'Solbreaker {__version__}', 'muted')
-            installed_version.setAlignment(Qt.AlignCenter)
-            navigation.addWidget(installed_version)
-            self.update_channel = QComboBox()
-            self.update_channel.setAccessibleName(tr('Канал обновлений'))
-            self.update_channel.addItem(tr('Стабильный'), 'stable')
-            self.update_channel.addItem(tr('Предварительный'), 'preview')
-            self.update_channel.setCurrentIndex(self.update_channel.findData(
-                updates.load_channel(self.config, __version__)))
-            self.update_channel.currentIndexChanged.connect(self.change_update_channel)
-            navigation.addWidget(label(tr('Канал обновлений'), 'muted'))
-            navigation.addWidget(self.update_channel)
-            self.update_button = button(tr('Обновить'), self.start_update)
-            navigation.addWidget(self.update_button)
+            navigation.addWidget(self.update_panel())
         sidebar.setFixedWidth(max(200, sidebar.minimumSizeHint().width()))
         horizontal.addWidget(sidebar)
         body = QWidget()
@@ -874,6 +876,42 @@ class Window(QMainWindow):
         self.settings_page()
         self.log_page()
         self.select(0)
+
+    def update_panel(self):
+        panel = QFrame()
+        panel.setObjectName('panel')
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(11, 10, 11, 11)
+        layout.setSpacing(7)
+
+        header = QHBoxLayout()
+        header.setSpacing(6)
+        title = label(tr('Обновления'), 'updateTitle')
+        title.setWordWrap(False)
+        header.addWidget(title)
+        header.addStretch()
+        version = re.sub(r'(a|b|rc)(\d+)$',
+                         lambda match: '-' + {'a': 'alpha', 'b': 'beta', 'rc': 'rc'}[match[1]]
+                         + '.' + match[2], __version__)
+        installed = label(version, 'updateVersion')
+        installed.setWordWrap(False)
+        header.addWidget(installed)
+        layout.addLayout(header)
+
+        self.update_channel = QComboBox()
+        self.update_channel.setObjectName('updateChannel')
+        self.update_channel.setAccessibleName(tr('Канал обновлений'))
+        self.update_channel.setToolTip(tr('Канал обновлений'))
+        self.update_channel.addItem(tr('Стабильный'), 'stable')
+        self.update_channel.addItem(tr('Предварительный'), 'preview')
+        self.update_channel.setCurrentIndex(self.update_channel.findData(
+            updates.load_channel(self.config, __version__)))
+        self.update_channel.currentIndexChanged.connect(self.change_update_channel)
+        layout.addWidget(self.update_channel)
+        self.update_button = button(tr('Обновить'), self.start_update)
+        self.update_button.setObjectName('updateAction')
+        layout.addWidget(self.update_button)
+        return panel
 
     def change_language(self, index):
         previous = self.manager.settings
@@ -1070,8 +1108,6 @@ class Window(QMainWindow):
         tools.addWidget(button(tr('Подключение для друга'), self.export))
         tools.addStretch()
         column.addLayout(tools)
-        self.benchmark_button = button(tr('Бенчмарк сервера'), self.start_benchmark)
-        column.addWidget(self.benchmark_button)
         column.addWidget(label(tr('Сервер, запущенный из этого окна, остановится при его закрытии.'), 'muted'))
         column.addStretch()
 
