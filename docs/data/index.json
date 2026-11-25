@@ -28,6 +28,34 @@
           "drops": 0
         }
       ]
+    },
+    {
+      "tag": "v0.3.0-rc.1",
+      "commit": "9a5ff0cc81ab876f92d7aba0d43d5d6c231e3753",
+      "prerelease": true,
+      "measured": "2026-11-25",
+      "runs": [
+        {
+          "arenas": 1,
+          "verdict": "ok",
+          "hz": 60.048,
+          "input_ms": 1.949,
+          "tick_ms": 0.119,
+          "cpu": 0.277,
+          "ram_mib": 1448.54,
+          "drops": 0
+        },
+        {
+          "arenas": 2,
+          "verdict": "ok",
+          "hz": 59.999,
+          "input_ms": 2.382,
+          "tick_ms": 0.137,
+          "cpu": 0.583,
+          "ram_mib": 2568.39,
+          "drops": 0
+        }
+      ]
     }
   ],
   "profile": {

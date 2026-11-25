@@ -1,0 +1,301 @@
+{
+  "schema": 1,
+  "version": "0.3.0rc1",
+  "complete": true,
+  "mode": "owner_udp_loopback_scripted_clients",
+  "requested_seconds": 20,
+  "warmup_seconds": 5,
+  "target_step_hz": 60,
+  "input_pattern": "burst",
+  "cold_map_metadata": false,
+  "diagnostics_enabled": false,
+  "dynamic_backend": "rapier",
+  "game_build": "11.21.0.1235_7376187",
+  "host": {
+    "cpu": "13th Gen Intel(R) Core(TM) i5-13400F",
+    "os": "Linux",
+    "os_release": "6.12.105+deb13-amd64",
+    "logical_cpus": 16,
+    "available_cpus": 16,
+    "physical_memory_bytes": 50342821888
+  },
+  "release": {
+    "tag": "v0.3.0-rc.1",
+    "commit": "9a5ff0cc81ab876f92d7aba0d43d5d6c231e3753",
+    "prerelease": true,
+    "asset": "Solbreaker-0.3.0-rc.1-server-linux-x86_64.zip",
+    "digest": "sha256:397a0cff453c6515c167b9a98ab9b55eeda017f48eb5923edf31d654b067d383"
+  },
+  "runs": [
+    {
+      "concurrent_arenas": 1,
+      "requested_tanks": 6,
+      "seed": 42,
+      "seconds": 20.001,
+      "case_started_epoch": 1795632821.2200503,
+      "measurement_started_epoch": 1795632839.3453386,
+      "server_setup_seconds": 6.887,
+      "battle_start_seconds": 0.025,
+      "cpu_cores_avg": 0.062,
+      "process_rss_bytes": 255680512,
+      "process_lifetime_peak_rss_bytes": 650608640,
+      "arena_worker_cpu_cores_avg": 0.215,
+      "arena_worker_rss_bytes_sum": 1263222784,
+      "arena_worker_memory_samples": 1,
+      "loopback_packets": 3885,
+      "loopback_bytes": 727005,
+      "loopback_packets_sent": 3879,
+      "server_udp_receive_drops": 0,
+      "peer_udp_receive_drops": 0,
+      "reliable_retransmissions": 0,
+      "shutdown_seconds": 0.119,
+      "case_seconds": 38.247,
+      "tick_work": {
+        "samples": 1200,
+        "p50_ms": 0.04,
+        "p95_ms": 0.097,
+        "p99_ms": 0.119,
+        "max_ms": 0.245
+      },
+      "loop_delay": {
+        "samples": 601,
+        "p50_ms": 0.583,
+        "p95_ms": 1.043,
+        "p99_ms": 1.125,
+        "max_ms": 1.269
+      },
+      "server_rtt_at_end": {
+        "samples": 6,
+        "p50_ms": 0.333,
+        "p95_ms": 0.351,
+        "p99_ms": 0.351,
+        "max_ms": 0.351
+      },
+      "map": "rudniki",
+      "scenario": "players",
+      "verdict": "ok",
+      "faults": {},
+      "windows": [
+        {
+          "elapsed_seconds": 10.0,
+          "sessions": 6,
+          "steps_per_second": [
+            60.099
+          ],
+          "input_p99_ms": [
+            2.053
+          ],
+          "motion_max_ms": [
+            48.779
+          ],
+          "dropped_seconds_total": [
+            0.0
+          ]
+        }
+      ],
+      "timeline": [],
+      "arenas": [
+        {
+          "vehicles": 6,
+          "bots": 0,
+          "players": 6,
+          "alive": 6,
+          "build_seconds": 6.187,
+          "steps_per_second": 60.048,
+          "dropped_seconds": 0.0,
+          "remaining_step_debt_ms": 0.794,
+          "controls_sent": 3600,
+          "controls_queued": 3600,
+          "input_overflows": 0,
+          "pending_input_commands": 0,
+          "shots": 6,
+          "worker_cpu_cores_avg": 0.215,
+          "shutdown_seconds": 0.119,
+          "nonfinite_samples": 0,
+          "below_heightmap_samples": 0,
+          "max_below_heightmap_m": 0.0,
+          "max_below_heightmap_seconds": 0.0,
+          "input_queue": {
+            "samples": 3600,
+            "p50_ms": 0.768,
+            "p95_ms": 1.288,
+            "p99_ms": 1.949,
+            "max_ms": 8.224
+          },
+          "motion_gap": {
+            "samples": 3600,
+            "p50_ms": 33.295,
+            "p95_ms": 35.423,
+            "p99_ms": 44.955,
+            "max_ms": 48.779
+          },
+          "owner_step_roundtrip": {
+            "samples": 1200,
+            "p50_ms": 3.87,
+            "p95_ms": 6.006,
+            "p99_ms": 9.049,
+            "max_ms": 15.853
+          }
+        }
+      ]
+    },
+    {
+      "concurrent_arenas": 2,
+      "requested_tanks": 6,
+      "seed": 42,
+      "seconds": 20.0,
+      "case_started_epoch": 1795632859.467958,
+      "measurement_started_epoch": 1795632868.9092622,
+      "server_setup_seconds": 1.496,
+      "battle_start_seconds": 0.026,
+      "cpu_cores_avg": 0.095,
+      "process_rss_bytes": 262090752,
+      "process_lifetime_peak_rss_bytes": 650608640,
+      "arena_worker_cpu_cores_avg": 0.488,
+      "arena_worker_rss_bytes_sum": 2431062016,
+      "arena_worker_memory_samples": 2,
+      "loopback_packets": 7740,
+      "loopback_bytes": 1451196,
+      "loopback_packets_sent": 7740,
+      "server_udp_receive_drops": 0,
+      "peer_udp_receive_drops": 0,
+      "reliable_retransmissions": 0,
+      "shutdown_seconds": 0.125,
+      "case_seconds": 29.569,
+      "tick_work": {
+        "samples": 1200,
+        "p50_ms": 0.055,
+        "p95_ms": 0.125,
+        "p99_ms": 0.137,
+        "max_ms": 0.32
+      },
+      "loop_delay": {
+        "samples": 601,
+        "p50_ms": 0.578,
+        "p95_ms": 1.056,
+        "p99_ms": 1.119,
+        "max_ms": 1.219
+      },
+      "server_rtt_at_end": {
+        "samples": 12,
+        "p50_ms": 0.372,
+        "p95_ms": 0.433,
+        "p99_ms": 0.433,
+        "max_ms": 0.433
+      },
+      "map": "rudniki",
+      "scenario": "players",
+      "verdict": "ok",
+      "faults": {},
+      "windows": [
+        {
+          "elapsed_seconds": 10.0,
+          "sessions": 12,
+          "steps_per_second": [
+            59.998,
+            59.998
+          ],
+          "input_p99_ms": [
+            2.788,
+            2.441
+          ],
+          "motion_max_ms": [
+            47.856,
+            40.422
+          ],
+          "dropped_seconds_total": [
+            0.0,
+            0.0
+          ]
+        }
+      ],
+      "timeline": [],
+      "arenas": [
+        {
+          "vehicles": 6,
+          "bots": 0,
+          "players": 6,
+          "alive": 6,
+          "build_seconds": 2.766,
+          "steps_per_second": 59.999,
+          "dropped_seconds": 0.0,
+          "remaining_step_debt_ms": 15.559,
+          "controls_sent": 3600,
+          "controls_queued": 3600,
+          "input_overflows": 0,
+          "pending_input_commands": 0,
+          "shots": 6,
+          "worker_cpu_cores_avg": 0.244,
+          "shutdown_seconds": 0.125,
+          "nonfinite_samples": 0,
+          "below_heightmap_samples": 0,
+          "max_below_heightmap_m": 0.0,
+          "max_below_heightmap_seconds": 0.0,
+          "input_queue": {
+            "samples": 3600,
+            "p50_ms": 0.998,
+            "p95_ms": 1.718,
+            "p99_ms": 2.382,
+            "max_ms": 3.917
+          },
+          "motion_gap": {
+            "samples": 3594,
+            "p50_ms": 33.369,
+            "p95_ms": 34.658,
+            "p99_ms": 44.698,
+            "max_ms": 47.856
+          },
+          "owner_step_roundtrip": {
+            "samples": 1200,
+            "p50_ms": 4.369,
+            "p95_ms": 6.417,
+            "p99_ms": 9.76,
+            "max_ms": 13.756
+          }
+        },
+        {
+          "vehicles": 6,
+          "bots": 0,
+          "players": 6,
+          "alive": 6,
+          "build_seconds": 2.762,
+          "steps_per_second": 59.999,
+          "dropped_seconds": 0.0,
+          "remaining_step_debt_ms": 16.375,
+          "controls_sent": 3600,
+          "controls_queued": 3600,
+          "input_overflows": 0,
+          "pending_input_commands": 0,
+          "shots": 6,
+          "worker_cpu_cores_avg": 0.244,
+          "shutdown_seconds": 0.125,
+          "nonfinite_samples": 0,
+          "below_heightmap_samples": 0,
+          "max_below_heightmap_m": 0.0,
+          "max_below_heightmap_seconds": 0.0,
+          "input_queue": {
+            "samples": 3600,
+            "p50_ms": 0.895,
+            "p95_ms": 1.554,
+            "p99_ms": 2.282,
+            "max_ms": 4.769
+          },
+          "motion_gap": {
+            "samples": 3594,
+            "p50_ms": 33.355,
+            "p95_ms": 34.572,
+            "p99_ms": 36.747,
+            "max_ms": 40.422
+          },
+          "owner_step_roundtrip": {
+            "samples": 1200,
+            "p50_ms": 4.286,
+            "p95_ms": 6.532,
+            "p99_ms": 8.502,
+            "max_ms": 13.295
+          }
+        }
+      ]
+    }
+  ]
+}
