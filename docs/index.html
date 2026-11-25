@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="description" content="Compare Solbreaker server performance across releases using the same hardware and workload.">
+  <title>Solbreaker Benchmarks</title>
+  <link rel="stylesheet" href="site.css">
+  <script defer src="site.js"></script>
+</head>
+<body>
+  <main>
+    <header class="top"><a class="brand" href="./">Solbreaker Benchmarks</a><a href="https://github.com/unisequence/Solbreaker">GitHub repository</a></header>
+    <section class="intro" aria-labelledby="title">
+      <h1 id="title">Server performance by release</h1>
+      <p>Compare the same workload on the same test machine. Each result links to the release and its measured data.</p>
+    </section>
+    <div id="message" role="status">Loading benchmark results…</div>
+    <noscript><p>The comparison requires JavaScript. <a href="data/index.json">Read the benchmark index</a>.</p></noscript>
+    <section id="dashboard" hidden aria-labelledby="comparison">
+      <dl class="profile">
+        <div><dt>Test machine</dt><dd id="machine"></dd></div>
+        <div><dt>Workload</dt><dd id="workload"></dd></div>
+        <div><dt>Measurement</dt><dd id="measurement"></dd></div>
+        <div><dt>Game build</dt><dd id="build"></dd></div>
+      </dl>
+      <div class="chart-head">
+        <h2 id="comparison">Release comparison</h2>
+        <div class="filters">
+          <label>Concurrent arenas <select id="arena"></select></label>
+          <label>Metric <select id="metric"></select></label>
+        </div>
+      </div>
+      <figure class="chart" aria-labelledby="graph-title">
+        <figcaption><strong id="graph-title"></strong><span id="direction"></span></figcaption>
+        <div id="bars"></div>
+        <div class="scale" aria-hidden="true"><span>0</span><span id="maximum"></span></div>
+      </figure>
+      <section aria-labelledby="records">
+        <h2 id="records">Measured releases</h2>
+        <div class="table-scroll" tabindex="0" role="region" aria-label="Measured releases">
+          <table>
+            <thead><tr><th scope="col">Release</th><th scope="col">Measured</th><th scope="col">Min Hz</th>
+              <th scope="col">Input p99</th><th scope="col">Tick p99</th><th scope="col">CPU cores</th>
+              <th scope="col">RSS</th><th scope="col">UDP drops</th><th scope="col">Verdict</th><th scope="col">Files</th></tr></thead>
+            <tbody id="records-body"></tbody>
+          </table>
+        </div>
+        <p class="note">Input p99 is the highest arena value. CPU and RSS add the server and arena worker measurements where both are available. UDP drops use the loopback socket counters.</p>
+      </section>
+      <details class="method"><summary>How the results are collected</summary>
+        <p id="method-profile"></p>
+        <p>Runs use the published Linux server package and the same pinned game build. The benchmark uses scripted players and loopback UDP; it measures server behavior under the selected workload.</p>
+      </details>
+    </section>
+  </main>
+</body>
+</html>
