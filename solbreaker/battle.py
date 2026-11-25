@@ -458,6 +458,11 @@ def battle_hints_message():
     return arena_update(23, pb_blob(20, pb_int(1, 0)))
 
 
+def battle_chat_config():
+    """Enable team, arena, training, quick and postmortem chat."""
+    return arena_update(25, pb_blob(22, b''.join(pb_int(field, 1) for field in (1, 3, 5, 6, 7))))
+
+
 # The loading screen styles distinguish the pinned client's regular,
 # training, and gravitizing modes. Supremacy uses the map's gameplay flag.
 BATTLE_CLIENT_MODES = {'encounter': 1, 'gravity': 42}

@@ -1030,7 +1030,7 @@ class Window(QMainWindow):
         form.addRow(tr('Освещение карт'), lighting)
         self.fields['host'] = QLineEdit(self.manager.settings.host)
         form.addRow(tr('Локальный IPv4'), self.fields['host'])
-        for key, title, maximum in (('http_port', tr('HTTP-порт'), 65535), ('login_port', tr('UDP-порт входа'), 65534)):
+        for key, title, maximum in (('http_port', tr('HTTP-порт'), 65535), ('login_port', tr('UDP-порт входа'), 65533)):
             spin = QSpinBox()
             spin.setRange(1024, maximum)
             spin.setValue(getattr(self.manager.settings, key))

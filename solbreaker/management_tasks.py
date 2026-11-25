@@ -84,8 +84,9 @@ def launch_client(lab, *, auto_login=None, profile=None, url=None, lighting=None
             lab, manifest = ensure_lab(lab)
         from .client_battle_settings import upgrade_form
         manifest = upgrade_form(lab, manifest)
-        from .client_ui import install_sandbox_bindings, install_server_name, install_training_maps
+        from .client_ui import install_chat_filter, install_sandbox_bindings, install_server_name, install_training_maps
         manifest = install_sandbox_bindings(lab, manifest)
+        manifest = install_chat_filter(lab, manifest)
         from .client_practice_picker import install as install_target_picker
         install_target_picker(lab)
         from .client_reticle import install as install_reticle

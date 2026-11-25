@@ -19,6 +19,33 @@ def digest(data):
 
 
 class ClientRepairs(unittest.TestCase):
+    def test_chat_filter_is_disabled_only_in_the_prepared_client(self):
+        from solbreaker.client_ui import install_chat_filter
+
+        source = self.game/'Data/MessageFilters'
+        (source/'V2').mkdir(parents=True)
+        legacy = {'BadWords':['bad'], 'Spacious':['spaced'], 'Domains':['example.test']}
+        modern = {'badwords':['bad'], 'domains':['example.test']}
+        legacy_path = source/'en_messenger_oldictionary.yaml.dvpl'
+        modern_path = source/'V2/en.badwords.yaml.dvpl'
+        legacy_path.write_bytes(dvpl.encode(yaml.safe_dump(legacy).encode()))
+        modern_path.write_bytes(dvpl.encode(yaml.safe_dump(modern).encode()))
+        (self.client/'Data').rmdir()
+        (self.client/'Data').symlink_to(self.game/'Data', target_is_directory=True)
+        self.write_manifest(ui_overrides={'unrelated':'digest'})
+
+        manifest = install_chat_filter(self.lab, json.loads(self.manifest.read_text()))
+
+        self.assertEqual(manifest['chat_filter_version'], 2)
+        self.assertEqual(manifest['ui_overrides']['unrelated'], 'digest')
+        self.assertEqual(yaml.safe_load(dvpl.read(legacy_path)), legacy)
+        self.assertEqual(yaml.safe_load(dvpl.read(modern_path)), modern)
+        prepared_legacy = yaml.safe_load(dvpl.read(self.client/'Data/MessageFilters'/legacy_path.name))
+        prepared_modern = yaml.safe_load(dvpl.read(self.client/'Data/MessageFilters/V2'/modern_path.name))
+        self.assertEqual(prepared_legacy, {'BadWords':[], 'Spacious':[], 'Domains':['example.test']})
+        self.assertEqual(prepared_modern, {'badwords':[], 'domains':['example.test']})
+        self.assertIs(install_chat_filter(self.lab, manifest), manifest)
+
     def test_reticle_upgrade_restores_stock_sights_and_keeps_the_continuous_ring(self):
         from solbreaker import client_reticle
 

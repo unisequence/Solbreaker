@@ -196,13 +196,13 @@ def create_request(body,*,with_vehicle=False,with_map=False,with_mode=False,conf
     return text
 
 
-def arguments(kind,body):
+def arguments(kind,body, *, max_numbers=4):
     """Account base method 5: qii; method 14: vector<int64>, vector<string>."""
     if kind==140 and len(body)==20:
         return struct.unpack_from('<qii',body,4),()
     if kind!=149 or len(body)<6:raise ValueError('Invalid room command envelope')
     count=body[4]
-    if count>4:raise ValueError('Too many room arguments')
+    if count>max_numbers:raise ValueError('Too many room arguments')
     offset=5+count*8
     if offset>=len(body):raise ValueError('Truncated room arguments')
     numbers=struct.unpack_from('<'+'q'*count,body,5)
@@ -338,6 +338,7 @@ class NativeRooms:
         self.send(client,account_method(17,struct.pack('<I',int(room.id,16)))+self.snapshot(room))
         client.native_room_id=room.id
         client.native_room_version=self.version(room)
+        self.manager.room_changed(client.account_id)
 
     def sync_client(self,addr,client):
         """Send only actual changes, including CLI edits, kicks and disconnects."""
@@ -452,9 +453,13 @@ class NativeRooms:
         try:
             if client.phase!='account' or not client.account_created:
                 raise ValueError('Wait for the hangar to load')
-            numbers,strings=arguments(kind,body)
+            numbers,strings=arguments(kind,body,max_numbers=254 if command==524 else 4)
             if command==524:
-                if kind!=149 or numbers!=(0,) or len(strings)!=1 or len(strings[0])>256:
+                # The stock client appends online friends' account IDs after
+                # the search selector. They don't restrict the public room list.
+                if (kind!=149 or not numbers or numbers[0]!=0
+                        or any(peer<=0 for peer in numbers[1:])
+                        or len(strings)!=1 or len(strings[0])>256):
                     raise ValueError('Unsupported room search')
                 pattern=strings[0].decode('utf-8').casefold()
                 self.manager.sync()
@@ -467,6 +472,12 @@ class NativeRooms:
                     # Account recreation after a battle clears ClientPrebattle.
                     # The player remains in their own hangar until this request.
                     self.attach(client,room)
+                elif room and not choosing_tank(client.account_id):
+                    # Returning to the room list destroys the client's local
+                    # training chat even though its roster membership persists.
+                    chat = getattr(self.endpoint.server, 'social_chat', None)
+                    if chat is not None:
+                        chat.room_changed(client.account_id, refresh=True)
                 return True
             if command==406:
                 if (kind!=149 or len(numbers)!=4 or numbers[1] not in (0,1,2)

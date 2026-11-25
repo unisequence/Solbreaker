@@ -100,6 +100,7 @@ def prepare(game, destination, profile, *, windows=False, proton=None, steam=Non
         manifest = client_atgm_aim.upgrade(stage, manifest, manifest['client_exe_sha256'])
         client_sandbox.upgrade(stage, manifest, manifest['client_exe_sha256'])
         client_ui.install_ui_guards(stage)
+        client_ui.install_chat_filter(stage, json.loads(manifest_path.read_text()))
         from .client_practice_picker import install as install_target_picker
         install_target_picker(stage)
         from .client_reticle import install as install_reticle

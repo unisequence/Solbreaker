@@ -32,6 +32,20 @@ class DiscoveryTests(unittest.TestCase):
         cls.key = rsa.generate_private_key(65537, 2048).public_key().public_bytes(
             serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
 
+    def test_xchat_reserves_tcp_port_after_base(self):
+        for section in ('listen', 'advertise'):
+            with self.subTest(section=section):
+                document = lan_network().document()
+                document[section]['base'] = '192.168.9.10:65535'
+                with self.assertRaisesRegex(ValueError, 'adjacent XChat port'):
+                    parse_config(document)
+        document = lan_network().document()
+        document['listen']['http'] = '0.0.0.0:20028'
+        with self.assertRaisesRegex(ValueError, 'same TCP socket'):
+            parse_config(document)
+        document['listen']['http'] = '192.168.9.11:20028'
+        self.assertEqual(parse_config(document).listen_http.port, 20028)
+
     def test_launch_finds_same_server_after_its_address_changes(self):
         selected = dict(version=1, game_version=VERSION, exe_sha256=BUILD_SHA256,
                         server_id=key_id(self.key), login_public_key=self.key.decode('ascii'),

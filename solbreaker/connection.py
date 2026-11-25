@@ -18,6 +18,7 @@ from . import dvpl
 from .market import configure_market
 from .network import defaults,load_network,parse_config
 from .build_info import SERVER_NAME, LEGACY_SERVER_NAME
+from .social_chat import XMPP_EXTENSION_VERSION
 
 REGIONS=('regions_publish.yaml.dvpl','regions_development.yaml.dvpl','regions_review.yaml.dvpl',
          'regions_supertest.yaml.dvpl','regions_switch.yaml.dvpl')
@@ -59,6 +60,9 @@ def regions_config(regions,network):
     local['wgnwn']=network.advertise_http
     local['hosts']={'LOCAL':dict(clusterID=0,url=str(network.advertise_login))}
     local['preferredHost']='LOCAL'
+    # The native client uses the XMPP nickname resolver with this version.
+    local['wgextsVersion'] = XMPP_EXTENSION_VERSION
+    regions['Common']['wgextsVersion'] = XMPP_EXTENSION_VERSION
     # The pinned client's community dispatcher has a fixed set of link IDs.
     # The Viber slot is unused in the isolated Solbreaker region.
     local.setdefault('communityUrls', {}).setdefault('http', {})['viber'] = (

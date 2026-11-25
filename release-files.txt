@@ -326,6 +326,7 @@ solbreaker/ballistics.py
 solbreaker/base.py
 solbreaker/base_capture.py
 solbreaker/battle.py
+solbreaker/battle_chat.py
 solbreaker/battle_rewards.py
 solbreaker/battle_setup.py
 solbreaker/battle_settings.py
@@ -495,6 +496,7 @@ solbreaker/server_benchmark.py
 solbreaker/server_identity.py
 solbreaker/setup_progress.py
 solbreaker/sim_native.py
+solbreaker/social_chat.py
 solbreaker/static_visibility.py
 solbreaker/stats_patch.py
 solbreaker/steam_depot.py
@@ -521,7 +523,9 @@ start-server.sh
 tests/__init__.py
 tests/test_ammo_resupply.py
 tests/test_arena_input_queue.py
+tests/test_arena_owner_settlement.py
 tests/test_ballistics.py
+tests/test_battle_chat.py
 tests/test_battle_provisions.py
 tests/test_camouflage.py
 tests/test_bot_combat.py
@@ -558,6 +562,7 @@ tests/test_sandbox.py
 tests/test_server_benchmark.py
 tests/test_server_identity.py
 tests/test_setup.py
+tests/test_social_chat.py
 tests/test_static_visibility.py
 tests/test_steam_depot.py
 tests/test_terminal.py

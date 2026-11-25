@@ -12,7 +12,7 @@ from .arena_loading import ArenaLoad
 from .arena_owner import AsyncArenaOwner, Command, CommandRejected, OwnerError
 from .arena_owner_game import GameArenaFactory, TrainingTank
 from .arena_owner_registry import ArenaOwnerRegistry
-from .arena_owner_settlement import commit
+from .arena_owner_settlement import commit, journal_path, journal_result, read_journal
 from .arena_owner_spawn import OwnerSpawnManager
 from .arena_owner_transport import ArenaOwnerTransport
 from .big_boss import HEALTH_MULTIPLIER
@@ -62,6 +62,8 @@ class ArenaOwnerService:
         self.timeout = timeout
         self.jobs = {}
         self._closing = None
+        self._pending_settlements = {}
+        self._settlement_timer = None
 
     def make_factory(self, arena, accounts, definitions, scenes, training):
         ids = tuple(account['id'] for account in accounts)
@@ -304,6 +306,59 @@ class ArenaOwnerService:
         if events:
             self.endpoint.log_arena_events(arena, events)
 
+    @property
+    def _settlement_dir(self):
+        return self.endpoint.server.lab / 'private' / 'owner-settlements'
+
+    def recover_settlements(self):
+        for path in sorted(self._settlement_dir.glob('*.json')):
+            try:
+                data = read_journal(path)
+            except (KeyError, OSError, TypeError, ValueError) as exc:
+                self.endpoint.server.event('battle_settlement_failed',
+                    journal=path.name, reason=str(exc), owner=True)
+                continue
+            self._pending_settlements[data.arena_id] = (None, data, True)
+        self._drain_settlements()
+
+    def _schedule_settlements(self):
+        if self._pending_settlements and self._settlement_timer is None and self._closing is None:
+            self._settlement_timer = asyncio.get_running_loop().call_later(5, self._drain_settlements)
+
+    def _drain_settlements(self):
+        self._settlement_timer = None
+        for arena_id in tuple(self._pending_settlements):
+            self._save_settlement(arena_id)
+        self._schedule_settlements()
+
+    def _save_settlement(self, arena_id):
+        arena, data, journaled = self._pending_settlements[arena_id]
+        event = self.endpoint.server.event
+        if not journaled:
+            try:
+                journal_result(self._settlement_dir, data)
+                journaled = True
+                self._pending_settlements[arena_id] = (arena, data, True)
+            except (OSError, ValueError) as exc:
+                event('battle_settlement_journal_failed', arena_id=arena_id, reason=str(exc))
+        try:
+            reports = commit(self.endpoint, data)
+        except (ValueError, sqlite3.Error) as exc:
+            event('battle_settlement_failed', arena_id=arena_id, reason=str(exc), owner=True)
+            return
+        self._pending_settlements.pop(arena_id)
+        if journaled:
+            try:
+                journal_path(self._settlement_dir, arena_id).unlink(missing_ok=True)
+            except OSError as exc:
+                event('battle_settlement_journal_failed', arena_id=arena_id, reason=str(exc))
+        if arena is not None:
+            arena.reports.update(reports)
+            for account_id in reports.keys() - arena.recorded_accounts:
+                arena.recorded_accounts.add(account_id)
+                event('training_finished', account_id=account_id, result=reports[account_id],
+                      simulation_steps=arena.step_count, dropped_seconds=arena.dropped_time)
+
     def _on_result(self, job, command, result):
         if command.op != 'motion_light':
             self._observe(job, result)
@@ -311,21 +366,10 @@ class ArenaOwnerService:
         attachments = {}
         if result.settlement is not None:
             pending = {item.account_id for item in result.settlement.results} - arena.recorded_accounts
-            if pending:
-                try:
-                    reports = commit(self.endpoint, result.settlement)
-                except (ValueError, sqlite3.Error) as exc:
-                    self.endpoint.server.event('battle_settlement_failed',
-                        arena_id=arena.result_id, reason=str(exc), owner=True)
-                    return attachments
-                for account_id, report in reports.items():
-                    arena.reports[account_id] = report
-                    if account_id not in arena.recorded_accounts:
-                        arena.recorded_accounts.add(account_id)
-                        self.endpoint.server.event('training_finished',
-                            account_id=account_id, result=report,
-                            simulation_steps=arena.step_count,
-                            dropped_seconds=arena.dropped_time)
+            if pending and arena.result_id not in self._pending_settlements:
+                self._pending_settlements[arena.result_id] = (arena, result.settlement, False)
+                self._save_settlement(arena.result_id)
+                self._schedule_settlements()
             if arena.finished_at:
                 self.endpoint.rooms.sync()
             from .results import avatar_resource
@@ -607,5 +651,8 @@ class ArenaOwnerService:
                                      return_exceptions=True)
                 self.jobs.clear()
                 await self.registry.close()
+                if self._settlement_timer is not None:
+                    self._settlement_timer.cancel()
+                self._drain_settlements()
             self._closing = asyncio.create_task(close_all())
         await asyncio.shield(self._closing)

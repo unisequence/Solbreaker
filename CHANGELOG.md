@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.3.0-rc.1 — Chat Update
+
+- Find players by nickname and send private messages. The General channel is
+  available in the hangar, and each training room has its own chat.
+- Send, accept, or decline friend requests in the client. The friends-only
+  private message setting persists across sign-ins.
+- Battle chat supports team and all-player messages, six voiced quick
+  commands, and a ground marker on E.
+- Fixed Cyrillic input in chat under Proton/X11.
+- Battle results are retried after an interrupted database write, including
+  after a server restart.
+- LAN and VPN hosts need the chat TCP port open. It defaults to 20018
+  (BaseApp port + 1).
+
 ## 0.2.1
 
 - Fixed server error 8 when entering battle with the T110E5. The armor loader

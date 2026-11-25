@@ -114,6 +114,21 @@ class LocalServer:
             raise ValueError('account_autocreate must be boolean')
         self.accounts = LocalAccounts(lab / "private", self.network.advertise_http,
                                       autocreate=autocreate)
+        from .social_chat import SocialChatService
+        # Room membership lives on BaseEndpoint, while the chat queue remains
+        # on the parent event loop and never enters arena IPC or physics.
+        self.social_chat = SocialChatService(self.accounts,
+            lambda: self.base.rooms if self.base is not None else None,
+            event=self.event)
+        self.xmpp_clients = {}
+
+    async def xmpp(self, reader, writer):
+        from .social_chat import handle_xmpp
+        self.xmpp_clients[writer] = asyncio.current_task()
+        try:
+            await handle_xmpp(self, reader, writer)
+        finally:
+            self.xmpp_clients.pop(writer, None)
 
     def event(self, name, **fields):
         self.counters[name] += 1
@@ -372,15 +387,22 @@ class LoginEndpoint(asyncio.DatagramProtocol):
 async def serve(lab: Path, *, sandbox=False):
     server = LocalServer(lab, sandbox=sandbox)
     transports = []
+    listeners = []
     try:
         udp, _ = await open_datagram(lambda: LoginEndpoint(server),
             local_addr=server.network.listen_login.pair)
         transports.append(udp)
-        base, _ = await open_datagram(lambda: BaseEndpoint(server),
+        base, endpoint = await open_datagram(lambda: BaseEndpoint(server),
             local_addr=server.network.listen_base.pair, batch_receive=True)
         transports.append(base)
         http = await asyncio.start_server(server.http, *server.network.listen_http.pair, limit=16384,
                                          ssl=getattr(server, 'http_tls_context', None))
+        listeners.append(http)
+        from .social_chat import listener_address
+        xmpp = await asyncio.start_server(server.xmpp, *listener_address(server.network),
+                                          limit=65536)
+        listeners.append(xmpp)
+        endpoint.owner_service.recover_settlements()
         from .discovery import advertise
         try:
             discovery = await advertise(server.network)
@@ -395,11 +417,19 @@ async def serve(lab: Path, *, sandbox=False):
                      simulation_backend=server.simulation_backend,
                      recon_enabled=getattr(server, "recon_enabled", False),
                      recon_server_test=getattr(server, "recon_enabled", False))
-        async with http:
-            await http.serve_forever()
+        await http.serve_forever()
     finally:
+        for listener in listeners:
+            listener.close()
+        connections = tuple(server.xmpp_clients.items())
+        for writer, _ in connections:
+            writer.close()
         for transport in transports:transport.close()
         try:
+            for listener in listeners:
+                await listener.wait_closed()
+            if connections:
+                await asyncio.gather(*(task for _, task in connections), return_exceptions=True)
             # Datagram connection_lost closes timers and starts owner shutdown.
             # Wait for child physics and settlement work before closing storage.
             await asyncio.sleep(0)

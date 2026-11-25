@@ -64,10 +64,11 @@ def room_bot_counts(values):
 
 
 class RoomManager:
-    def __init__(self,endpoint):
+    def __init__(self,endpoint, *, room_changed=None):
         self.endpoint = endpoint
         self.rooms = {}
         self.memberships = {}
+        self.room_changed = room_changed or (lambda account_id: None)
 
     def sync(self):
         for room in self.rooms.values():
@@ -99,6 +100,9 @@ class RoomManager:
 
     def current(self,account):
         self.sync()
+        return self.membership(account)
+
+    def membership(self, account):
         return self.rooms.get(self.memberships.get(account))
 
     def editable(self,account):
@@ -131,6 +135,7 @@ class RoomManager:
                   battle_mode=battle_mode,battle_settings=battle_settings,lineup=lineup or RoomLineup())
         room.apply_map_rules()
         self.rooms[ident]=room;self.memberships[account]=ident
+        self.room_changed(account)
         return room
 
     def join(self,account,ident,team=None):
@@ -153,6 +158,7 @@ class RoomManager:
             if counts[team]>=capacity:raise ValueError('Team is full')
         room.members[account]=Member(account,team);self.memberships[account]=ident
         self.reset_ready(room)
+        self.room_changed(account)
         return room
 
     def choose_team(self,account,team):
@@ -295,6 +301,7 @@ class RoomManager:
         self.reset_ready(room)
         if not room.members:del self.rooms[room.id]
         elif room.owner==account:room.owner=next(iter(room.members))
+        self.room_changed(account)
         return None
 
     def describe(self,room):

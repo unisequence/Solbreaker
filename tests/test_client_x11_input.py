@@ -22,6 +22,10 @@ static Bool next_filter(XEvent *e, Window w) { (void)e; (void)w; ++forwarded; re
 static int next_warp(Display *d, Window s, Window t, int x, int y, unsigned w, unsigned h, int a, int b) {
     (void)d;(void)s;(void)t;(void)x;(void)y;(void)w;(void)h;(void)a;(void)b;return 42;
 }
+static uint32_t next_codepoint(uint32_t keysym) {
+    assert(keysym==0x06a3);
+    return 0x0451;
+}
 int main(int argc, char **argv) {
     (void)argc;
     pthread_once(&symbols_once, resolve_symbols);
@@ -62,6 +66,18 @@ int main(int argc, char **argv) {
     e.type=KeyPress;assert(!XFilterEvent(&e,0));
     e.type=FocusOut;xim_consumes=1;assert(XFilterEvent(&e,0));
     assert(!state.down[38]);assert(!state.last_warp);
+    pthread_once(&keysyms_once, resolve_keysyms);
+    keysym_to_utf32=next_codepoint;
+    e.type=KeyPress;e.xkey.state=0;
+    KeySym sym=0x06a3;
+    recover_cyrillic(&e.xkey, 0, &sym);
+    assert(sym==0x01000451); /* ё is exposed as a direct Unicode keysym */
+    sym=0x06a3;
+    recover_cyrillic(&e.xkey, 2, &sym);
+    assert(sym==0x06a3); /* keep a working IME's output */
+    e.xkey.state=ControlMask;
+    recover_cyrillic(&e.xkey, 0, &sym);
+    assert(sym==0x06a3); /* keyboard shortcuts keep their original lookup */
     return 0;
 }
 '''.replace('FILTER_SOURCE', str(client_x11_input.SOURCE))

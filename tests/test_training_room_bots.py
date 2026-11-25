@@ -59,6 +59,14 @@ class TrainingRoomBotsTests(unittest.TestCase):
         self.endpoint.start_shared.assert_called_once_with([1], [1], map_id=6, bot_counts=(6, 2),
                                                          room_settings=RoomBattleSettings())
 
+    def test_room_search_accepts_online_friend_ids(self):
+        room = self.create(b'Lobby')
+        self.native.reply = Mock()
+        payload = struct.pack('<HHB5qB', 300, 524, 5, 0, 1, 3, 4, 5, 1) + packed_blob(b'*')
+        client = self.endpoint.clients[2]
+        self.assertTrue(self.native.command(client, 149, payload, 300, 524))
+        self.native.reply.assert_called_once_with(client, 300, data=[self.native.listing(room)])
+
     def test_edit_and_join_keep_humans_ahead_of_bots(self):
         room = self.create(b'[bots 7:7] Room')
         self.endpoint.rooms.join(2, room.id, 1)

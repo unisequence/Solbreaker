@@ -112,7 +112,7 @@ class Settings:
                 if isinstance(value, str) and value.isdecimal():
                     value = int(value)
                     setattr(self, name, value)
-                maximum = 65534 if name == 'login_port' else 65535
+                maximum = 65533 if name == 'login_port' else 65535
                 if type(value) is not int or not 1024 <= value <= maximum:
                     raise ValueError('Порт должен быть целым числом от 1024 до '+str(maximum))
             elif name == 'gui_theme':

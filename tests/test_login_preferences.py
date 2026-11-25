@@ -63,6 +63,8 @@ class LoginPreferencesTests(unittest.TestCase):
         configured = regions_config(original, network)
         self.assertEqual(set(configured['Regions']), {'Local PoC'})
         self.assertEqual(original['Regions']['Local PoC']['wgnwn'], 'http://127.0.0.1:1')
+        self.assertEqual(configured['Regions']['Local PoC']['wgextsVersion'], 3)
+        self.assertEqual(configured['Common']['wgextsVersion'], 3)
 
     def test_github_uses_the_unused_community_slot(self):
         urls = {'discord': 'https://example.org/discord'}

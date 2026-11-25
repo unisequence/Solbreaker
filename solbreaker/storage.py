@@ -63,6 +63,8 @@ class AccountStore:
                 id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL UNIQUE,
                 nickname TEXT NOT NULL, salt BLOB NOT NULL, password_hash BLOB NOT NULL,
                 inventory TEXT NOT NULL, progress TEXT NOT NULL);
+            CREATE INDEX IF NOT EXISTS account_nickname_search
+                ON accounts(nickname COLLATE NOCASE);
             CREATE TABLE IF NOT EXISTS results (
                 arena_id TEXT NOT NULL, account_id INTEGER NOT NULL REFERENCES accounts(id),
                 payload TEXT NOT NULL, PRIMARY KEY(arena_id,account_id));
@@ -87,6 +89,17 @@ class AccountStore:
             );
             CREATE TABLE IF NOT EXISTS training_settings (
                 account_id INTEGER PRIMARY KEY REFERENCES accounts(id), payload TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS client_options (
+                account_id INTEGER PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
+                payload BLOB NOT NULL);
+            CREATE TABLE IF NOT EXISTS friendships (
+                first INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+                second INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+                requester INTEGER NOT NULL,
+                accepted INTEGER NOT NULL DEFAULT 0 CHECK (accepted IN (0, 1)),
+                CHECK (first < second AND requester IN (first, second)),
+                PRIMARY KEY (first, second));
+            CREATE INDEX IF NOT EXISTS friendships_second ON friendships(second);
         ''')
         if not self.db.execute('SELECT 1 FROM accounts LIMIT 1').fetchone():
             self._migrate(private)
@@ -131,11 +144,68 @@ class AccountStore:
         return Account(row['id'], row['username'], row['nickname'],
                        json.loads(row['inventory']), json.loads(row['progress']))
 
+    def search_nicknames(self, prefix, *, exclude_account_id):
+        """Return at most twenty public identities for a literal nickname prefix."""
+        if not isinstance(prefix, str) or re.fullmatch(r'[A-Za-z0-9_]{3,24}', prefix) is None:
+            return ()
+        pattern = prefix.replace('_', '\\_') + '%'
+        rows = self.db.execute(
+            "SELECT id, nickname FROM accounts WHERE nickname LIKE ? ESCAPE '\\' AND id != ? "
+            "ORDER BY nickname COLLATE NOCASE, id LIMIT 20", (pattern, exclude_account_id))
+        return tuple((row['id'], row['nickname']) for row in rows)
+
     def training_config(self, account_id, default=None):
         from .training_config import TrainingConfig
         row = self.db.execute('SELECT payload FROM training_settings WHERE account_id=?',
                               (account_id,)).fetchone()
         return TrainingConfig.from_dict(json.loads(row['payload'])) if row else default
+
+    def friendships(self, account_id):
+        """Return each contact and the outgoing, incoming or accepted state."""
+        rows = self.db.execute("""
+            SELECT account.id, account.nickname, f.requester, f.accepted
+            FROM friendships f JOIN accounts account
+                ON account.id = CASE WHEN f.first = ? THEN f.second ELSE f.first END
+            WHERE f.first = ? OR f.second = ? ORDER BY account.nickname COLLATE NOCASE, account.id
+        """, (account_id, account_id, account_id))
+        return tuple((row['id'], row['nickname'], 'both' if row['accepted']
+                      else 'outgoing' if row['requester'] == account_id else 'incoming') for row in rows)
+
+    def change_friendship(self, account_id, peer_id, action):
+        if account_id == peer_id:
+            raise ValueError('Cannot add yourself as a friend')
+        self.get(peer_id)
+        first, second = sorted((account_id, peer_id))
+        with self.db:
+            row = self.db.execute('SELECT requester, accepted FROM friendships WHERE first=? AND second=?',
+                                  (first, second)).fetchone()
+            if row is None:
+                if action == 'subscribe':
+                    self.db.execute('INSERT INTO friendships(first, second, requester) VALUES (?,?,?)',
+                                    (first, second, account_id))
+                    return 'requested'
+                return None
+            requester, accepted = row
+            if (not accepted and requester == peer_id and action in ('subscribe', 'subscribed')):
+                self.db.execute('UPDATE friendships SET accepted=1 WHERE first=? AND second=?',
+                                (first, second))
+                return 'accepted'
+            if (action == 'remove' or (action == 'unsubscribe' and (accepted or requester == account_id))
+                    or (action == 'unsubscribed' and (accepted or requester == peer_id))):
+                self.db.execute('DELETE FROM friendships WHERE first=? AND second=?', (first, second))
+                return 'removed'
+        return None
+
+    def client_options(self, account_id):
+        row = self.db.execute('SELECT payload FROM client_options WHERE account_id=?',
+                              (account_id,)).fetchone()
+        return row['payload'] if row else None
+
+    def save_client_options(self, account_id, payload):
+        with self.db:
+            self.db.execute('INSERT INTO client_options VALUES (?,?) '
+                            'ON CONFLICT(account_id) DO UPDATE SET payload=excluded.payload',
+                            (account_id, payload))
 
     def save_training_config(self, account_id, config, *, setup=None):
         from .training_config import TrainingConfig

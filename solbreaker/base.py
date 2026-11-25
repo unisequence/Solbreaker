@@ -18,6 +18,7 @@ from .cipher import PacketCipher, encrypt_packet, decrypt_packet
 from .mercury import parse_packet, base_elements, encode_reply, encode_packet, RELIABLE, ReliableInbox
 from .account import create_account, show_gui, account_method, pickle_document, command_header, command_response, local_http_response, resource_response
 from .account import spa_token_response
+from .account import CLIENT_OPTIONS_SAVE, client_options_loaded, client_options_saved
 from .account import random_queue_message
 from .account import account_update, account_sync_response
 from .mercury import packed_blob, read_blob
@@ -25,8 +26,11 @@ from .profile import account_snapshot, game_mode_descriptions
 from .catalog import synchronized_catalog, maps_configuration
 from .camouflage import ALL_MAPS_SLOT, battle_paint, compatible_paints
 from .garage import CAMOUFLAGE_SLOTS
+from .battle_chat import ACTION_KIND, MARKER_KIND, BattleChat, channels as battle_chat_channels
+from .social_chat import server_configuration
 from .battle import (initial_messages, spawn_batches, reconnect_batches, motion_messages, event_messages,
-                     battle_hints_message, ammo_message, avatar_method, world_motion_messages)
+                     battle_chat_config, battle_hints_message, ammo_message, avatar_method,
+                     world_motion_messages)
 from .arena import ArenaManager
 from .arena_commands import apply_at_tick, decode_input
 from .vehicle_data import VehicleConfiguration
@@ -93,6 +97,7 @@ class ClientSession:
     training_swap_pending: bool = False
     training_swap_inventory: int | None = None
     sandbox_input: tuple | None = None
+    battle_chat_after: float = 0.
     _packet_cipher: PacketCipher | None = field(default=None, init=False, repr=False, compare=False)
 
     @property
@@ -359,7 +364,8 @@ class BaseEndpoint(asyncio.DatagramProtocol):
     @cached_property
     def rooms(self):
         from .rooms import RoomManager
-        return RoomManager(self)
+        chat = getattr(self.server, 'social_chat', None)
+        return RoomManager(self, room_changed=chat.room_changed if chat is not None else None)
 
     @cached_property
     def native_rooms(self):
@@ -370,6 +376,7 @@ class BaseEndpoint(asyncio.DatagramProtocol):
         self.server = server
         server.base = self
         self.clients = {}
+        self.battle_chat = BattleChat(self)
         self.reconnects = {}
         self.transport = None
         owner_setting = os.environ.get('SOLBREAKER_ARENA_OWNERS', '0')
@@ -2393,6 +2400,19 @@ class BaseEndpoint(asyncio.DatagramProtocol):
                     self.return_to_hangar(addr, client)
                     continue
                 arena = self.arenas.get(client.arena_id)
+                if (client.phase == 'battle' and kind == 135 and not body
+                        and client.battle_spawned and arena is not None
+                        and arena.players.get(client.account_id) is not None
+                        and not arena.players[client.account_id].loaded):
+                    self.send(addr, client, battle_chat_config() + battle_chat_channels(arena, client))
+                if client.phase == 'battle' and kind == ACTION_KIND:
+                    if request is None:
+                        self.battle_chat.receive(client, arena, body)
+                    continue
+                if client.phase == 'battle' and kind == MARKER_KIND and body[:4] == b'\0' * 4:
+                    if request is None:
+                        self.battle_chat.receive_marker(client, arena, body)
+                    continue
                 if client.phase == 'battle' and kind == 166 and request is None:
                     from .sandbox import receive
                     if receive(self, addr, client, arena, body, time.monotonic()):
@@ -2436,6 +2456,18 @@ class BaseEndpoint(asyncio.DatagramProtocol):
                     self.server.event("account_request", method=kind - 135, size=len(body))
                     if client.phase == "battle":
                         self.server.event("avatar_request", method=kind - 135, size=len(body))
+                        continue
+                    if (client.phase == 'account' and client.account_created and request is None
+                            and (kind == 135 and not body or kind == CLIENT_OPTIONS_SAVE)):
+                        store = self.server.accounts.store
+                        if kind == 135:
+                            options = store.client_options(client.account_id)
+                            response = client_options_loaded(options)
+                            self.server.event('client_options_loaded', account_id=client.account_id,
+                                              saved=options is not None)
+                        else:
+                            response = client_options_saved(store, client.account_id, body)
+                        self.send(addr, client, b'\x13' + response)
                         continue
                     if kind == 150:
                         self.native_rooms.create(client,body)
@@ -2616,9 +2648,19 @@ class BaseEndpoint(asyncio.DatagramProtocol):
                     room = (None if client.reconnect_replay or self.choosing_training_tank(client.account_id)
                             else self.rooms.current(client.account_id))
                     room_id = int(room.id, 16) if room else 0
+                    settings = server_configuration(self.server.network)
+                    # The stock account reader compares these values to the string "true".
+                    settings['battleChat'] = {
+                        'teamChatEnabled': 'true',
+                        'arenaChatEnabled': 'true',
+                        'trainingRoomEnabled': 'true',
+                        'fastCommandsEnabled': 'true',
+                        'postMortemEnabled': 'true',
+                    }
                     self.send(addr, client, b"\x02" + bytes([UPDATE_HZ]) + b"\x03"
                               + struct.pack("<I", game_tick(time.monotonic(), client.clock_start))
-                              + create_account(account) + b"\x13" + account_method(8, b"") + show_gui(account, room_id))
+                              + create_account(account, server_settings=settings)
+                              + b"\x13" + account_method(8, b"") + show_gui(account, room_id))
                     if room is not None:
                         self.native_rooms.attach(client, room)
                     self.server.event("account_creation_sent")

@@ -2,9 +2,20 @@
 import struct
 import time
 import json
+import pickle
+import pickletools
 import zlib
 
-from .mercury import packed_blob
+from .mercury import packed_blob, read_blob
+
+
+CLIENT_OPTIONS_SAVE = 156
+MAX_CLIENT_OPTIONS = 32 * 1024
+MAX_CLIENT_OPTIONS_RAW = 128 * 1024
+_CLIENT_OPTIONS_OPCODES = frozenset({
+    'PROTO', 'STOP', 'MARK', 'EMPTY_LIST', 'APPEND', 'APPENDS', 'TUPLE', 'TUPLE3',
+    'SHORT_BINSTRING', 'BINSTRING',
+})
 
 
 def pickle_value(value):
@@ -44,11 +55,12 @@ def variable16(kind, body):
     return bytes([kind]) + struct.pack("<H", len(body)) + body
 
 
-def create_account(account):
+def create_account(account, *, server_settings=None):
     # ServerConnection::createBasePlayer reads entity ID u32 and type u16.
     # Account::readBaseProperties reads u64 and three packed byte strings.
     properties = (struct.pack("<Q", account["id"]) + packed_blob(account["nickname"].encode())
-                  + packed_blob(pickle_document({})) + packed_blob(pickle_document({})))
+                  + packed_blob(pickle_document({}))
+                  + packed_blob(pickle_document(server_settings if server_settings is not None else {})))
     return variable16(5, struct.pack("<IH", 100, 0) + properties)
 
 
@@ -84,6 +96,92 @@ def command_response(request_id, result, data=None, message="", *, raw=None):
     payload = (struct.pack("<Hh", request_id, result) + packed_blob(message.encode())
                + packed_blob(raw if raw is not None else pickle_document(data) if data is not None else b""))
     return account_method(38, payload)
+
+
+def unpack_client_options(compressed):
+    """Read the pinned client's primitive list of (device, keys, values) tuples."""
+    if len(compressed) > MAX_CLIENT_OPTIONS:
+        raise ValueError('Client options are too large')
+    try:
+        decompressor = zlib.decompressobj()
+        raw = decompressor.decompress(compressed, MAX_CLIENT_OPTIONS_RAW + 1)
+        if (len(raw) > MAX_CLIENT_OPTIONS_RAW or not decompressor.eof
+                or decompressor.unused_data):
+            raise ValueError('Invalid client options compression')
+        for opcode, _, offset in pickletools.genops(raw):
+            if opcode.name not in _CLIENT_OPTIONS_OPCODES:
+                raise ValueError('Unsupported client options encoding')
+        if offset != len(raw) - 1:
+            raise ValueError('Trailing client options data')
+        rows = pickle.loads(raw, encoding='bytes')
+    except (ValueError, zlib.error, pickle.UnpicklingError, EOFError, OverflowError) as error:
+        raise ValueError('Invalid client options') from error
+    if type(rows) is not list or len(rows) > 8:
+        raise ValueError('Invalid client options groups')
+    options = {}
+    for row in rows:
+        if type(row) is not tuple or len(row) != 3:
+            raise ValueError('Invalid client options group')
+        device, names, values = row
+        if (type(device) is not bytes or not 1 <= len(device) <= 64 or device in options
+                or type(names) is not list or type(values) is not list
+                or len(names) != len(values) or len(names) > 512):
+            raise ValueError('Invalid client options group')
+        if any(type(name) is not bytes or not 1 <= len(name) <= 128 for name in names):
+            raise ValueError('Invalid client option name')
+        if len(set(names)) != len(names) or any(type(value) is not bytes for value in values):
+            raise ValueError('Invalid client option value')
+        options[device] = dict(zip(names, values))
+    return options
+
+
+def pack_client_options(options):
+    raw = b'\x80\x02](' + b''.join(
+        pickle_value(device) + pickle_value(list(values))
+        + pickle_value(list(values.values())) + b'\x87'
+        for device, values in options.items()) + b'e.'
+    compressed = zlib.compress(raw)
+    if len(raw) > MAX_CLIENT_OPTIONS_RAW or len(compressed) > MAX_CLIENT_OPTIONS:
+        raise ValueError('Client options are too large')
+    return compressed
+
+
+def client_options_loaded(compressed):
+    # Account method 41 (dispatch at 0x177d638): i16 result, error and data.
+    # The load callback iterates dictionaries by device and option name.
+    # Only the save request uses three parallel lists inside each group.
+    options = unpack_client_options(compressed) if compressed is not None else {}
+    return account_method(41, b'\0\0\0' + packed_blob(_client_options_for_load(options)))
+
+
+def _client_options_for_load(options):
+    compressed = zlib.compress(pickle_document(options))
+    if len(compressed) > MAX_CLIENT_OPTIONS:
+        raise ValueError('Client options are too large')
+    return compressed
+
+
+def client_options_saved(store, account_id, body):
+    # Account method 32 confirms each save so the native queue can advance.
+    try:
+        data, end = read_blob(body, 0)
+        if end != len(body):
+            raise ValueError('Trailing client options data')
+        options = unpack_client_options(data)
+    except ValueError:
+        return account_method(32, struct.pack('<h', -1) + packed_blob(b'Invalid client options'))
+    previous = store.client_options(account_id)
+    merged = unpack_client_options(previous) if previous is not None else {}
+    try:
+        for device, values in options.items():
+            merged.setdefault(device, {}).update(values)
+        if len(merged) > 8 or any(len(values) > 512 for values in merged.values()):
+            raise ValueError('Too many client options')
+        _client_options_for_load(merged)
+        store.save_client_options(account_id, pack_client_options(merged))
+    except ValueError:
+        return account_method(32, struct.pack('<h', -1) + packed_blob(b'Invalid client options'))
+    return account_method(32, b'\0\0\0')
 
 
 def random_queue_message(enqueued):

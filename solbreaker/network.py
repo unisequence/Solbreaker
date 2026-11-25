@@ -166,6 +166,12 @@ def parse_config(document):
     result=NetworkConfig(listeners['http'],listeners['login'],listeners['base'],advertised_http,
         Endpoint.parse(advertise['login'],public=public),Endpoint.parse(advertise['base'],public=public),
         origin(document['services']['http'],public=public),networks,document['version'])
+    if max(result.listen_base.port, result.advertise_base.port) == 65535:
+        raise ValueError('BaseApp port 65535 leaves no adjacent XChat port')
+    if (result.listen_http.port == result.listen_base.port + 1
+            and (result.listen_http.host == result.listen_base.host
+                 or '0.0.0.0' in (result.listen_http.host, result.listen_base.host))):
+        raise ValueError('HTTP and XChat must not bind the same TCP socket')
     # Literal service addresses retain the existing ACL consistency check.
     # DNS is resolved by the connecting client. Inbound peer ACLs still use IPs.
     for address in (urlsplit(result.advertise_http).hostname,result.advertise_login.host,

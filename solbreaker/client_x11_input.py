@@ -1,4 +1,4 @@
-"""Attach the X11 repeat filter only to a prepared Proton client."""
+"""Attach the X11 input workarounds only to a prepared Proton client."""
 from contextlib import contextmanager
 import hashlib
 import os

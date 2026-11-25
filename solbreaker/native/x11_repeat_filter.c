@@ -1,9 +1,9 @@
-/* Per-process workaround for X autorepeat disrupting legacy mouse warping in
- * Blitz 11.21 under Proton. No XKB settings, grabs, or input synthesis.
- * Only repeated presses during recent pointer recentering are consumed.
+/* Per-process X11 input workarounds for Blitz 11.21 under Proton.
+ * No XKB settings, grabs, or input synthesis.
  */
 #define _GNU_SOURCE
 #include <X11/Xlib.h>
+#include <X11/Xutil.h>
 #include <dlfcn.h>
 #include <fcntl.h>
 #include <pthread.h>
@@ -21,14 +21,24 @@ struct repeat_state {
 };
 static __thread struct repeat_state state;
 static pthread_once_t symbols_once = PTHREAD_ONCE_INIT;
+static pthread_once_t keysyms_once = PTHREAD_ONCE_INIT;
 static Bool (*real_filter)(XEvent *, Window);
 static int (*real_warp)(Display *, Window, Window, int, int, unsigned int, unsigned int, int, int);
+static int (*real_lookup)(XKeyEvent *, char *, int, KeySym *, XComposeStatus *);
+static int (*real_mb_lookup)(XIC, XKeyPressedEvent *, char *, int, KeySym *, Status *);
+static uint32_t (*keysym_to_utf32)(uint32_t);
 static __thread int target_confirmed;
 static __thread unsigned suppressed;
 
 static void resolve_symbols(void) {
     real_filter = dlsym(RTLD_NEXT, "XFilterEvent");
     real_warp = dlsym(RTLD_NEXT, "XWarpPointer");
+    real_lookup = dlsym(RTLD_NEXT, "XLookupString");
+    real_mb_lookup = dlsym(RTLD_NEXT, "XmbLookupString");
+}
+static void resolve_keysyms(void) {
+    void *library = dlopen("libxkbcommon.so.0", RTLD_LAZY | RTLD_LOCAL);
+    if (library) keysym_to_utf32 = dlsym(library, "xkb_keysym_to_utf32");
 }
 static uint64_t now_ms(void) {
     struct timespec t;
@@ -59,6 +69,31 @@ static int is_target(void) {
     if (strcmp(path, target)) return 0;
     target_confirmed = 1;
     return 1;
+}
+static void recover_cyrillic(const XKeyEvent *event, int count, KeySym *keysym) {
+    if (count || !keysym || *keysym < 0x06a1 || *keysym > 0x06ff ||
+        event->type != KeyPress || (event->state & (ControlMask | Mod1Mask)) || !is_target())
+        return;
+    pthread_once(&keysyms_once, resolve_keysyms);
+    if (!keysym_to_utf32) return;
+    uint32_t codepoint = keysym_to_utf32(*keysym);
+    /* Proton's X11 ToUnicodeEx accepts a direct Unicode keysym when
+     * Xlib supplied no text. Preserve the normal lookup and IME result. */
+    if (codepoint) *keysym = 0x01000000 | codepoint;
+}
+int XLookupString(XKeyEvent *event, char *buffer, int size, KeySym *keysym, XComposeStatus *compose) {
+    pthread_once(&symbols_once, resolve_symbols);
+    if (!real_lookup) return 0;
+    int count = real_lookup(event, buffer, size, keysym, compose);
+    recover_cyrillic(event, count, keysym);
+    return count;
+}
+int XmbLookupString(XIC ic, XKeyPressedEvent *event, char *buffer, int size, KeySym *keysym, Status *status) {
+    pthread_once(&symbols_once, resolve_symbols);
+    if (!real_mb_lookup) return 0;
+    int count = real_mb_lookup(ic, event, buffer, size, keysym, status);
+    if (status && *status == XLookupKeySym) recover_cyrillic(event, count, keysym);
+    return count;
 }
 static void select_display(Display *display) {
     if (state.display != display) {

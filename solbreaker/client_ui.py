@@ -802,6 +802,48 @@ def community_icon_patches():
     }
 
 
+def install_chat_filter(lab, manifest):
+    """Disable word filtering in the prepared client while retaining domain rules."""
+    if manifest.get('chat_filter_version') == 2:
+        return manifest
+    from .connection import atomic_write
+
+    game = Path(manifest.get('source_game', manifest['game'])).resolve(strict=True)
+    source = game/'Data/MessageFilters'
+    patches = {}
+    for original in sorted(source.glob('*_messenger_oldictionary.yaml.dvpl')):
+        dictionary = yaml.safe_load(dvpl.read(original))
+        if not isinstance(dictionary, dict) or not isinstance(dictionary.get('BadWords'), list):
+            raise ValueError(f'Unexpected message dictionary: {original.name}')
+        dictionary['BadWords'] = []
+        if isinstance(dictionary.get('Spacious'), list):
+            dictionary['Spacious'] = []
+        patches[Path(original.name)] = dvpl.encode(yaml.safe_dump(
+            dictionary, sort_keys=False, allow_unicode=True).encode())
+    for original in sorted((source/'V2').glob('*.badwords.yaml.dvpl')):
+        dictionary = yaml.safe_load(dvpl.read(original))
+        if not isinstance(dictionary, dict) or not isinstance(dictionary.get('badwords'), list):
+            raise ValueError(f'Unexpected message dictionary: {original.name}')
+        dictionary['badwords'] = []
+        patches[original.relative_to(source)] = dvpl.encode(yaml.safe_dump(
+            dictionary, sort_keys=False, allow_unicode=True).encode())
+    if not patches:
+        return manifest
+    data = lab/'client/Data'
+    local_directory(data, game)
+    target = data/'MessageFilters'
+    local_directory(target, game)
+    overrides = dict(manifest.get('ui_overrides', {}))
+    for name, content in patches.items():
+        if name.parent != Path('.'):
+            local_directory(target/name.parent, game)
+        atomic_write(target/name, content, replace_symlink=True)
+        overrides[f'MessageFilters/{name.as_posix()}'] = hashlib.sha256(content).hexdigest()
+    updated = dict(manifest, ui_overrides=overrides, chat_filter_version=2)
+    atomic_write(lab/'manifest.json', (json.dumps(updated, indent=2)+'\n').encode())
+    return updated
+
+
 def install_ui_guards(lab):
     lab = lab.resolve(strict=True)
     manifest_path = lab / "manifest.json"

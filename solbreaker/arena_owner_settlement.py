@@ -1,14 +1,50 @@
-"""Persist owner results through the ordinary per-account settlement transaction.
-
-The caller retains the complete settlement and retries it on error.  This
-module does not acknowledge delivery, retain state across a parent crash, or
-implement a durable owner journal.
-"""
+"""Journal completed owner battles and apply the ordinary account transaction."""
 from copy import deepcopy
+from dataclasses import asdict
+import hashlib
+import json
 from types import SimpleNamespace
 
 from .arena_owner import SettlementData, SettlementRecord
+from .battle_rewards import BattleReward
+from .connection import atomic_write
 from .entities import BattleResult
+
+
+def journal_path(directory, arena_id):
+    return directory / (hashlib.sha256(arena_id.encode()).hexdigest() + '.json')
+
+
+def journal_result(directory, data):
+    directory.mkdir(mode=0o700, exist_ok=True)
+    rows = [{
+        'result': asdict(record.result), 'report': record.report,
+        'descriptor': record.descriptor.hex(), 'loadout_shells': record.loadout_shells,
+        'ammo_by_shell': record.ammo_by_shell, 'shell_id': record.shell_id, 'ammo': record.ammo,
+    } for record in data.records]
+    if tuple(record.result for record in data.records) != data.results:
+        raise ValueError('owner results do not match the journal records')
+    atomic_write(journal_path(directory, data.arena_id),
+                 json.dumps({'version': 1, 'arena_id': data.arena_id, 'records': rows},
+                            allow_nan=False, separators=(',', ':')).encode())
+
+
+def read_journal(path):
+    if path.is_symlink() or path.stat().st_size > 8 << 20:
+        raise ValueError('invalid owner settlement journal')
+    data = json.loads(path.read_bytes())
+    if data['version'] != 1 or journal_path(path.parent, data['arena_id']) != path:
+        raise ValueError('owner settlement journal identity mismatch')
+    records = []
+    for row in data['records']:
+        result = row['result']
+        if result['reward'] is not None:
+            result['reward'] = BattleReward(**result['reward'])
+        shells = row['loadout_shells']
+        records.append(SettlementRecord(BattleResult(**result), row['report'],
+            bytes.fromhex(row['descriptor']), None if shells is None else tuple(shells),
+            tuple(tuple(pair) for pair in row['ammo_by_shell']), row['shell_id'], row['ammo']))
+    return SettlementData(data['arena_id'], tuple(row.result for row in records), tuple(records))
 
 
 def commit(endpoint, data: SettlementData) -> dict[int, dict]:
