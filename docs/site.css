@@ -57,3 +57,17 @@ summary { cursor: pointer; font-weight: 630; }
   .profile { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .profile div:nth-child(odd) { border-left: 0; padding-left: 0; }
 }
+.sections { display: flex; gap: .25rem; margin: 0 0 1.15rem; border-bottom: 1px solid var(--line); }
+.sections button { border: 0; border-bottom: 2px solid transparent; padding: .6rem .85rem;
+                    background: transparent; color: var(--muted); font: inherit; cursor: pointer; }
+.sections button[aria-pressed="true"] { border-color: #167a81; color: var(--ink); font-weight: 650; }
+.community-filters { margin: 1rem 0 .6rem; }
+.community-filters label { max-width: 100%; }
+.community-filters input { color: var(--ink); font: inherit; font-size: .9rem; background: #fff;
+                          border: 1px solid #829d9e; border-radius: 4px; padding: .45rem .6rem; }
+.community-filters select { max-width: min(40rem, 86vw); }
+.community-message { color: var(--muted); margin: .65rem 0; }
+#community-data th:nth-child(3), #community-data td:nth-child(3) { text-align: left; }
+#community-data td:nth-child(3) { white-space: normal; min-width: 13rem; width: 29%; }
+.community-more { margin-top: 1rem; font: inherit; color: var(--ink); background: #fff;
+                  border: 1px solid #829d9e; border-radius: 4px; padding: .5rem .8rem; cursor: pointer; }

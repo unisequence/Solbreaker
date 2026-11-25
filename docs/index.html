@@ -8,14 +8,20 @@
   <title>Solbreaker Benchmarks</title>
   <link rel="stylesheet" href="site.css">
   <script defer src="site.js"></script>
+  <script defer src="community.js"></script>
 </head>
 <body>
   <main>
     <header class="top"><a class="brand" href="./">Solbreaker Benchmarks</a><a href="https://github.com/unisequence/Solbreaker">GitHub repository</a></header>
     <section class="intro" aria-labelledby="title">
       <h1 id="title">Server performance by release</h1>
-      <p>Compare the same workload on the same test machine. Each result links to the release and its measured data.</p>
+      <p id="intro-copy">Compare the same workload on the same test machine. Each result links to the release and its measured data.</p>
     </section>
+    <nav class="sections" aria-label="Benchmark sources">
+      <button id="project-tab" type="button" aria-pressed="true">Project runs</button>
+      <button id="community-tab" type="button" aria-pressed="false">Community</button>
+    </nav>
+    <div id="project-panel">
     <div id="message" role="status">Loading benchmark results…</div>
     <noscript><p>The comparison requires JavaScript. <a href="data/index.json">Read the benchmark index</a>.</p></noscript>
     <section id="dashboard" hidden aria-labelledby="comparison">
@@ -53,6 +59,28 @@
         <p id="method-profile"></p>
         <p>Runs use the published Linux server package and the same pinned game build. The benchmark uses scripted players and loopback UDP; it measures server behavior under the selected workload.</p>
       </details>
+    </section>
+    </div>
+    <section id="community-panel" aria-labelledby="community-title" hidden>
+      <div class="chart-head">
+        <div><h2 id="community-title">Submitted runs</h2>
+          <p class="note">Self-reported runs submitted from the launcher. Filter by workload to compare like for like.</p></div>
+      </div>
+      <div id="community-filters" class="filters community-filters" hidden>
+        <label>Search hardware <input type="search" id="community-search" placeholder="CPU or OS"></label>
+        <label>Solbreaker version <select id="community-version"></select></label>
+        <label>Workload <select id="community-profile"></select></label>
+      </div>
+      <p id="community-message" class="community-message" role="status"></p>
+      <div id="community-data" class="table-scroll" tabindex="0" role="region" aria-label="Community benchmark table" hidden>
+        <table>
+          <thead><tr><th scope="col">Test machine</th><th scope="col">Version</th><th scope="col">Workload</th>
+            <th scope="col">Min Hz</th><th scope="col">Input p99</th><th scope="col">Tick p99</th>
+            <th scope="col">CPU cores</th><th scope="col">RSS</th><th scope="col">UDP drops</th><th scope="col">Verdict</th></tr></thead>
+          <tbody id="community-body"></tbody>
+        </table>
+      </div>
+      <button id="community-more" type="button" class="community-more" hidden>Load older results</button>
     </section>
   </main>
 </body>
