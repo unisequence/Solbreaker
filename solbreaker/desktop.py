@@ -67,6 +67,7 @@ QPushButton#benchmarkNav:hover { background: #f0ebf7; color: #54396f; }
 QPushButton#benchmarkNav:focus { border: 1px solid #9675b4; padding: 12px 14px; }
 QPushButton#benchmarkNav:disabled { background: transparent; color: #a39aaa; }
 QLabel#updateTitle { font-size: 13px; font-weight: 600; }
+QLabel#benchmarkMetrics { color: #776d85; font-size: 12px; }
 QLabel#updateVersion { font-size: 12px; color: #776d85; }
 QComboBox#updateChannel { padding: 7px 9px; }
 QPushButton#updateAction { background: #e5dcee; color: #54396f; border-color: #d5cce2;
@@ -1179,7 +1180,11 @@ class Window(QMainWindow):
         actions.addWidget(button(tr('Прочитать журнал сервера'), self.load_log))
         self.benchmark_report_button = button(tr('Открыть отчёт бенчмарка'), self.open_benchmark_report)
         actions.addWidget(self.benchmark_report_button)
-        actions.addStretch()
+        self.benchmark_stop_button = button(tr('Остановить'), self.stop_benchmark)
+        actions.addWidget(self.benchmark_stop_button)
+        self.benchmark_metrics = label('', 'benchmarkMetrics')
+        self.benchmark_metrics.setToolTip(tr('ОЗУ и ЦП бенчмарка и процессов арен. ЦП 100% — одно логическое ядро.'))
+        actions.addWidget(self.benchmark_metrics, 1)
         column.addLayout(actions)
 
     def browse(self, key, kind):
@@ -1399,6 +1404,32 @@ class Window(QMainWindow):
                   bool(settings.server_url.strip() or document(remote_profile(settings)).get('server_id')))
         return (game/'wotblitz.exe').is_file(), prepared_client(settings), server
 
+    def stop_benchmark(self):
+        self.manager.stop_benchmark()
+        self.poll()
+
+    def show_benchmark_progress(self):
+        job = self.manager.job
+        active = job is not None and job.action == 'benchmark'
+        self.benchmark_stop_button.setVisible(active)
+        self.benchmark_metrics.setVisible(active)
+        if not active:
+            return
+        self.benchmark_stop_button.setEnabled(not job.stopping)
+        progress = job.progress
+        remaining = progress.get('remaining_seconds')
+        cpu = progress.get('cpu_percent')
+        rss = progress.get('rss_bytes')
+        eta = '—'
+        if remaining is not None and not job.stopping:
+            hours, seconds = divmod(remaining, 3600)
+            minutes, seconds = divmod(seconds, 60)
+            eta = f'≈ {hours:02d}:{minutes:02d}:{seconds:02d}'
+        memory = '—' if rss is None else f'{rss / (1 << 30):.2f} {tr("ГиБ")}'
+        processor = '—' if cpu is None else f'{cpu:.0f}%'
+        self.benchmark_metrics.setText(tr('Осталось {eta} · ОЗУ {memory} · ЦП {cpu}').format(
+            eta=eta, memory=memory, cpu=processor))
+
     def open_benchmark_report(self, *, automatic=False):
         path = self.manager.benchmark_report
         if path is None or not path.is_file() or QDesktopServices.openUrl(QUrl.fromLocalFile(str(path))):
@@ -1519,8 +1550,10 @@ class Window(QMainWindow):
         lines = self.manager.drain()
         if lines:
             self.log.appendPlainText('\n'.join(lines))
-        if job is not None and job.action == 'benchmark' and job is not self.manager.job:
+        if (job is not None and job.action == 'benchmark' and job is not self.manager.job
+                and job.returncode != 130):
             self.open_benchmark_report(automatic=True)
+        self.show_benchmark_progress()
         if self.wizard is not None and self.wizard.isVisible():
             self.wizard.update_job(lines)
         starting = self.manager.server is not None and self.manager.server.running and not self.manager.server.started

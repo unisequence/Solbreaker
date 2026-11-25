@@ -208,7 +208,7 @@ def command(action, settings, *, windows=None, interface=None, replay=None, depo
         html = html_output(output)
         if (not output.parent.is_dir() or output.exists() or html.exists() or html.is_symlink()):
             raise ValueError('Выбери новое имя для отчётов HTML и JSON.')
-        args = cli + ['benchmark', '--game', game, '--output', str(output)]
+        args = cli + ['benchmark', '--game', game, '--output', str(output), '--stop-on-stdin']
         for name in ('maps', 'scenarios', 'arenas', 'tanks', 'seconds', 'warmup', 'repeat',
                      'engine', 'input-pattern', 'vehicle', 'seed'):
             if name in options:
@@ -306,6 +306,7 @@ class Job:
         self.resource_error = ''
         self.failure_notice = ''
         self._stop_requested = False
+        self.progress = {}
         self.process = subprocess.Popen(argv, cwd=PROJECT, stdin=subprocess.PIPE,
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, encoding='utf-8', errors='replace',
             env=dict(os.environ, PYTHONUNBUFFERED='1', PYTHONUTF8='1'), bufsize=1,
@@ -322,6 +323,9 @@ class Job:
                     self.started = True
                     if self._stop_requested:
                         self._send_stop()
+                elif self.action == 'benchmark' and event.get('event') == 'benchmark_progress':
+                    self.progress = event
+                    continue
                 elif event.get('event') == 'vehicle_catalog_error' and isinstance(event.get('message'), str):
                     self.resource_error = event['message']
             except (ValueError, AttributeError):
@@ -339,6 +343,10 @@ class Job:
     def running(self):
         return self.process.poll() is None
 
+    @property
+    def stopping(self):
+        return self._stop_requested
+
     def _send_stop(self):
         try:
             self.process.stdin.write('stop\n')
@@ -351,7 +359,7 @@ class Job:
         self._stop_requested = True
         # WSL helper commands also inherit stdin. Wait until the real server
         # owns the pipe so an early stop cannot be consumed by a helper.
-        if self.running and self.started:
+        if self.running and (self.started or self.action == 'benchmark'):
             self._send_stop()
 
 
@@ -475,6 +483,12 @@ class Manager:
                        'prepare-client': 'Подготовка клиента', 'play': self.notice,
                        'benchmark': 'Бенчмарк выполняется'}.get(action, 'Операция выполняется')
 
+    def stop_benchmark(self):
+        job = self.job
+        if job is not None and job.action == 'benchmark' and job.running:
+            job.stop()
+            self.notice = 'Бенчмарк останавливается…'
+
     def stop_server(self):
         self._pending_play = None
         if self.server is not None:
@@ -528,6 +542,8 @@ class Manager:
             self.notice = (success if self.job.returncode == 0
                            else self.job.resource_error or self.job.failure_notice or
                            f'Операция завершилась с ошибкой {self.job.returncode}. Подробности в журнале')
+            if self.job.action == 'benchmark' and self.job.returncode == 130:
+                self.notice = 'Бенчмарк остановлен. Сохранены завершённые прогоны.'
             self.job = None
         if self.client is not None and (code := self.client.poll()) is not None:
             self.client = None

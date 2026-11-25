@@ -74,11 +74,16 @@ class DesktopTests(unittest.TestCase):
         self.window.manager.benchmark_report = report
         self.window.select(3)
         with patch.object(QDesktopServices, 'openUrl', return_value=True) as opened:
-            job = SimpleNamespace(action='benchmark', returncode=None, running=True,
+            job = SimpleNamespace(action='benchmark', returncode=None, running=True, stopping=False,
+                                  progress={'remaining_seconds': 3723, 'rss_bytes': 3 << 30, 'cpu_percent': 142},
                                   resource_error='', failure_notice='')
             self.window.manager.job = job
             self.window.poll()
             opened.assert_not_called()
+            self.assertTrue(self.window.benchmark_stop_button.isVisible())
+            self.assertIn('01:02:03', self.window.benchmark_metrics.text())
+            self.assertIn('3.00', self.window.benchmark_metrics.text())
+            self.assertIn('142%', self.window.benchmark_metrics.text())
 
             report.write_text('<title>Benchmark</title>')
             job.running = False
@@ -94,6 +99,13 @@ class DesktopTests(unittest.TestCase):
             self.window.manager.job = job
             self.window.poll()
             self.assertEqual(opened.call_count, 2)
+            self.window.manager.benchmark_report = report
+            self.window.manager.job = job
+            job.returncode = 130
+            self.window.poll()
+            self.assertEqual(opened.call_count, 2)
+            self.assertFalse(self.window.benchmark_stop_button.isVisible())
+            self.assertTrue(self.window.benchmark_report_button.isVisible())
 
     def test_first_run_has_one_setup_action_and_explains_missing_client(self):
         self.assertEqual(self.window.play_button.text(), 'Настроить игру')

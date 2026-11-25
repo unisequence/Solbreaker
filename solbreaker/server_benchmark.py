@@ -2,6 +2,7 @@
 from array import array
 import asyncio
 from collections import Counter
+from contextlib import contextmanager, nullcontext
 from itertools import islice, product
 import json
 import math
@@ -11,6 +12,7 @@ import platform
 import struct
 import sys
 import tempfile
+import threading
 import time
 
 from . import __version__
@@ -29,6 +31,7 @@ from .training_config import RoomBattleSettings, TrainingConfig
 
 SCENARIOS = ('solo', 'bots', 'players')
 CONTROL_INTERVAL = 1 / UPDATE_HZ
+BENCHMARK_STOPPED = 130
 STEP_HZ = round(1 / SIMULATION_INTERVAL)
 ROUTE = (TrainingBot.FORWARD, TrainingBot.FORWARD | TrainingBot.LEFT,
          TrainingBot.FORWARD, TrainingBot.FORWARD | TrainingBot.RIGHT,
@@ -80,9 +83,27 @@ def host_info():
             'physical_memory_bytes': ram, 'python': platform.python_version()}
 
 
+@contextmanager
+def windows_process(pid):
+    import ctypes as c
+    from ctypes import wintypes as w
+
+    kernel = c.WinDLL('kernel32')
+    kernel.GetCurrentProcess.restype = w.HANDLE
+    kernel.OpenProcess.argtypes = (w.DWORD, w.BOOL, w.DWORD)
+    kernel.OpenProcess.restype = w.HANDLE
+    kernel.CloseHandle.argtypes = (w.HANDLE,)
+    handle = kernel.GetCurrentProcess() if pid is None else kernel.OpenProcess(0x1010, False, pid)
+    try:
+        yield kernel, handle
+    finally:
+        if pid is not None and handle:
+            kernel.CloseHandle(handle)
+
+
 def process_memory(pid=None):
-    """Current/peak resident bytes for the benchmark process, excluding children."""
-    if sys.platform == 'win32' and pid is None:
+    """Current/peak resident bytes for one process."""
+    if sys.platform == 'win32':
         import ctypes as c
         from ctypes import wintypes as w
 
@@ -91,14 +112,12 @@ def process_memory(pid=None):
                         ('peak', c.c_size_t), ('current', c.c_size_t),
                         ('quota_and_pagefile', c.c_size_t * 6)]
 
-        kernel = c.WinDLL('kernel32')
-        current_process = kernel.GetCurrentProcess
-        current_process.restype = w.HANDLE
-        query = kernel.K32GetProcessMemoryInfo
-        query.argtypes = (w.HANDLE, c.POINTER(Counters), w.DWORD)
         counters = Counters(cb=c.sizeof(Counters))
-        if query(current_process(), c.byref(counters), counters.cb):
-            return counters.current, counters.peak
+        with windows_process(pid) as (kernel, handle):
+            query = kernel.K32GetProcessMemoryInfo
+            query.argtypes = (w.HANDLE, c.POINTER(Counters), w.DWORD)
+            if handle and query(handle, c.byref(counters), counters.cb):
+                return counters.current, counters.peak
     elif sys.platform == 'linux':
         try:
             fields = dict((key, value) for row in Path(f'/proc/{pid or "self"}/status').read_text().splitlines()
@@ -132,6 +151,19 @@ def udp_receive_drops(transports):
 
 
 def owner_cpu_times(pids):
+    if sys.platform == 'win32':
+        import ctypes as c
+        from ctypes import wintypes as w
+        result = {}
+        for pid in pids:
+            with windows_process(pid) as (kernel, handle):
+                query = kernel.GetProcessTimes
+                query.argtypes = (w.HANDLE,) + (c.POINTER(w.FILETIME),) * 4
+                clocks = [w.FILETIME() for _ in range(4)]
+                if handle and query(handle, *(c.byref(clock) for clock in clocks)):
+                    result[pid] = sum((clock.dwHighDateTime << 32) + clock.dwLowDateTime
+                                      for clock in clocks[2:]) / 10_000_000
+        return result
     if sys.platform != 'linux':
         return {}
     frequency = os.sysconf('SC_CLK_TCK')
@@ -373,6 +405,94 @@ def _control_offsets(actors):
             for slot, (_, index) in enumerate(sorted(slots))}
 
 
+class BenchmarkStopped(Exception):
+    pass
+
+
+class BenchmarkControl:
+    """One launcher control pipe and live samples, independent of the physics loop."""
+
+    def __init__(self, total, seconds, warmup):
+        self.total = total
+        self.seconds = seconds
+        self.warmup = warmup
+        self.stop = threading.Event()
+        self.finished = threading.Event()
+        self.workers = ()
+        self.setup_cost = self.cleanup_cost = 0.
+        self.phase = (0, 'prepare', time.monotonic(), 0., 0.)
+
+    def __enter__(self):
+        threading.Thread(target=self.listen, daemon=True).start()
+        self.sampler = threading.Thread(target=self.sample, daemon=True)
+        self.sampler.start()
+        return self
+
+    def __exit__(self, *_):
+        self.finished.set()
+        self.sampler.join()
+
+    def listen(self):
+        try:
+            os.read(sys.stdin.fileno(), 64)
+        except (OSError, ValueError):
+            pass
+        self.stop.set()
+
+    def stage(self, index, phase, duration=0., after=0.):
+        self.phase = (index, phase, time.monotonic(), duration, after)
+
+    def estimate(self, now):
+        index, phase, started, duration, after = self.phase
+        cases = self.total - index - (phase != 'prepare')
+        future = cases * (self.seconds + self.warmup + self.setup_cost + self.cleanup_cost)
+        return phase, max(0, math.ceil(future + max(0., duration - (now - started)) + after))
+
+    def sample(self):
+        previous_time, previous_cpu, previous_workers = time.monotonic(), time.process_time(), {}
+        delay = 0.
+        while not self.finished.wait(delay):
+            now, cpu = time.monotonic(), time.process_time()
+            pids = self.workers
+            workers = owner_cpu_times(pids)
+            memory = [process_memory()[0], *(process_memory(pid)[0] for pid in pids)]
+            usage = cpu - previous_cpu + sum(workers[pid] - previous_workers[pid]
+                                             for pid in workers.keys() & previous_workers.keys())
+            phase, left = self.estimate(now)
+            event = {'event': 'benchmark_progress', 'phase': phase, 'case_index': self.phase[0],
+                     'remaining_seconds': left if not self.stop.is_set() else None,
+                     'cpu_percent': round(100 * usage / (now - previous_time), 1) if delay else None,
+                     'rss_bytes': sum(value for value in memory if value is not None)
+                                  if memory[0] is not None else None}
+            try:
+                sys.stdout.write(json.dumps(event) + '\n')
+                sys.stdout.flush()
+            except BrokenPipeError:
+                self.stop.set()
+                return
+            previous_time, previous_cpu, previous_workers = now, cpu, workers
+            delay = 1.
+
+    def check(self):
+        if self.stop.is_set():
+            raise BenchmarkStopped
+
+    async def run_case(self, case):
+        task = asyncio.create_task(case)
+        while not task.done():
+            # Owner creation cannot be interrupted while the worker is still
+            # being registered. Setup checks the stop flag at safe boundaries.
+            if self.stop.is_set() and self.phase[1] in ('warmup', 'measure'):
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    raise BenchmarkStopped from None
+                break
+            await asyncio.wait((task,), timeout=.1)
+        return task.result()
+
+
 class Timeline:
     """Record one-second windows during the measured part of a case."""
 
@@ -443,59 +563,59 @@ async def _drive(endpoint, actors, arenas, samples, duration, started, *, measur
     window_steps = [arena.step_count for arena in arenas] if windows is not None else []
     window_inputs = {key: 0 for key in endpoint.input_wait} if windows is not None else {}
     window_motion = {key: 0 for key in endpoint.motion_gaps} if windows is not None else {}
-    while scheduled < end:
-        await asyncio.sleep(max(0., scheduled - time.monotonic()))
-        now = time.monotonic()
-        if now >= end:
-            if measure:
-                lags.append(now - scheduled)
-            break
-        if measure:
-            lags.append(max(0., now - scheduled))
-        phase = int((now - started) / 2)
-        fire = now >= next_fire
-        if fire:
-            next_fire = now + .9
-        for handle in pending:
-            handle.cancel()
-        pending.clear()
-        for index, (arena, address, client, peer) in enumerate(actors):
-            if address not in endpoint.clients:
-                continue
-            flags = ROUTE[(phase + index % 3) % len(ROUTE)]
-            target = None
-            if fire:
-                own = arena.vehicle_for(client.account_id)
-                target = next((v for v in arena.vehicles.values() if v.team != own.team and v.alive), None)
-            if pattern == 'spread':
-                offset = offsets[index]
-                if now + offset < end:
-                    pending.append(loop.call_later(offset, send_control, arena, address, peer, flags, target))
-            else:
-                send_control(arena, address, peer, flags, target)
-        if measure and now >= probe:
-            probe = now + .1
-            for arena in arenas:
-                samples[arena.result_id].observe(arena, now)
-        if timeline is not None:
-            timeline.sample(lags)
-        if windows is not None and now - window_start >= 10:
-            deltas = [(arena.step_count - last) / (now - window_start)
-                      for arena, last in zip(arenas, window_steps, strict=True)]
-            windows.append({'elapsed_seconds': round(now - first, 3),
-                            'steps_per_second': [round(rate, 3) for rate in deltas],
-                            'sessions': len(endpoint.clients),
-                            'input_p99_ms': [durations(values[window_inputs[key]:])['p99_ms']
-                                             for key, values in endpoint.input_wait.items()],
-                            'motion_max_ms': [round(max(values[window_motion[key]:], default=0.) * 1000, 3)
-                                              for key, values in endpoint.motion_gaps.items()],
-                            'dropped_seconds_total': [round(arena.dropped_time, 3) for arena in arenas]})
-            window_inputs = {key: len(values) for key, values in endpoint.input_wait.items()}
-            window_motion = {key: len(values) for key, values in endpoint.motion_gaps.items()}
-            window_start = now
-            window_steps = [arena.step_count for arena in arenas]
-        scheduled += CONTROL_INTERVAL * max(1, math.floor((now - scheduled) / CONTROL_INTERVAL) + 1)
     try:
+        while scheduled < end:
+            await asyncio.sleep(max(0., scheduled - time.monotonic()))
+            now = time.monotonic()
+            if now >= end:
+                if measure:
+                    lags.append(now - scheduled)
+                break
+            if measure:
+                lags.append(max(0., now - scheduled))
+            phase = int((now - started) / 2)
+            fire = now >= next_fire
+            if fire:
+                next_fire = now + .9
+            for handle in pending:
+                handle.cancel()
+            pending.clear()
+            for index, (arena, address, client, peer) in enumerate(actors):
+                if address not in endpoint.clients:
+                    continue
+                flags = ROUTE[(phase + index % 3) % len(ROUTE)]
+                target = None
+                if fire:
+                    own = arena.vehicle_for(client.account_id)
+                    target = next((v for v in arena.vehicles.values() if v.team != own.team and v.alive), None)
+                if pattern == 'spread':
+                    offset = offsets[index]
+                    if now + offset < end:
+                        pending.append(loop.call_later(offset, send_control, arena, address, peer, flags, target))
+                else:
+                    send_control(arena, address, peer, flags, target)
+            if measure and now >= probe:
+                probe = now + .1
+                for arena in arenas:
+                    samples[arena.result_id].observe(arena, now)
+            if timeline is not None:
+                timeline.sample(lags)
+            if windows is not None and now - window_start >= 10:
+                deltas = [(arena.step_count - last) / (now - window_start)
+                          for arena, last in zip(arenas, window_steps, strict=True)]
+                windows.append({'elapsed_seconds': round(now - first, 3),
+                                'steps_per_second': [round(rate, 3) for rate in deltas],
+                                'sessions': len(endpoint.clients),
+                                'input_p99_ms': [durations(values[window_inputs[key]:])['p99_ms']
+                                                 for key, values in endpoint.input_wait.items()],
+                                'motion_max_ms': [round(max(values[window_motion[key]:], default=0.) * 1000, 3)
+                                                  for key, values in endpoint.motion_gaps.items()],
+                                'dropped_seconds_total': [round(arena.dropped_time, 3) for arena in arenas]})
+                window_inputs = {key: len(values) for key, values in endpoint.input_wait.items()}
+                window_motion = {key: len(values) for key, values in endpoint.motion_gaps.items()}
+                window_start = now
+                window_steps = [arena.step_count for arena in arenas]
+            scheduled += CONTROL_INTERVAL * max(1, math.floor((now - scheduled) / CONTROL_INTERVAL) + 1)
         await asyncio.sleep(max(0., end - time.monotonic()))
         if timeline is not None:
             timeline.sample(lags, final=True)
@@ -518,17 +638,19 @@ def _verdict(arenas, faults):
     return 'ok'
 
 
-async def _wait_for_battle(endpoint, arenas, deadline):
+async def _wait_for_battle(endpoint, arenas, deadline, control=None):
     # Drive traffic only after READY is confirmed by every owner. Otherwise
     # a startup measurement includes pre-battle input floods.
     while not all(arena.started for arena in arenas):
+        if control is not None:
+            control.check()
         if (time.monotonic() >= deadline or endpoint.arena_faults
                 or any(endpoint.arenas.get(arena.result_id) is not arena for arena in arenas)):
             raise RuntimeError('Benchmark battle did not start')
         await asyncio.sleep(.025)
 
 
-async def _scenario(state, map_key, scenario, count, requested_tanks, seconds, warmup, seed, *, cold, pattern):
+async def _scenario(state, map_key, scenario, count, requested_tanks, seconds, warmup, seed, *, cold, pattern, control=None, case_index=0):
     manifest_path = state / 'manifest.json'
     manifest = json.loads(manifest_path.read_text())
     manifest['training_map'] = map_key
@@ -540,12 +662,19 @@ async def _scenario(state, map_key, scenario, count, requested_tanks, seconds, w
     transport = None
     peers = []
     shutdown_by_arena = {}
+
+    def owner_pids():
+        return {key: job.owner._owner._process.pid for key, job in endpoint.owner_service.jobs.items()
+                if job.owner is not None}
+
     try:
         endpoint = MeasuredEndpoint(server, cold=cold)
         loop = asyncio.get_running_loop()
         startup = time.monotonic() - start
         arenas, builds, actors, owner_recipes = [], [], [], []
         for index in range(count):
+            if control is not None:
+                control.check()
             before = time.monotonic()
             arena, accounts, training = _arena(endpoint, scenario, index, seed, requested_tanks)
             builds.append(round(time.monotonic() - before, 3))
@@ -569,6 +698,8 @@ async def _scenario(state, map_key, scenario, count, requested_tanks, seconds, w
         transport, _ = await open_datagram(lambda: endpoint, local_addr=('127.0.0.1', 0), batch_receive=True)
         for _, _, _, peer in actors:
             peer.server_address = transport.get_extra_info('sockname')
+        if control is not None:
+            control.check()
         if owner_recipes:
             endpoint.observe_owner_inputs()
             service = endpoint.owner_service
@@ -586,8 +717,12 @@ async def _scenario(state, map_key, scenario, count, requested_tanks, seconds, w
             async def start_owner(index, recipe):
                 await endpoint.owner_service.start(*recipe)
                 builds[index] = round(builds[index] + time.monotonic() - build_started, 3)
+                if control is not None:
+                    control.workers = tuple(owner_pids().values())
 
             await asyncio.gather(*(start_owner(index, recipe) for index, recipe in enumerate(owner_recipes)))
+            if control is not None:
+                control.check()
             for arena in arenas:
                 if arena.result_id not in endpoint.owner_service.jobs or arena.building:
                     raise RuntimeError('Benchmark arena worker failed during setup')
@@ -602,12 +737,15 @@ async def _scenario(state, map_key, scenario, count, requested_tanks, seconds, w
                 for account_id in arena.players:
                     arena.ready(account_id, now=started)
         try:
-            await _wait_for_battle(endpoint, arenas, started + 60)
+            await _wait_for_battle(endpoint, arenas, started + 60, control)
         except RuntimeError:
             for (name, stage, reason), occurrences in server.fault_reasons.most_common():
                 print(f'  {occurrences} x {name} {stage}: {reason}', file=sys.stderr, flush=True)
             raise
         countdown = time.monotonic() - started
+        if control is not None:
+            control.check()
+            control.stage(case_index, 'warmup', warmup, seconds + control.cleanup_cost)
         await _drive(endpoint, actors, arenas, {}, warmup, started, pattern=pattern)
         before = [(a.step_count, a.dropped_time) for a in arenas]
         baseline_packets = sum(p.packets for _, _, _, p in actors)
@@ -619,8 +757,7 @@ async def _scenario(state, map_key, scenario, count, requested_tanks, seconds, w
         samples = {a.result_id: MotionSample() for a in arenas}
         endpoint.input_wait = {a.result_id: array('f') for a in arenas}
         endpoint.motion_gaps = {a.result_id: array('f') for a in arenas}
-        owners = {key: job.owner._owner._process.pid for key, job in endpoint.owner_service.jobs.items()
-                  if job.owner is not None} if owner_recipes else {}
+        owners = owner_pids() if owner_recipes else {}
         worker_pids = list(owners.values())
         owner_ticks = {}
         if owner_recipes:
@@ -644,6 +781,8 @@ async def _scenario(state, map_key, scenario, count, requested_tanks, seconds, w
         begin, cpu = time.monotonic(), time.process_time()
         windows = []
         timeline = Timeline(endpoint, arenas, worker_pids)
+        if control is not None:
+            control.stage(case_index, 'measure', seconds, control.cleanup_cost)
         lags = await _drive(endpoint, actors, arenas, samples, seconds, started,
                             measure=True, windows=windows, timeline=timeline, pattern=pattern)
         wall = time.monotonic() - begin
@@ -722,6 +861,8 @@ async def _scenario(state, map_key, scenario, count, requested_tanks, seconds, w
                 'windows': windows, 'timeline': timeline.rows, 'faults': faults, 'verdict': _verdict(details, faults), 'arenas': details}
     finally:
         cleanup_started = time.monotonic()
+        if control is not None:
+            control.stage(case_index, 'cleanup', control.cleanup_cost)
         try:
             for local in peers:
                 local.close()
@@ -737,6 +878,8 @@ async def _scenario(state, map_key, scenario, count, requested_tanks, seconds, w
                     endpoint._close_map_context(context)
         finally:
             server.accounts.close()
+            if control is not None:
+                control.workers = ()
     for arena, data in zip(arenas, details, strict=True):
         data['shutdown_seconds'] = shutdown_by_arena.get(arena.result_id)
     report['shutdown_seconds'] = round(time.monotonic() - cleanup_started, 3)
@@ -789,7 +932,10 @@ def run(args):
     if 'solo' in scenarios and any(tank not in (2, None) for tank in tanks):
         raise ValueError('Solo benchmark uses exactly two tanks. Select bots or players for denser battles')
     cases = product(maps, scenarios, counts, tanks, range(args.repeat))
-    with (tempfile.TemporaryDirectory(prefix='solbreaker-benchmark-', dir=args.work_dir) as temporary,
+    total_cases = math.prod(map(len, (maps, scenarios, counts, tanks))) * args.repeat
+    control = BenchmarkControl(total_cases, args.seconds, args.warmup) if getattr(args, "stop_on_stdin", False) else None
+    stopped = False
+    with (control or nullcontext(), tempfile.TemporaryDirectory(prefix='solbreaker-benchmark-', dir=args.work_dir) as temporary,
           args.output.open('x', encoding='utf-8') as output):
         def checkpoint():
             output.seek(0)
@@ -800,14 +946,26 @@ def run(args):
 
         checkpoint()
         state = Path(temporary) / 'state'
-        prepare(args.game, state, vehicle=args.vehicle)
-        for map_key, scenario, count, requested_tanks, repetition in cases:
+        if control is None or not control.stop.is_set():
+            prepare(args.game, state, vehicle=args.vehicle)
+        for index, (map_key, scenario, count, requested_tanks, repetition) in enumerate(cases):
+            if control is not None:
+                if control.stop.is_set():
+                    stopped = True
+                    break
+                control.stage(index, 'setup', control.setup_cost,
+                              args.seconds + args.warmup + control.cleanup_cost)
             label = requested_tanks or 'auto'
             print(f'{map_key} / {scenario} / {count} arena(s) x {label} tanks, run {repetition + 1}',
                   file=sys.stderr, flush=True)
             try:
-                detail = asyncio.run(_scenario(state, map_key, scenario, count, requested_tanks, args.seconds, args.warmup,
-                                               args.seed + repetition, cold=args.cold, pattern=args.input_pattern))
+                case = _scenario(state, map_key, scenario, count, requested_tanks, args.seconds, args.warmup,
+                                 args.seed + repetition, cold=args.cold, pattern=args.input_pattern,
+                                 control=control, case_index=index)
+                detail = asyncio.run(control.run_case(case) if control is not None else case)
+            except BenchmarkStopped:
+                stopped = True
+                break
             except (OSError, ValueError, RuntimeError) as error:
                 # Resource errors may contain absolute install paths. Keep
                 # those in the local console, outside the shareable report.
@@ -815,14 +973,20 @@ def run(args):
                           'requested_tanks': requested_tanks, 'seed': args.seed + repetition, 'verdict': 'error', 'error': type(error).__name__}
                 print(f'  {error}', file=sys.stderr, flush=True)
             else:
+                if control is not None:
+                    control.cleanup_cost = detail['shutdown_seconds']
+                    control.setup_cost = max(0., detail['case_seconds'] - detail['seconds']
+                                             - args.warmup - control.cleanup_cost)
                 lowest = min(a['steps_per_second'] for a in detail['arenas'])
                 print(f'  {detail["verdict"]}: lowest {lowest:g} steps/s, '
                       f'tick p99 {detail["tick_work"]["p99_ms"]} ms', file=sys.stderr, flush=True)
             report['runs'].append(detail)
             checkpoint()
-        report['complete'] = True
+        report['complete'] = not stopped
         checkpoint()
     print(f'Benchmark JSON: {args.output}')
     write_html(report, html)
     print(f'Benchmark HTML: {html}')
+    if stopped:
+        return BENCHMARK_STOPPED
     return 1 if any(run['verdict'] == 'error' for run in report['runs']) else 0

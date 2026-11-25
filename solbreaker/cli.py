@@ -45,6 +45,7 @@ def main(argv=None):
     benchmark.add_argument('--seed', type=int, default=42)
     benchmark.add_argument('--vehicle', default='usa/A116_XM551')
     benchmark.add_argument('--output', type=Path, required=True, help='new JSON report file; HTML is written next to it')
+    benchmark.add_argument('--stop-on-stdin', action='store_true', help=argparse.SUPPRESS)
     benchmark.add_argument('--work-dir', type=Path, help='existing folder for disposable state and caches')
     report = commands.add_parser('benchmark-report', help='Render an existing benchmark JSON report as offline HTML')
     report.add_argument('input', type=Path)

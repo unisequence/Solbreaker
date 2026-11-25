@@ -14,10 +14,19 @@ from solbreaker.cipher import decrypt_packet, encrypt_packet
 from solbreaker.datagram import SourceDatagramTransport, open_datagram
 from solbreaker.mercury import base_elements, encode_packet, parse_packet
 from solbreaker.server_benchmark import (_control_offsets, _wait_for_battle, MotionSample,
-                                         Peer, Timeline, _verdict, durations, tank_count)
+                                         BenchmarkControl, BenchmarkStopped, Peer, Timeline,
+                                         _verdict, durations, tank_count)
 
 
 class ServerBenchmarkTests(unittest.TestCase):
+    def test_live_estimate_counts_all_remaining_cases(self):
+        with patch('solbreaker.server_benchmark.time.monotonic', return_value=100):
+            control = BenchmarkControl(total=3, seconds=20, warmup=5)
+            control.setup_cost, control.cleanup_cost = 3, 2
+            self.assertEqual(control.estimate(100), ('prepare', 90))
+            control.stage(1, 'measure', duration=20, after=2)
+        self.assertEqual(control.estimate(107), ('measure', 45))
+
     def test_timeline_records_windowed_cpu_memory_steps_and_latency(self):
         arena = SimpleNamespace(result_id='arena', step_count=100)
         endpoint = SimpleNamespace(ticks=[], input_wait={'arena': []})
@@ -204,6 +213,24 @@ class MetadataPreloadTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(endpoint.map_specs, {2: spec})
 
 class BenchmarkReadyTests(unittest.IsolatedAsyncioTestCase):
+    async def test_stop_during_measurement_awaits_case_cleanup(self):
+        control = BenchmarkControl(1, seconds=30, warmup=0)
+        cleaned = False
+
+        async def case():
+            nonlocal cleaned
+            control.stage(0, 'measure', 30)
+            control.stop.set()
+            try:
+                await asyncio.sleep(30)
+            finally:
+                await asyncio.sleep(0)
+                cleaned = True
+
+        with self.assertRaises(BenchmarkStopped):
+            await control.run_case(case())
+        self.assertTrue(cleaned)
+
     async def test_waits_for_last_arena_before_starting_the_load(self):
         ready = SimpleNamespace(result_id='first', started=True)
         loading = SimpleNamespace(result_id='last', started=False)

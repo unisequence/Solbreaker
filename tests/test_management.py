@@ -206,8 +206,19 @@ class ManagementTests(unittest.TestCase):
         args = command('server', Settings(client=''), windows=False)
         self.assertIn('--stop-on-stdin', args)
 
+    def test_benchmark_can_stop_before_the_measured_phase(self):
+        job = Job.__new__(Job)
+        job.action = 'benchmark'
+        job.started = False
+        job.process = Mock()
+        job.process.poll.return_value = None
+        job.stop()
+        self.assertTrue(job.stopping)
+        job.process.stdin.write.assert_called_once_with('stop\n')
+
     def test_early_stop_waits_for_the_actual_server_to_own_stdin(self):
         job = Job.__new__(Job)
+        job.action = 'server'
         job.process = Mock()
         job.process.poll.return_value = None
         job.started = False
