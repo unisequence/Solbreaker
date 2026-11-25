@@ -1,13 +1,14 @@
 """Guided game setup and desktop management for Solbreaker."""
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, replace
+from datetime import datetime
 import json
 import os
 import re
 from pathlib import Path
 import sys
 
-from PySide6.QtCore import QLockFile, QRectF, QSize, Qt, QTimer, QUrl, Signal, Slot
+from PySide6.QtCore import QLockFile, QRectF, QSize, QStandardPaths, Qt, QTimer, QUrl, Signal, Slot
 from PySide6.QtGui import QColor, QDesktopServices, QFont, QIcon, QPainter, QPainterPath, QPixmap
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFormLayout,
     QFrame, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit,
@@ -682,6 +683,73 @@ def write_replay_preview(path, roots, target):
     return target
 
 
+class BenchmarkDialog(QDialog):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.setWindowTitle(tr('Бенчмарк сервера'))
+        form = QFormLayout(self)
+        self.maps = QLineEdit('rudniki')
+        self.maps.setPlaceholderText('rudniki')
+        form.addRow(tr('Ключи карт через запятую'), self.maps)
+        self.scenarios = self.combo(form, 'Сценарий', (
+            ('solo,bots', 'Один игрок и боты'), ('solo', 'Один игрок'),
+            ('bots', 'Боты'), ('players', 'Сетевые игроки')))
+        self.arenas = self.spin(form, 'Одновременные арены', 1, 16, 1)
+        self.tanks = self.combo(form, 'Танков на арену', (
+            ('auto', 'Авто'), *((str(n), str(n)) for n in range(2, 15, 2))))
+        self.seconds = self.spin(form, 'Замер, сек.', 5, 3600, 30)
+        self.warmup = self.spin(form, 'Прогрев, сек.', 0, 120, 8)
+        self.repeat = self.spin(form, 'Повторы', 1, 10, 1)
+        self.engine = self.combo(form, 'Режим симуляции', (
+            ('owner', 'Отдельный процесс на арену'), ('in-process', 'В процессе сервера')))
+        self.inputs = self.combo(form, 'Подача команд', (
+            ('burst', 'Пакетами'), ('spread', 'Равномерно')))
+        self.vehicle = QLineEdit('usa/A116_XM551')
+        form.addRow(tr('Идентификатор танка'), self.vehicle)
+        self.seed = self.spin(form, 'Seed', 0, 2**31 - 1, 42)
+        self.cold = QCheckBox(tr('Запуск без прогрева метаданных карт'))
+        form.addRow(self.cold)
+        actions = QHBoxLayout()
+        actions.addStretch()
+        actions.addWidget(button(tr('Отмена'), self.reject))
+        actions.addWidget(button(tr('Выбрать файл отчёта'), self.accept, True))
+        form.addRow(actions)
+
+    def combo(self, form, name, choices):
+        field = QComboBox()
+        for key, title in choices:
+            field.addItem(tr(title), key)
+        form.addRow(tr(name), field)
+        return field
+
+    def spin(self, form, name, minimum, maximum, default):
+        field = QSpinBox()
+        field.setRange(minimum, maximum)
+        field.setValue(default)
+        form.addRow(tr(name), field)
+        return field
+
+    def accept(self):
+        maps = [key.strip() for key in self.maps.text().split(',')]
+        vehicle = self.vehicle.text().strip()
+        tanks, scenarios = self.tanks.currentData(), self.scenarios.currentData()
+        if any(not re.fullmatch(r'[a-z0-9_]+', key) for key in maps):
+            QMessageBox.warning(self, self.windowTitle(), tr('Укажи ключи карт, например rudniki.'))
+            return
+        if not re.fullmatch(r'[a-z0-9_]+/[A-Za-z0-9_-]+', vehicle):
+            QMessageBox.warning(self, self.windowTitle(), tr('Укажи танк в формате нация/имя.'))
+            return
+        if 'solo' in scenarios.split(',') and tanks not in ('2', 'auto'):
+            QMessageBox.warning(self, self.windowTitle(),
+                                tr('Для сценария с одним игроком выбери 2 танка или «Авто».'))
+            return
+        self.options = dict(maps=','.join(maps), scenarios=scenarios, tanks=tanks,
+            arenas=self.arenas.value(), seconds=self.seconds.value(), warmup=self.warmup.value(),
+            repeat=self.repeat.value(), engine=self.engine.currentData(), vehicle=vehicle,
+            seed=self.seed.value(), cold=self.cold.isChecked(), **{'input-pattern': self.inputs.currentData()})
+        super().accept()
+
+
 class Window(QMainWindow):
     update_progress = Signal(str, object, object, object)
 
@@ -691,6 +759,7 @@ class Window(QMainWindow):
         self.manager = Manager(Settings.load(config))
         self.update_kind = updates.package_kind(PROJECT)
         self.update_task = None
+        self.benchmark_dialog = None
         self.replay_view_task = None
         self.update_detail = ''
         self.update_progress.connect(self.show_update_progress, Qt.QueuedConnection)
@@ -754,6 +823,15 @@ class Window(QMainWindow):
             installed_version = label(f'Solbreaker {__version__}', 'muted')
             installed_version.setAlignment(Qt.AlignCenter)
             navigation.addWidget(installed_version)
+            self.update_channel = QComboBox()
+            self.update_channel.setAccessibleName(tr('Канал обновлений'))
+            self.update_channel.addItem(tr('Стабильный'), 'stable')
+            self.update_channel.addItem(tr('Предварительный'), 'preview')
+            self.update_channel.setCurrentIndex(self.update_channel.findData(
+                updates.load_channel(self.config, __version__)))
+            self.update_channel.currentIndexChanged.connect(self.change_update_channel)
+            navigation.addWidget(label(tr('Канал обновлений'), 'muted'))
+            navigation.addWidget(self.update_channel)
             self.update_button = button(tr('Обновить'), self.start_update)
             navigation.addWidget(self.update_button)
         sidebar.setFixedWidth(max(200, sidebar.minimumSizeHint().width()))
@@ -821,6 +899,9 @@ class Window(QMainWindow):
         local = self.own.isChecked()
         log = self.log.toPlainText()
         old_root = self.takeCentralWidget()
+        if self.benchmark_dialog is not None:
+            self.benchmark_dialog.deleteLater()
+            self.benchmark_dialog = None
         self.build_ui()
         self.sync_fields()
         self.restoreGeometry(geometry)
@@ -989,6 +1070,8 @@ class Window(QMainWindow):
         tools.addWidget(button(tr('Подключение для друга'), self.export))
         tools.addStretch()
         column.addLayout(tools)
+        self.benchmark_button = button(tr('Бенчмарк сервера'), self.start_benchmark)
+        column.addWidget(self.benchmark_button)
         column.addWidget(label(tr('Сервер, запущенный из этого окна, остановится при его закрытии.'), 'muted'))
         column.addStretch()
 
@@ -1275,6 +1358,42 @@ class Window(QMainWindow):
                   bool(settings.server_url.strip() or document(remote_profile(settings)).get('server_id')))
         return (game/'wotblitz.exe').is_file(), prepared_client(settings), server
 
+    def change_update_channel(self):
+        try:
+            updates.save_channel(self.config, self.update_channel.currentData())
+        except (OSError, ValueError) as error:
+            channel = updates.load_channel(self.config, __version__)
+            self.update_channel.blockSignals(True)
+            self.update_channel.setCurrentIndex(self.update_channel.findData(channel))
+            self.update_channel.blockSignals(False)
+            self.error(error)
+
+    def start_benchmark(self):
+        if self.manager.busy or not self.save():
+            return
+        if self.benchmark_dialog is None:
+            self.benchmark_dialog = BenchmarkDialog(self)
+        dialog = self.benchmark_dialog
+        if not dialog.exec():
+            return
+        name = datetime.now().strftime('solbreaker-benchmark-%Y%m%d-%H%M%S.json')
+        documents = QStandardPaths.writableLocation(QStandardPaths.DocumentsLocation)
+        path, _ = QFileDialog.getSaveFileName(self, tr('Выбрать файл отчёта'),
+                                            str(Path(documents)/name), 'JSON (*.json)',
+                                            options=QFileDialog.Option.DontConfirmOverwrite)
+        if not path:
+            return
+        path = Path(path)
+        if not path.suffix:
+            path = path.with_suffix('.json')
+        try:
+            self.manager.run('benchmark', benchmark=(path, dialog.options))
+        except (OSError, ValueError) as error:
+            self.error(error)
+        else:
+            self.select(3)
+        self.poll()
+
     def start_update(self):
         if not self.update_kind or self.update_task is not None:
             return
@@ -1292,10 +1411,12 @@ class Window(QMainWindow):
             return
         self.stack.setEnabled(False)
         self.update_button.setEnabled(False)
+        self.update_channel.setEnabled(False)
         self.theme_picker.setEnabled(False)
         self.language_picker.setEnabled(False)
         executor = ThreadPoolExecutor(max_workers=1)
         self.update_task = executor.submit(updates.prepare, PROJECT, __version__, self.update_kind,
+                                            channel=self.update_channel.currentData(),
                                             progress=self.report_update_progress)
         executor.shutdown(wait=False)
         self.show_update_progress('Ищем обновление…', None, None, None)
@@ -1328,6 +1449,7 @@ class Window(QMainWindow):
         self.progress.setRange(0, 0)
         self.stack.setEnabled(True)
         self.update_button.setEnabled(True)
+        self.update_channel.setEnabled(True)
         self.theme_picker.setEnabled(True)
         self.language_picker.setEnabled(True)
         try:
@@ -1413,6 +1535,7 @@ class Window(QMainWindow):
         self.server_label.setText(tr(status))
         owned = self.manager.server is not None and self.manager.server.running
         self.sandbox.setEnabled(not owned and not self.manager.busy)
+        self.benchmark_button.setEnabled(not self.manager.busy and states[0])
         self.start_button.setEnabled(not owned and not self.manager.busy and status in ('Сервер остановлен', 'Ошибка запуска сервера'))
         self.stop_button.setEnabled(owned)
         self.share_lan_button.setEnabled(not self.manager.busy and

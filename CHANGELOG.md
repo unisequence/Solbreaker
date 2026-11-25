@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.0-rc.2
+
+- Added stable and preview update channels to the launcher.
+- Added a server benchmark dialog with configurable scenarios, maps and load.
+  The launcher writes the results to a JSON report.
+
 ## 0.3.0-rc.1 — Chat Update
 
 - Find players by nickname and send private messages. The General channel is

@@ -62,6 +62,28 @@ class UpdateTests(unittest.TestCase):
                 candidate = updates.check_release(current, 'source')
             self.assertEqual(candidate.version if candidate else None, expected)
 
+    def test_explicit_channel_overrides_release_type_and_never_downgrades(self):
+        releases = [release('v0.3.0-rc.2', prerelease=True), release('v0.2.1')]
+        for current, channel, expected in (
+                ('0.2.1', 'preview', '0.3.0rc2'),
+                ('0.2.1', 'stable', None),
+                ('0.3.0rc1', 'stable', None),
+                ('0.3.0rc1', 'preview', '0.3.0rc2'),
+                ('0.3.0rc2', 'preview', None)):
+            with self.subTest(current=current, channel=channel), patch.object(
+                    updates, 'request', return_value=io.BytesIO(json.dumps(releases).encode())):
+                result = updates.check_release(current, 'source', channel=channel)
+                self.assertEqual(result.version if result else None, expected)
+
+    def test_channel_choice_is_saved_per_launcher_config(self):
+        config = self.root / 'custom.json'
+        config.write_text('{}')
+        self.assertEqual(updates.load_channel(config, '0.3.0rc2'), 'preview')
+        updates.save_channel(config, 'stable')
+        self.assertEqual(updates.load_channel(config, '0.3.0rc2'), 'stable')
+        self.assertEqual(updates.load_channel(self.root / 'other.json', '0.3.0rc2'), 'preview')
+        self.assertEqual(config.read_text(), '{}')
+
     def test_bad_download_does_not_touch_the_installation_and_can_be_retried(self):
         candidate = updates.Release('0.1.1', 'https://example.test', 3, 'a'*64)
         with patch.object(updates, 'check_release', return_value=candidate), \

@@ -19,6 +19,7 @@ REPOSITORY = 'unisequence/Solbreaker'
 STAGING = '.solbreaker-update'
 RESTART = 42
 CHECKSUMS = 'SHA256SUMS'
+CHANNELS = ('stable', 'preview')
 PORTABLE = 'runtime/python'
 CHECKOUT_RELEASE = 'runtime/release'
 MAX_DOWNLOAD = 512 << 20
@@ -58,10 +59,41 @@ def request(url):
     return urlopen(Request(url, headers={'User-Agent': 'Solbreaker-Updater'}), timeout=20)
 
 
-def check_release(current, kind):
+def default_channel(current):
+    from packaging.version import Version
+    return 'preview' if Version(current).is_prerelease else 'stable'
+
+
+def channel_path(config):
+    path = Path(config)
+    return path.with_name(path.name + '.update-channel')
+
+
+def load_channel(config, current):
+    try:
+        with channel_path(config).open() as stream:
+            channel = stream.read(32).strip()
+    except (OSError, UnicodeError):
+        channel = None
+    return channel if channel in CHANNELS else default_channel(current)
+
+
+def save_channel(config, channel):
+    from .connection import atomic_write
+    if channel not in CHANNELS:
+        raise ValueError('Unknown update channel')
+    path = channel_path(config)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write(path, (channel + '\n').encode())
+
+
+def check_release(current, kind, *, channel=None):
     from packaging.version import Version
 
     installed = Version(current)
+    channel = default_channel(current) if channel is None else channel
+    if channel not in CHANNELS:
+        raise ValueError('Unknown update channel')
     with request(f'https://api.github.com/repos/{REPOSITORY}/releases?per_page=100') as response:
         data = response.read((8 << 20) + 1)
     if len(data) > 8 << 20:
@@ -75,7 +107,7 @@ def check_release(current, kind):
         if release['draft'] or not re.fullmatch(r'v\d+\.\d+\.\d+(?:-(?:alpha|beta|rc)\.\d+)?', tag):
             continue
         version = Version(tag)
-        if version <= installed or (not installed.is_prerelease and
+        if version <= installed or (channel == 'stable' and
                                     (version.is_prerelease or release['prerelease'])):
             continue
         candidates.append((version, tag, release['assets']))
@@ -215,8 +247,8 @@ def unpack(archive, payload, kind, *, progress=None):
         return files
 
 
-def prepare(root, current, kind, *, progress=None):
-    release = check_release(current, kind)
+def prepare(root, current, kind, *, channel=None, progress=None):
+    release = check_release(current, kind, channel=channel)
     if release is None:
         return None
     stage = root/STAGING

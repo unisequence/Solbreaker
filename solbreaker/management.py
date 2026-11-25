@@ -182,7 +182,7 @@ def required(value, label):
     return str(Path(value).expanduser().absolute())
 
 
-def command(action, settings, *, windows=None, interface=None, replay=None, depot=None):
+def command(action, settings, *, windows=None, interface=None, replay=None, depot=None, benchmark=None):
     """Build argv without a shell; both UIs use the exact same operations."""
     windows = sys.platform == 'win32' if windows is None else windows
     python = sys.executable
@@ -198,6 +198,22 @@ def command(action, settings, *, windows=None, interface=None, replay=None, depo
         else:
             connection, server_url = settings.connection.strip(), settings.server_url.strip()
     cli = [python, '-u', '-m', 'solbreaker']
+    if action == 'benchmark':
+        output, options = benchmark
+        game = required(settings.game, 'папку оригинальной игры')
+        if not (Path(game)/'wotblitz.exe').is_file():
+            raise ValueError('Укажи папку совместимой сборки игры в параметрах.')
+        output = Path(output).resolve()
+        if not output.parent.is_dir() or output.exists():
+            raise ValueError('Выбери новый файл для отчёта бенчмарка.')
+        args = cli + ['benchmark', '--game', game, '--output', str(output)]
+        for name in ('maps', 'scenarios', 'arenas', 'tanks', 'seconds', 'warmup', 'repeat',
+                     'engine', 'input-pattern', 'vehicle', 'seed'):
+            if name in options:
+                args.extend((f'--{name}', str(options[name])))
+        if options.get('cold'):
+            args.append('--cold')
+        return args
     if action in ('stage-depot', 'cleanup-depot'):
         receipt, resources = depot
         phase = 'stage' if action == 'stage-depot' else 'cleanup'
@@ -398,7 +414,7 @@ class Manager:
             return f'{ready} {status}'
         return status
 
-    def run(self, action, *, output=None, interface=None, replay=None, depot=None):
+    def run(self, action, *, output=None, interface=None, replay=None, depot=None, benchmark=None):
         if self.busy:
             raise ValueError('Дождись завершения текущей операции')
         job_settings = replace(self.settings, connection=output) if action == 'export' and output else self.settings
@@ -448,9 +464,11 @@ class Manager:
         else:
             if self.server is not None and self.server.running and action in ('prepare-server', 'network', 'lan', 'server-name', 'backup'):
                 raise ValueError('Сначала останови локальный сервер')
-            self.job = Job(action, command(action, job_settings, interface=interface, depot=depot), self.output)
+            self.job = Job(action, command(action, job_settings, interface=interface, depot=depot,
+                                           benchmark=benchmark), self.output)
         self.notice = {'server': 'Сервер запускается', 'prepare-server': 'Подготовка сервера',
-                       'prepare-client': 'Подготовка клиента', 'play': self.notice}.get(action, 'Операция выполняется')
+                       'prepare-client': 'Подготовка клиента', 'play': self.notice,
+                       'benchmark': 'Бенчмарк выполняется'}.get(action, 'Операция выполняется')
 
     def stop_server(self):
         self._pending_play = None
@@ -501,7 +519,8 @@ class Manager:
                                f'Сервер завершился с ошибкой {self.server.returncode}. Открой журнал')
                 self._server_exit_reported = True
         if self.job is not None and self.job.returncode is not None:
-            self.notice = ('Готово' if self.job.returncode == 0
+            success = 'Отчёт бенчмарка сохранён. Путь указан в журнале.' if self.job.action == 'benchmark' else 'Готово'
+            self.notice = (success if self.job.returncode == 0
                            else self.job.resource_error or self.job.failure_notice or
                            f'Операция завершилась с ошибкой {self.job.returncode}. Подробности в журнале')
             self.job = None

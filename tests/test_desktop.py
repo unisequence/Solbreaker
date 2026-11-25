@@ -30,6 +30,41 @@ class DesktopTests(unittest.TestCase):
         self.app.processEvents()
         self.addCleanup(self.window.close)
 
+    def test_benchmark_settings_reach_the_managed_command(self):
+        from dataclasses import replace
+        from unittest.mock import patch
+        from solbreaker.desktop import BenchmarkDialog, QFileDialog
+        from solbreaker.management import command
+
+        game = self.root / 'game files'
+        game.mkdir()
+        (game / 'wotblitz.exe').touch()
+        self.window.manager.settings = replace(self.window.manager.settings, game=str(game))
+        self.window.sync_fields()
+        self.window.refresh_status()
+        self.assertTrue(self.window.benchmark_button.isEnabled())
+
+        dialog = BenchmarkDialog(self.window)
+        dialog.scenarios.setCurrentIndex(dialog.scenarios.findData('players'))
+        dialog.tanks.setCurrentIndex(dialog.tanks.findData('8'))
+        dialog.seconds.setValue(20)
+        dialog.arenas.setValue(3)
+        dialog.maps.setText('rudniki, canal')
+        dialog.accept()
+        self.window.benchmark_dialog = dialog
+        target = self.root / 'my report'
+        with (patch.object(dialog, 'exec', return_value=dialog.result()),
+              patch.object(QFileDialog, 'getSaveFileName', return_value=(str(target), 'JSON')),
+              patch.object(self.window.manager, 'run') as run):
+            self.window.benchmark_button.click()
+        self.assertEqual(self.window.stack.currentIndex(), 3)
+        action, = run.call_args.args
+        argv = command(action, self.window.manager.settings, **run.call_args.kwargs)
+        for name, value in (('output', str(target.with_suffix('.json'))), ('game', str(game)),
+                            ('scenarios', 'players'), ('arenas', '3'), ('tanks', '8'),
+                            ('seconds', '20'), ('maps', 'rudniki,canal')):
+            self.assertEqual(argv[argv.index(f'--{name}')+1], value)
+
     def test_first_run_has_one_setup_action_and_explains_missing_client(self):
         self.assertEqual(self.window.play_button.text(), 'Настроить игру')
         self.assertTrue(self.window.play_button.isEnabled())
