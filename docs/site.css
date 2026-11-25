@@ -71,3 +71,15 @@ summary { cursor: pointer; font-weight: 630; }
 #community-data td:nth-child(3) { white-space: normal; min-width: 13rem; width: 29%; }
 .community-more { margin-top: 1rem; font: inherit; color: var(--ink); background: #fff;
                   border: 1px solid #829d9e; border-radius: 4px; padding: .5rem .8rem; cursor: pointer; }
+#community-data thead button {
+  border: 0; background: none; color: inherit; cursor: pointer; padding: 0;
+  font: inherit; white-space: nowrap;
+}
+#community-data thead button::after {
+  content: ''; display: inline-block; width: .35rem; height: .35rem; margin: 0 0 .15rem .35rem;
+  border-right: 1px solid currentColor; border-bottom: 1px solid currentColor;
+  opacity: .55; transform: rotate(45deg);
+}
+#community-data thead [aria-sort="ascending"] button::after { transform: rotate(225deg); }
+#community-data thead [aria-sort] button, #community-data thead button:hover { color: #125965; }
+#community-data thead [aria-sort] button::after { opacity: 1; }

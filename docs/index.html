@@ -74,9 +74,18 @@
       <p id="community-message" class="community-message" role="status"></p>
       <div id="community-data" class="table-scroll" tabindex="0" role="region" aria-label="Community benchmark table" hidden>
         <table>
-          <thead><tr><th scope="col">Test machine</th><th scope="col">Version</th><th scope="col">Workload</th>
-            <th scope="col">Min Hz</th><th scope="col">Input p99</th><th scope="col">Tick p99</th>
-            <th scope="col">CPU cores</th><th scope="col">RSS</th><th scope="col">UDP drops</th><th scope="col">Verdict</th></tr></thead>
+          <thead><tr>
+            <th scope="col"><button type="button" data-sort="machine">Test machine</button></th>
+            <th scope="col"><button type="button" data-sort="version">Version</button></th>
+            <th scope="col"><button type="button" data-sort="profile">Workload</button></th>
+            <th scope="col"><button type="button" data-sort="hz">Min Hz</button></th>
+            <th scope="col"><button type="button" data-sort="input_ms">Input p99</button></th>
+            <th scope="col"><button type="button" data-sort="tick_ms">Tick p99</button></th>
+            <th scope="col"><button type="button" data-sort="cpu_cores">CPU cores</button></th>
+            <th scope="col"><button type="button" data-sort="rss_mib">RSS</button></th>
+            <th scope="col"><button type="button" data-sort="udp_drops">UDP drops</button></th>
+            <th scope="col"><button type="button" data-sort="verdict">Verdict</button></th>
+          </tr></thead>
           <tbody id="community-body"></tbody>
         </table>
       </div>

@@ -9,6 +9,40 @@
   const options = {version: node('community-version'), profile: node('community-profile')};
   let origin, next, loaded = false, loading = false;
   const rows = [];
+  const sortButtons = [...document.querySelectorAll('#community-data [data-sort]')];
+  const collator = new Intl.Collator('en', {numeric: true, sensitivity: 'base'});
+  const verdictRank = {ok: 0, stalls: 1, overloaded: 2, fault: 3};
+  const sortKeys = {
+    machine: row => row.item.cpu + ' ' + row.item.os,
+    version: row => versionParts(row.item.version),
+    profile: row => row.workload.join(' · '),
+    verdict: row => verdictRank[row.run.verdict],
+  };
+  let sortKey, ascending;
+
+  function versionParts(version) {
+    const match = /^(\d+)\.(\d+)\.(\d+)(?:(a|b|rc)(\d+))?$/.exec(version);
+    return match ? [Number(match[1]), Number(match[2]), Number(match[3]),
+      {a: 0, b: 1, rc: 2}[match[4]] ?? 3, Number(match[5] || 0)] : null;
+  }
+
+  function compare(left, right) {
+    if (Array.isArray(left)) {
+      return left.map((part, index) => part - right[index]).find(diff => diff !== 0) ?? 0;
+    }
+    return typeof left === 'number' ? left - right : collator.compare(left, right);
+  }
+
+  function order(matches) {
+    if (!sortKey) return;
+    const value = sortKeys[sortKey] || (row => row.run[sortKey]);
+    matches.sort((a, b) => {
+      const left = value(a), right = value(b);
+      if (left == null) return right == null ? 0 : 1;
+      if (right == null) return -1;
+      return compare(left, right) * (ascending ? 1 : -1);
+    });
+  }
 
   function profile(item, run) {
     return [
@@ -33,6 +67,7 @@
       (!options.version.value || options.version.value === item.version) &&
       (!options.profile.value || options.profile.value === workload.join(' · ')) &&
       (!query || (item.cpu + ' ' + item.os).toLowerCase().includes(query)));
+    order(matches);
     node('community-body').replaceChildren(...matches.map(({item, run, workload}) => {
       const row = make('tr', '');
       const machine = make('th', item.cpu);
@@ -118,5 +153,13 @@
   node('community-search').addEventListener('input', draw);
   options.version.addEventListener('change', draw);
   options.profile.addEventListener('change', draw);
+  for (const button of sortButtons) button.addEventListener('click', () => {
+    const key = button.dataset.sort;
+    ascending = sortKey === key ? !ascending : key !== 'hz' && key !== 'version';
+    sortKey = key;
+    for (const candidate of sortButtons) candidate.parentElement.removeAttribute('aria-sort');
+    button.parentElement.setAttribute('aria-sort', ascending ? 'ascending' : 'descending');
+    draw();
+  });
   if (location.hash === '#community') select(true);
 })();
