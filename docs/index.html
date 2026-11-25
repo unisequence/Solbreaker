@@ -3,16 +3,22 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="light">
   <meta name="description" content="Compare Solbreaker server performance across releases using the same hardware and workload.">
   <title>Solbreaker Benchmarks</title>
-  <link rel="stylesheet" href="site.css">
+  <script src="theme.js"></script>
+  <link rel="stylesheet" href="site.css?v=2">
   <script defer src="site.js"></script>
   <script defer src="community.js"></script>
 </head>
 <body>
   <main>
-    <header class="top"><a class="brand" href="./">Solbreaker Benchmarks</a><a href="https://github.com/unisequence/Solbreaker">GitHub repository</a></header>
+    <header class="top">
+      <a class="brand" href="./">Solbreaker Benchmarks</a>
+      <div class="top-actions">
+        <button type="button" id="dark-theme" class="theme-toggle" aria-pressed="false" hidden>Dark theme</button>
+        <a href="https://github.com/unisequence/Solbreaker">GitHub repository</a>
+      </div>
+    </header>
     <section class="intro" aria-labelledby="title">
       <h1 id="title">Server performance by release</h1>
       <p id="intro-copy">Compare the same workload on the same test machine. Each result links to the release and its measured data.</p>
