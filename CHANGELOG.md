@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.1
+
+- Fix benchmark startup when the server state is accessed through an alternate
+  installation path, including short Windows temporary-directory paths.
+
 ## 0.3.0 — Chat Update
 
 - Search for players by nickname, manage friend requests, and use private,

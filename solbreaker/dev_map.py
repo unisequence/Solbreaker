@@ -7,6 +7,7 @@ from pathlib import Path, PurePosixPath
 import re
 import stat
 
+from .connection import manifest_client_path
 from .dava_scene import active_nodes, scene
 from .map_catalog import MapSpec, load_map_spec
 
@@ -110,7 +111,7 @@ def _load_dev_map(manifest, lab, descriptor_path) -> MapSpec:
     configured_client = manifest.get("client")
     if (not isinstance(configured_client, str) or not configured_client
             or not Path(configured_client).is_absolute()
-            or Path(configured_client).absolute() != client
+            or manifest_client_path(configured_client) != client
             or client.is_symlink() or not client.is_dir()
             or client.resolve(strict=True) != client):
         raise ValueError("Development map client must be exactly lab/client inside the lab")

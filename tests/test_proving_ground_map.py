@@ -14,6 +14,7 @@ from solbreaker import dvpl, proving_ground_layout as ground
 from solbreaker.connection import ensure_lab
 from solbreaker.dava_proving_scene import _mesh
 from solbreaker.dava_scene import Archive
+from solbreaker.dev_map import _load_dev_map
 from solbreaker.proving_ground_map import BUNDLE, KEY, _marked_catalog, _sound_registration, install
 from solbreaker.proving_ground_signs import sign_meshes
 from tools.build_proving_ground import battle_loading_sprite
@@ -54,6 +55,10 @@ class GroundResourceTests(unittest.TestCase):
             (state/'manifest.json').write_text(json.dumps(manifest))
             self.assertEqual(ensure_lab(alias/'data')[0], state)
             install(alias/'data', manifest, bundle=bundle)
+            # A parent alias is valid for overlay reads too. Reach the missing
+            # descriptor check, rather than rejecting the same accepted client.
+            with self.assertRaisesRegex(ValueError, 'Development map file is missing'):
+                _load_dev_map(manifest, alias/'data', 'private/missing.json')
 
             foreign = root/'other-client'
             foreign.symlink_to(client, target_is_directory=True)
@@ -63,6 +68,9 @@ class GroundResourceTests(unittest.TestCase):
                 ensure_lab(alias/'data')
             with self.assertRaisesRegex(ValueError, 'private Solbreaker installation'):
                 install(alias/'data', manifest, bundle=bundle)
+
+            with self.assertRaisesRegex(ValueError, 'exactly lab/client'):
+                _load_dev_map(manifest, alias/'data', 'private/missing.json')
 
             manifest['client'] = str(alias/'data/client')
             (state/'manifest.json').write_text(json.dumps(manifest))
