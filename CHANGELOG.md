@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.0 — Chat Update
+
+- Search for players by nickname, manage friend requests, and use private,
+  general, training room, or battle chat. Battle chat includes six voiced
+  quick commands and a ground marker on E.
+- The launcher supports stable and preview updates. Server benchmarks can be
+  configured and stopped from the launcher and produce offline HTML and JSON
+  reports. Players can submit a summary to the
+  [community table](https://unisequence.github.io/Solbreaker/#community).
+- Interrupted battle result writes are retried after restart. LAN and VPN
+  hosts should allow the chat TCP port (20018 by default).
+
 ## 0.3.0-rc.2
 
 - The launcher can switch between stable and preview updates.
