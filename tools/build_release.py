@@ -18,7 +18,7 @@ from solbreaker import __version__, updates
 from tools.windows_bundle import RUNTIME, records
 
 WINDOWS_INPUT_TAG = 'v0.1.0-alpha.5'
-WINDOWS_INPUT_COMMIT = 'f4298e538a0af6b567f984f20f37a0a7c5c7fe91'
+WINDOWS_INPUT_COMMIT = '51c8f69242ab46f9be70fe199b2114fdf0338167'
 WINDOWS_INPUT_SHA256 = 'e0ecca50d20919de18b26b7d62f76e17a44ecf95879bbdcdb70f6cc92f3a809d'
 WINDOWS_INPUT_ZIP = f'Solbreaker-{WINDOWS_INPUT_TAG[1:]}-windows-x64.zip'
 WINDOWS_INPUT_URL = f'https://github.com/{updates.REPOSITORY}/releases/download/{WINDOWS_INPUT_TAG}/{WINDOWS_INPUT_ZIP}'
