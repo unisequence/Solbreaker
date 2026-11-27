@@ -191,6 +191,7 @@ typedef struct {
     void *notice_controller;
     void *role_picker, *role_value, *stock_boss_panel;
     uint32_t role_token, role_state, role_sent, respawn_sent, role_keys;
+    uint32_t training_refresh_entity;
     void *respawn_menu, *respawn_value;
     void *swap_value;
     uint32_t swap_token, swap_sent;
@@ -606,6 +607,7 @@ static unsigned setup_room_tag(uint32_t delta, void *view, char *output);
 static void temporal_audio_gain(uint32_t delta, Sandbox *s, uint32_t percent);
 static void temporal_roster(uint32_t delta, Sandbox *s, uint32_t entity);
 static void practice_roster(uint32_t delta, Sandbox *s, const uint32_t *ids, const uint32_t *end);
+static void refresh_training_row(uint32_t delta, Sandbox *s, uint32_t entity);
 
 static void reset(uint32_t delta, Sandbox *s) {
     temporal_audio_gain(delta, s, 100u);
@@ -1172,6 +1174,12 @@ int sandbox_message(uint32_t delta, const uint32_t *first, const uint32_t *end,
     }
     if (first && end == first+4 && first[0] == 0x31534654u && first[1] == 0x454c4f52u) {
         boss_picker_message(delta, first);
+        return 1;
+    }
+    if (first && end == first+4 && first[0] == 0x31534654u && first[1] == 0x4b4e4154u) {
+        Sandbox *s = state(delta, 0);
+        if (s && s->thread == thread_id() && s->swap_token && first[2] == s->swap_token)
+            refresh_training_row(delta, s, first[3]);
         return 1;
     }
     if (first && end == first+3 && first[0] == 0x31534654u && first[1] == 0x50415753u) {
@@ -2668,14 +2676,17 @@ BOSS_UI static uint32_t team_row_map(uint32_t delta, void *control) {
     return 0;
 }
 
-BOSS_UI static void *temporal_team_row(uint32_t delta, void *control, uint32_t entity) {
-    uint32_t head = team_row_map(delta, control);
+BOSS_UI static void *entity_map_value(uint32_t head, uint32_t entity) {
     for (uint32_t node = head ? FIELD(head, 4) : 0; node && node != head;) {
         uint32_t id = FIELD(node, 0x10);
         if (id == entity) return (void *)FIELD(node, 0x14);
         node = FIELD(node, entity < id ? 0 : 8);
     }
     return 0;
+}
+
+BOSS_UI static void *temporal_team_row(uint32_t delta, void *control, uint32_t entity) {
+    return entity_map_value(team_row_map(delta, control), entity);
 }
 
 BOSS_UI static void bind_team_panels(uint32_t delta, Sandbox *s) {
@@ -2691,6 +2702,63 @@ BOSS_UI static void bind_team_panels(uint32_t delta, Sandbox *s) {
         s->team_panels[2].control = find_control(score, "left/allyPanel", delta);
         s->team_panels[3].control = find_control(score, "right/enemyPanel", delta);
     }
+}
+
+/* TeamPanelLogic::OnVehicleAdded replaces the ID lookup, but appends
+ * to the ordered list even when the ID is already in use. Retire that one
+ * list entry before rebuilding the row through the stock listeners. */
+BOSS_UI static void retire_training_panel(void *listener, uint32_t entity) {
+    void *old = entity_map_value(FIELD(listener, 0x18), entity);
+    if (!old) return;
+    void **begin = (void **)FIELD(listener, 0x20);
+    void **end = (void **)FIELD(listener, 0x24);
+    for (void **slot = begin; slot < end; ++slot) {
+        if (*slot != old) continue;
+        for (void **next = slot + 1; next < end; ++next) next[-1] = *next;
+        FIELD(listener, 0x24) = (uint32_t)(end - 1);
+        return;
+    }
+}
+
+BOSS_UI void THISCALL sandbox_training_roster_added(void *listener, void *info, uint32_t late) {
+    typedef void (THISCALL *Original)(void *, void *, uint32_t);
+    uint32_t delta = sandbox_delta();
+    Sandbox *s = state(delta, 0);
+    if (s && s->training_refresh_entity && FIELD(info, 0x18) == s->training_refresh_entity)
+        retire_training_panel(listener, s->training_refresh_entity);
+    ((Original)(0x1d8e8f0u + delta))(listener, info, late);
+}
+
+BOSS_UI static void refresh_training_row(uint32_t delta, Sandbox *s, uint32_t entity) {
+    typedef void *(THISCALL *GetArena)(void *);
+    typedef void (THISCALL *RemoveControl)(void *, void *);
+    typedef void (THISCALL *NotifyAdded)(void *, void *, uint32_t);
+    if (!s->avatar) return;
+    void *context = (void *)FIELD(s->avatar, 0x1f8);
+    if (!context) return;
+    void *arena = ((GetArena)FIELD(FIELD(context, 0), 0x28))(context);
+    if (!arena) return;
+    void *info = entity_map_value(FIELD(arena, 0x110), entity);
+    if (!info) return;
+
+    if (!s->team_panels[0].control || !s->team_panels[1].control
+            || !s->team_panels[2].control || !s->team_panels[3].control)
+        bind_team_panels(delta, s);
+    int removed = 0;
+    for (unsigned i = 0; i < sizeof(s->team_panels)/sizeof(*s->team_panels); ++i) {
+        void *row = temporal_team_row(delta, s->team_panels[i].control, entity);
+        if (!row) continue;
+        void *parent = (void *)FIELD(row, 0x38);
+        if (!parent) continue;
+        ((RemoveControl)FIELD(FIELD(parent, 0), 0x30))(parent, row);
+        removed = 1;
+    }
+    // Notify the existing listeners using the updated record already owned
+    // by ClientArena. The entity ID and its statistics remain stable.
+    if (!removed) return;
+    s->training_refresh_entity = entity;
+    ((NotifyAdded)(0x1d56d50u + delta))(arena, info, 0);
+    s->training_refresh_entity = 0;
 }
 
 /* Polygon is a solo mode. Its enemy panels contain only practice targets. */

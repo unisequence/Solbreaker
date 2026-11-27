@@ -14,7 +14,7 @@ from .consumables import ACTIVE, READY, COOLDOWN, GRAVITY_JUMP_SPEC
 from .sandbox import (BRANCH_SHOT_BASE, reload_limit, HP_RESTORED, PRACTICE_NOTICE,
                       TARGET_PLACED, TARGET_SELECTED, TARGET_UNAVAILABLE, TELEPORTED,
                       ability_slot_message, ability_slot_snapshot, advertisement as sandbox_advertisement,
-                      boss_picker_message, vehicle_wire_id)
+                      boss_picker_message, training_roster_refresh, vehicle_wire_id)
 
 
 AVATAR_ID = 101
@@ -1419,8 +1419,6 @@ def event_messages(arena, player, events):
             result += avatar_method(13,struct.pack('<IBf',actor.entity_id,0,actor.reload_total))
             result += marker_message(arena,actor)
         elif event.kind == 'training_reentry' and not own:
-            # The observer keeps the same avatar. Replace the observed hull
-            # in one reliable message so motion never targets a missing ID.
             entity = event.actor
             info = vehicle_info(entity, battle_nickname(arena, actor), actor.team,
                                 actor.account_id, actor.descriptor, camouflage=actor.camouflage)
@@ -1428,8 +1426,12 @@ def event_messages(arena, player, events):
             result += arena_update(11, pb_blob(10, pb_blob(1, info)))
             alias = tuple(arena.vehicles).index(entity)
             pose = chameleon_pose(actor.pose) if mad_games.concealed(actor, player.team) else actor.pose
-            result += b''.join(vehicle_spawn_parts(arena, actor, alias, pose=pose))
+            result += b''.join(vehicle_spawn_parts(arena, actor, alias, pose=pose,
+                                                  health=_observer_health(arena, player, actor)))
             result += arena_update(20, pb_blob(6, pb_int(1, entity)))
+            # Existing team panels cache the tank name and icon separately
+            # from the updated ClientArena record.
+            result += training_roster_refresh(arena, entity)
             result += state_modifiers_message(entity, arena.state_modifiers(actor))
             if getattr(arena, 'big_boss', None) is not None:
                 boss = arena.big_boss

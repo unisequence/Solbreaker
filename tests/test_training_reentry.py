@@ -1,3 +1,4 @@
+import struct
 from types import SimpleNamespace
 from unittest import TestCase
 from unittest.mock import Mock, patch
@@ -7,7 +8,9 @@ from solbreaker.arena_owner import Command
 from solbreaker.arena_owner_game import GameArenaHandler
 from solbreaker.arena_owner_service import ArenaOwnerService
 from solbreaker.base import BaseEndpoint, ClientSession
-from solbreaker.sandbox import CHANGE_TANK, Control, INPUT
+from solbreaker.battle import arena_update, event_messages, pb_blob, pb_int, vehicle_info, vehicle_spawn_parts
+from solbreaker.training_config import RoomBattleSettings
+from solbreaker.sandbox import CHANGE_TANK, Control, INPUT, training_roster_refresh
 
 
 class TrainingReentryTests(TestCase):
@@ -73,6 +76,27 @@ class TrainingReentryTests(TestCase):
         self.assertEqual(self.client.phase, 'account_pending')
         self.assertEqual(self.client.training_swap_refresh_at, 0.)
         self.assertFalse(self.client.owner_leave_pending)
+
+    def test_observer_refreshes_roster_after_creating_the_new_tank(self):
+        terrain = SimpleNamespace(height=lambda x, z: 0.)
+        arena = Arena([dict(id=1, nickname='Driver'), dict(id=2, nickname='Observer')],
+                      b'old', terrain, now=1., solo=False, room_settings=RoomBattleSettings())
+        self.addCleanup(arena.close)
+        tank = arena.vehicle_for(1)
+        tank.descriptor = b'new'
+        arena.emit('training_reentry', tank.entity_id)
+        events = arena.drain_events()
+
+        self.assertEqual(event_messages(arena, arena.players[1], events), b'')
+        observer = event_messages(arena, arena.players[2], events)
+        retire = b'\x0c' + struct.pack('<HI', 4, tank.entity_id)
+        info = vehicle_info(tank.entity_id, tank.nickname, tank.team, tank.account_id, tank.descriptor)
+        update = arena_update(11, pb_blob(10, pb_blob(1, info)))
+        spawn = b''.join(vehicle_spawn_parts(arena, tank, 0))
+        resurrect = arena_update(20, pb_blob(6, pb_int(1, tank.entity_id)))
+        self.assertTrue(observer.startswith(retire + update + spawn + resurrect
+                                            + training_roster_refresh(arena, tank.entity_id)))
+        self.assertNotIn(b'old', observer)
 
     def test_parked_tank_stays_alive_and_owner_ignores_late_control(self):
         arena = Arena.__new__(Arena)

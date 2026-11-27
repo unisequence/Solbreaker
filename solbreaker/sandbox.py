@@ -204,6 +204,10 @@ def change_tank_message(arena):
     return b'\x13' + variable8(96, b'\x03TFS1SWAP' + struct.pack('<I', token(arena)) + b'\0')
 
 
+def training_roster_refresh(arena, entity):
+    return b'\x13' + variable8(96, b'\x04TFS1TANK' + struct.pack('<II', token(arena), entity) + b'\0')
+
+
 def training_reentry_enabled(arena):
     if ((getattr(arena, 'room_settings', None) is None and not getattr(arena, 'proving_ground', None))
             or not arena.started or arena.finished_at or arena.closed or arena.retiring):
