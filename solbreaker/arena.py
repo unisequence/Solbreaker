@@ -17,10 +17,10 @@ from .armor import MovableArmorStateSnapshot
 from .ammunition import (advance_pump, apply_burst_shell_switch, apply_queued_shell,
                          finish_magazine_reload, magazine_reload_allowed, spend_round,
                          start_pump_refill, switch_shell)
-from .collision import CollisionWorld, GroundMotion, Motion, Pose
+from .collision import CollisionScene, CollisionWorld, GroundMotion, Motion, Pose
 from .entities import BattleEvent, BattleResult, MotionFrame, MotionSample, Player, Vehicle
 from .motion import game_tick
-from .aiming import GunAim, disperse_shot, dispersion_tangent, wrap
+from .aiming import GunAim, aim_time_remaining, disperse_shot, dispersion_tangent, wrap
 from .roster import TEAMS, validate_teams, training_spawn, training_yaw
 from .orientation import matrix
 from .consumables import (ACTIVE, COOLDOWN, GRAVITY_JUMP_SPEC, HEAL, READY, RESTORE,
@@ -55,6 +55,8 @@ _GUN_EXTRA = 36  # gunHealth: the external gun, not gunBreech
 # A crew member still needs its own geometry binding before it can be damaged.
 _CREW_EXTRAS = frozenset((39, 40, 41, 42, 43, 44))
 _INTERNAL_KINDS = ('ARMOR_PIERCING','ARMOR_PIERCING_CR','HOLLOW_CHARGE')
+_DROWNING_SECONDS = 10.
+_SHOT_CONCEALMENT_SECONDS = 5.
 
 
 def _step_budget(value):
@@ -90,7 +92,7 @@ class Arena:
                  vehicle_scenes=None, map_spec=None, recon_enabled=False, recon_game=None,
                  bot_enabled=False, training=None, step_budget=None, result_id=None,
                  build_world=True, bot_roster=None, bot_game=None, bot_scene_settings=(), custom_bot_slots=False,
-                 prebattle_seconds=0., parallel_native_build=False, sandbox_enabled=False,
+                 prebattle_seconds=0., sandbox_enabled=False,
                  room_mode='encounter', room_settings=None):
         if (isinstance(prebattle_seconds, bool) or not isinstance(prebattle_seconds, (int, float))
                 or not math.isfinite(prebattle_seconds) or not 0 <= prebattle_seconds <= 60):
@@ -202,6 +204,8 @@ class Arena:
         if settings.minutes:
             self.battle_seconds = settings.minutes * 60
         self.epoch = time.monotonic() if now is None else now
+        if not math.isfinite(self.epoch):
+            raise ValueError('Invalid simulation start time')
         self.last_tick = self.epoch
         self.simulation_time = self.epoch
         self.module_clock = self.epoch
@@ -511,8 +515,7 @@ class Arena:
             for vehicle in self.vehicles.values():
                 self._set_boss_role_ability(vehicle)
                 if self._is_boss(vehicle):
-                    if vehicle.account_id is None:
-                        vehicle.mad_unspotted = False
+                    vehicle.mad_unspotted = False
                     vehicle.max_health *= big_boss.HEALTH_MULTIPLIER
                     vehicle.health = vehicle.max_health
                     vehicle.reload_speed_factor = big_boss.RELOAD_RATE
@@ -527,12 +530,8 @@ class Arena:
             if collision_scene is not None and build_world:
                 self.world = CollisionWorld(collision_scene,terrain,
                         vehicles={e:v.pose for e,v in self.vehicles.items()},incremental=incremental,
-                        vehicle_assets=entity_assets, visibility=bool(self.training_bots),
-                        parallel_native_build=parallel_native_build,
+                        vehicle_assets=entity_assets,
                         gravity=2.5 if self.gravity_mode else CollisionWorld.GRAVITY,
-                        # Rapier has long collision stalls with simultaneous
-                        # fast ragdolls, reproduced on Holland with seven targets.
-                        dynamic_backend='bullet' if self.big_boss_mode or self.proving_ground else None,
                         collision_zone=proving_ground_rules.in_pvp if self.proving_ground else None)
                 self.building = True
                 if self.world.build_ready:
@@ -1541,6 +1540,10 @@ class Arena:
             self._emit_pump(vehicle,self.simulation_time)
 
     def emit(self, kind, actor=0, target=0, **data):
+        if kind in ('feedback', 'health') and target in self.vehicles:
+            vehicle = self.vehicles[target]
+            data.setdefault('hidden_from_team', 3-vehicle.team
+                            if vehicle.mad_cloaked or vehicle.mad_unspotted else 0)
         if diagnostics.get_recorder() is not None:
             diagnostics.event(self, kind, actor, target, data)
         ids = self.practice_client_ids
@@ -2696,7 +2699,7 @@ class Arena:
         if self.uprising is not None:
             self._install_uprising_ability(restored)
         if self.team_spotting:
-            restored.mad_unspotted = not (restored.account_id is None and self._is_boss(restored))
+            restored.mad_unspotted = not self._is_boss(restored)
         restored.movable_armor_state = self._movable_armor_snapshot_at(restored, self.simulation_time)
         self.world.relocate_training_body(entity, pose)
         self.world.set_turret(0., entity)
@@ -3961,7 +3964,7 @@ class Arena:
 
     def _set_mad_spotted(self, vehicle, spotted, now=None):
         was_hidden = vehicle.mad_cloaked or vehicle.mad_unspotted
-        vehicle.mad_unspotted = not spotted
+        vehicle.mad_unspotted = not (spotted or self._is_boss(vehicle))
         self._publish_mad_visibility(vehicle, was_hidden, self.simulation_time if now is None else now)
 
     def _publish_mad_visibility(self, vehicle, was_hidden, now):
@@ -3969,11 +3972,11 @@ class Arena:
         if hidden != was_hidden:
             if hidden:
                 self._lose_target(vehicle.entity_id, include_owner=False)
-            self.emit('mad_cloak', vehicle.entity_id, enabled=hidden, pose=vehicle.pose)
+            self.emit('mad_cloak', vehicle.entity_id, enabled=hidden, pose=vehicle.pose, health=vehicle.health)
         ghost = self.uprising is not None and self.uprising.has(vehicle.entity_id, uprising.GHOST)
         if not self.team_spotting:
             return
-        if hidden or not vehicle.alive:
+        if hidden or not vehicle.alive or self._is_boss(vehicle):
             vehicle.mad_observation_due = None
             if vehicle.mad_observation_warning:
                 vehicle.mad_observation_warning = False
@@ -3991,12 +3994,57 @@ class Arena:
                 vehicle.mad_observation_warning = True
                 self.emit('mad_observation_warning', vehicle.entity_id, observed=True)
 
+    def _update_drowning(self, now, phased):
+        submerged = getattr(type(self.world), 'is_submerged', None)
+        if submerged is None:
+            return
+        for vehicle in self.vehicles.values():
+            if vehicle.entity_id == phased:
+                if vehicle.submerged_since is not None:
+                    vehicle.submerged_since += self.STEP
+                continue
+            if (not vehicle.alive or vehicle.sandbox_god_mode
+                    or not submerged(self.world, vehicle.entity_id)):
+                vehicle.submerged_since = None
+            elif vehicle.submerged_since is None:
+                vehicle.submerged_since = now
+            elif now + 1e-9 >= vehicle.submerged_since + _DROWNING_SECONDS:
+                self._damage_health(vehicle, vehicle.health, None, now, shell_hit=False)
+
+    def _set_hazard_warning(self, vehicle, warning):
+        previous = vehicle.hazard_warning
+        if previous != warning:
+            vehicle.hazard_warning = warning
+            self.emit('hazard_warning', vehicle.entity_id, previous=previous, warning=warning)
+
+    def _update_hazard_warnings(self, now, phased):
+        recovery = getattr(type(self.world), 'auto_recovery_remaining', None)
+        for player in self.players.values():
+            vehicle = self.vehicles[player.vehicle_id]
+            warning = None
+            if (vehicle.alive and vehicle.entity_id != phased
+                    and player.account_id not in self.hangar_players):
+                if vehicle.submerged_since is not None:
+                    remaining = _DROWNING_SECONDS - (now - vehicle.submerged_since)
+                    warning = ('drowning', max(1, math.ceil(remaining - 1e-9)))
+                elif recovery is not None:
+                    showing = (vehicle.hazard_warning is not None and vehicle.hazard_warning[0] == 'recovery')
+                    remaining = recovery(self.world, vehicle.entity_id, showing=showing)
+                    if remaining is not None:
+                        warning = ('recovery', max(1, math.ceil(remaining - 1e-9)))
+            self._set_hazard_warning(vehicle, warning)
+
     def _update_mad_spotting(self, living, now, targets=None, *, force=False):
         targets = living if targets is None else targets
         spotted = {}
         candidates, starts, ends = [], [], []
         proximity = mad_games.PROXIMITY_RANGE
+        scene = getattr(self.world, 'assets', None)
+        environment = scene.environment if isinstance(scene, CollisionScene) else None
         concealment = {target.entity_id: self._spotting_concealment(target, now) for target in targets}
+        foliage = environment is not None and bool(environment.foliage)
+        recent_shots = ({target.entity_id for target in targets if self._spotting_fired_recently(target, now)}
+                        if foliage else set())
         short_retention = {t.entity_id for t in targets if t.mad_passive == mad_games.SABOTEUR
                            or self.uprising is not None and self.uprising.has(t.entity_id, uprising.GHOST)}
         previous_checks = self._spotting_checks
@@ -4027,15 +4075,31 @@ class Arena:
                         continue
                     checks[pair] = now, target.last_shot_at
                     tx, ty, tz = target.pose.position
-                    candidates.append((target.entity_id, observer))
-                    starts.append((x, y + 1.4, z))
-                    ends.append((tx, ty + 1.1, tz))
+                    geometry = getattr(type(self.world), 'spotting_rays', None)
+                    rays = (geometry(self.world, observer.entity_id, target.entity_id, int(now/interval) % 2)
+                            if callable(geometry) else (((x, y+1.4, z), (tx, ty+1.1, tz)),))
+                    if foliage:
+                        maximum_camo = min(1., concealment[target.entity_id] + environment.FOLIAGE_BONUS)
+                        can_hide = distance > sight - (sight - proximity) * maximum_camo
+                    else:
+                        can_hide = False
+                    candidate = (target.entity_id, observer, distance, sight, can_hide)
+                    for start, end in rays:
+                        candidates.append(candidate)
+                        starts.append(start)
+                        ends.append(end)
         self._spotting_checks = checks
         if candidates:
             hits = self.world._visibility_rays(starts, ends)
-            for (entity, observer), hit in zip(candidates, hits):
-                if hit[0] < 0 or hit[2] >= .999:
-                    spotted.setdefault(entity, observer)
+            for (entity, observer, distance, sight, can_hide), start, end, hit in zip(candidates, starts, ends, hits):
+                if entity in spotted or hit[0] >= 0 and hit[2] < .999:
+                    continue
+                if can_hide:
+                    bonus = environment.foliage_bonus(start, end, self.world.destroyed, entity in recent_shots)
+                    camo = min(1., concealment[entity] + bonus)
+                    if distance > min(445., sight - (sight - proximity) * camo):
+                        continue
+                spotted[entity] = observer
         for vehicle in targets:
             if vehicle.mad_cloaked:
                 vehicle.mad_spotted_until = 0.
@@ -4049,11 +4113,16 @@ class Arena:
                 vehicle.mad_spotted_until = now + retention
                 if self.uprising is not None and self.uprising.first_spot(vehicle.entity_id):
                     self._award_elixir(observer, uprising.ELIXIR_PER_SPOT)
-            visible = (vehicle.account_id is None and self._is_boss(vehicle)
+            visible = (self._is_boss(vehicle)
                        or now < vehicle.mad_spotted_until
                        or mad_games.active(vehicle, mad_games.IRRADIATOR, now)
                        or self.uprising is not None and self.uprising.exposes(vehicle.entity_id, now))
             self._set_mad_spotted(vehicle, visible, now)
+
+    @staticmethod
+    def _spotting_fired_recently(vehicle, now):
+        return (vehicle.last_shot_at is not None
+                and 0. <= now - vehicle.last_shot_at < _SHOT_CONCEALMENT_SECONDS)
 
     def _spotting_concealment(self, vehicle, now):
         profile = getattr(vehicle.definition, 'spotting', None)
@@ -4067,7 +4136,7 @@ class Arena:
             stationary_net = (not vehicle.spotting_moving and
                               now - still_since >= profile.net_still_time)
             concealment += profile.net_bonus * (profile.net_still_factor if stationary_net else 1.)
-        if vehicle.last_shot_at is not None and 0. <= now - vehicle.last_shot_at < 5.:
+        if self._spotting_fired_recently(vehicle, now):
             concealment *= profile.at_shot
         return max(0., min(1., concealment))
 
@@ -4475,6 +4544,7 @@ class Arena:
             if vehicle.alive:
                 vehicle.speed = 0.
             vehicle.engine_mode = (1,0) if vehicle.alive else (0,0)
+            self._set_hazard_warning(vehicle, None)
             self._stop_fire(vehicle, at, 'battle_end')
             self._stop_consumables(vehicle)
         for projectile in self.projectiles.values():
@@ -4923,7 +4993,13 @@ class Arena:
                       position=target.pose.position, at=at)
         self._reset_base_capture(target, source)
         target.damage_received += damage
+        hidden_from_team = 3-target.team if target.mad_cloaked or target.mad_unspotted else 0
+        if not target.alive:
+            was_hidden = target.mad_cloaked or target.mad_unspotted
+            target.mad_cloaked = target.mad_unspotted = False
+            self._publish_mad_visibility(target, was_hidden, at)
         self.emit('health', source or 0, target.entity_id, health=target.health,
+                  hidden_from_team=hidden_from_team,
                   **({'received_damage': damage} if shell_hit and shooter is not None
                      and shooter.entity_id != target.entity_id else {}),
                   **({'reflector_hit':True} if reflector_hit else {}),
@@ -4968,6 +5044,8 @@ class Arena:
                 shooter.kills += 1
             target.killer = source or 0
             target.death_at = at
+            target.submerged_since = None
+            self._set_hazard_warning(target, None)
             if self.proving_ground and target.account_id is not None and proving_ground_rules.in_pvp(target.pose.position):
                 self.proving_ground.arena_deaths.add(target.entity_id)
                 if enemy and shooter.account_id is not None:
@@ -5827,21 +5905,11 @@ class Arena:
         native = getattr(world, '_native_physics', None)
         if native is not None:
             self._last_drive_parallel = False
-            results = {}
-            # Each ordered drive can change its own hull, including when it
-            # uses the Python fallback. Publish those changes before the next
-            # native move, with one full sync at the phase boundary.
-            with native.sensor_batch(world) as dirty:
-                for vehicle in vehicles:
-                    entity = vehicle.entity_id
-                    results[entity] = self._drive(vehicle, dt, now)
-                    dirty.add(entity)
-            return results
+            return {v.entity_id: self._drive(v, dt, now) for v in vehicles}
         adaptive = (os.environ.get('SOLBREAKER_SIM_WORKERS','auto') == 'auto'
             or os.environ.get('SOLBREAKER_ADAPTIVE_DRIVE') == '1')
         pool = self.drive_workers
         if (not adaptive or type(self) is not Arena or type(world) is not CollisionWorld
-                or getattr(world,'_rapier',None) is None
                 or not getattr(getattr(world,'_rust_drive',None),'_pipeline_enabled',False)
                 or pool is None or not pool.ready):
             return Arena._drive_vehicles_impl(self,vehicles,dt,now)
@@ -5877,9 +5945,7 @@ class Arena:
             pool.poll()
         dynamic = (getattr(world, 'dynamic_bodies', None)
                    or getattr(world, 'pending_dynamics', None))
-        independent_dynamic = (getattr(world, '_rapier', None) is not None
-            and getattr(world, 'rapier_parallel_drive', False))
-        if (pool is None or not pool.ready or (dynamic and not independent_dynamic)):
+        if pool is None or not pool.ready or dynamic:
             self._last_drive_parallel = False
             return {v.entity_id:self._drive(v,dt,now) for v in vehicles}
         self._last_drive_parallel = True
@@ -5997,6 +6063,8 @@ class Arena:
     def step(self, now, *, deadline=None):
         if getattr(self, '_input_only', False):
             return
+        if not math.isfinite(now):
+            raise ValueError('Invalid simulation time')
         if now < self.last_tick or self.closed or self.retiring or self.building:
             return
         if deadline is not None and (isinstance(deadline, bool) or
@@ -6084,7 +6152,11 @@ class Arena:
             if vehicle.alive and vehicle.entity_id != phased and player is not None and player.attached:
                 marker = self.aim_marker(vehicle, now)
             samples[vehicle.entity_id] = MotionSample(vehicle.pose,vehicle.gun.packed(),
-                vehicle.gun.yaw,marker,vehicle.engine_mode if vehicle.alive else (0,0))
+                vehicle.gun.yaw,marker,vehicle.engine_mode if vehicle.alive else (0,0),
+                aim_time_remaining(getattr(vehicle.definition, 'aiming', None),
+                    shot_age=None if vehicle.last_shot_at is None else now-vehicle.last_shot_at,
+                    aim_factor=vehicle.effective_aiming_time_factor,
+                    movement_factor=vehicle.gun.movement_dispersion) if vehicle.alive else 0.)
         self.motion_frame = MotionFrame(tick,now,self.step_count,samples)
 
     def _fixed_step(self, now):
@@ -6308,7 +6380,8 @@ class Arena:
                     vehicle.gun.update_dispersion(getattr(vehicle.definition, 'aiming', None),
                                                   previous, current, before[entity].turret, dt,
                                                   vehicle.effective_aiming_time_factor,
-                                                  previous_pitch=before[entity].pitch)
+                                                  previous_pitch=before[entity].pitch,
+                                                  shot_age=None if vehicle.last_shot_at is None else now-vehicle.last_shot_at)
                 if self.team_spotting and vehicle.alive and entity != phased:
                     vehicle.spotting_moving = (
                         distance >= self.RECON_CAMOUFLAGE_STILL_SPEED * dt or
@@ -6413,6 +6486,8 @@ class Arena:
                 if vehicle.alive:
                     self._advance_tracks(vehicle,now)
                 self._sync_movable_armor(vehicle, now)
+            self._update_drowning(now, phased)
+            self._update_hazard_warnings(now, phased)
             self.module_clock = now
             if self.uprising is not None and self.step_count % uprising.REWIND_SAMPLE_STEPS == 0:
                 self._record_uprising_rewinds(now)

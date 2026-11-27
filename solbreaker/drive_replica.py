@@ -224,20 +224,13 @@ class _ReplicaWorld(CollisionWorld):
         self._replica_static = []
         super().__init__(*args, **kwargs)
 
-    def _init_rapier(self):
-        # A replica answers ground queries only. Flight/activation reject the
-        # job below; the authoritative owner alone integrates rigid bodies.
-        # Keep the 6DOF drive rules, without duplicating the dynamic world.
-        if self._rapier_query_backend != 'bullet':
-            super()._init_rapier(static_only=True)
-
     def __setattr__(self, name, value):
         if name == '_last_validation_rejection' and getattr(self, '_replica_active', False):
             object.__setattr__(self, '_replica_validation_touched', True)
         super().__setattr__(name, value)
 
-    def _mesh_body(self, path):
-        body = super()._mesh_body(path)
+    def _mesh_body(self, path, *, breakable=False):
+        body = super()._mesh_body(path, breakable=breakable)
         self._replica_static.append((_path(path), body))
         return body
 

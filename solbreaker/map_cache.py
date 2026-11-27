@@ -19,7 +19,7 @@ from .mesh_files import MeshFiles
 
 LOG = logging.getLogger(__name__)
 # Bump for changes to scene filtering, geometry, destruction IDs or mesh export.
-FORMAT = 4
+FORMAT = 6
 DEFAULT_BYTES = 1024 << 20
 KEY = re.compile(r'[0-9a-f]{64}')
 OBJ = re.compile(r'[0-9a-f]{64}\.obj')
@@ -104,6 +104,9 @@ class PreparedMap:
         scene.bounds = tuple(data['bounds'])
         scene.object_names = data['names']
         scene.destructibles = objects
+        scene.water_triangles = data['water']
+        scene.foliage_bounds = data['foliage']
+        scene.__dict__.pop('environment', None)
         scene.terrain_meshes[terrain] = terrain_paths
         scene.mesh_files.partitions.update(partitions)
         scene.mesh_files.prepared = self
@@ -158,7 +161,6 @@ class MapCache:
 
     def _write(self, stage, key, spec, terrain):
         from .collision import CollisionScene
-        from .static_visibility import mesh_inputs
 
         started = time.monotonic()
         scene = CollisionScene.map_only(spec, MeshFiles(stage))
@@ -176,14 +178,12 @@ class MapCache:
                  object_triangles=np.concatenate(triangles) if triangles else np.empty((0, 3), np.int32))
         geometry_ms = (time.monotonic() - started)*1000
         terrain_paths = scene.prepare_map(terrain)
-        for _ in mesh_inputs(scene):
-            pass
         files = {path.name: _digest(path) for path in stage.iterdir()}
         data = dict(key=key, format=FORMAT, bounds=scene.bounds, names=scene.object_names,
                     objects=objects, terrain=[Path(path).name for path in terrain_paths],
                     partitions={digest.hex(): [Path(path).name for path in paths]
                                 for digest, paths in scene.mesh_files.partitions.items()},
-                    files=files)
+                    water=scene.water_triangles, foliage=scene.foliage_bounds, files=files)
         payload = json.dumps(data, separators=(',', ':')).encode()
         encoded = hashlib.sha256(payload).hexdigest().encode() + b'\n' + payload
         (stage / MANIFEST).write_bytes(encoded)

@@ -417,8 +417,7 @@ class RustDrive:
         self._prefix_enabled = os.environ.get('SOLBREAKER_DRIVE_PREFIX')=='1'
         self._rotation_enabled = os.environ.get('SOLBREAKER_ROTATION_PREFIX')=='1'
         self._pipeline_enabled=os.environ.get('SOLBREAKER_SUPPORT_PIPELINE')=='1'
-        self._replica_pipeline_enabled=(os.environ.get('SOLBREAKER_REPLICA_PIPELINE')=='1'
-            and os.environ.get('SOLBREAKER_DYNAMIC_BACKEND','bullet')=='rapier')
+        self._replica_pipeline_enabled=os.environ.get('SOLBREAKER_REPLICA_PIPELINE')=='1'
         self._capture_rotation_validation = False
         self._rotation_validation = None
         self._sample_fn = SampleCallback(self._sample)
@@ -887,10 +886,8 @@ class RustDrive:
             planned = getattr(self.library,'tfs_ground_step_plan',None)
             prefix_function = getattr(self.library,'tfs_ground_step_plan_prefix_v1',None)
             prefix_methods = _prefix_methods() if self._prefix_enabled else {}
-            prefix_world = (type(world) is CollisionWorld
-                            and getattr(world,'_rapier',None) is not None)
+            prefix_world = type(world) is CollisionWorld
             if self._replica_pipeline_enabled and not prefix_world:
-                # A ground-only replica intentionally has no Rapier world.
                 # Admit only the exact implementation retaining its original
                 # contact observer and every side-effect rejection callback.
                 from .drive_replica import _replica_prefix_contract

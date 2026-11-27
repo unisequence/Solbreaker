@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from tools import build_native
 from tools.setup_state import verify_native
@@ -12,9 +12,9 @@ from solbreaker.revision import implementation_revision
 
 
 class NativeBuildTests(unittest.TestCase):
-    def test_default_build_installs_all_five_libraries_on_each_platform(self):
-        for platform in ('linux', 'win32'):
-            with self.subTest(platform=platform), TemporaryDirectory() as temporary:
+    def test_default_build_installs_production_libraries_on_each_platform(self):
+        for platform, legacy in (('linux', False), ('win32', False), ('linux', True)):
+            with self.subTest(platform=platform, legacy=legacy), TemporaryDirectory() as temporary:
                 root = Path(temporary)
                 calls = []
 
@@ -30,25 +30,31 @@ class NativeBuildTests(unittest.TestCase):
                     output.parent.mkdir(parents=True)
                     output.write_bytes(b'synthetic native output')
 
+                arguments = ['build_native.py', '--with-legacy-fixture'] if legacy else ['build_native.py']
                 with patch.object(build_native, '__file__', str(root/'tools/build_native.py')), \
                      patch('tools.build_native.sys.platform', platform), \
                      patch('tools.build_native.platform.machine', return_value='x86_64'), \
-                     patch('tools.build_native.sys.argv', ['build_native.py']), \
+                     patch('tools.build_native.sys.argv', arguments), \
                      patch('tools.build_native.subprocess.run', side_effect=run), \
                      patch.dict(os.environ, clear=True):
                     build_native.main()
-                self.assertEqual(len([call for call in calls if call[0] == 'cargo']), 5)
+                crates = [Path(call[call.index('--manifest-path') + 1]).parent.name
+                          for call in calls if call[0] == 'cargo']
+                expected = ('sim_core', 'impact_core', 'armor_query', 'physics_core')
+                self.assertCountEqual(crates, (*expected, 'rapier_dynamic') if legacy else expected)
                 filename = ('solbreaker_physics_core.dll' if platform == 'win32'
                             else 'libsolbreaker_physics_core.so')
                 self.assertEqual((root/'solbreaker/native/physics_core'/filename).read_bytes(),
                                  b'synthetic native output')
                 self.assertEqual(calls[-1][-1], '--optional')
+                if legacy:
+                    self.assertEqual((root/'solbreaker/native/rapier_dynamic/libtfs_rapier_dynamic.so').read_bytes(),
+                                     b'synthetic native output')
 
     def test_reused_setup_requires_the_ground_controller(self):
         with patch('solbreaker.sim_native.load_library', return_value=object()), \
              patch('solbreaker.impact_native.load_library', return_value=object()), \
              patch('solbreaker.armor_native.load_library', return_value=object()), \
-             patch('tools.setup_state.ctypes.CDLL', return_value=MagicMock()), \
              patch('solbreaker.native_physics.load_library', side_effect=RuntimeError('missing physics_core')) as load:
             with self.assertRaisesRegex(RuntimeError, 'missing physics_core'):
                 verify_native()

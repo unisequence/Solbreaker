@@ -114,7 +114,7 @@ def _ap_shells(game, nation, name, turret, gun):
     node = resolve('turrets', local_turret)
     local_gun = node.find('guns/' + gun)
     if local_gun is None:
-        raise ValueError(f'Incompatible vehicle component: gun/{gun}')
+        return ()
     resolved = resolve('guns', local_gun)
     shots = resolved.find('shots')
     found = []
@@ -506,7 +506,28 @@ class ProgressionService:
             account_id, inventory_id, vehicle_sale_credits(research.credits),
             expected_descriptor=vehicle['descriptor'], operation_id=operation_id)
 
-    def _plan_install(self, snapshot, inventory_id, slot, tag):
+    def _module_steps(self, research, modules, researched):
+        def steps(order):
+            owned = set(researched)
+            result = []
+            for module in order:
+                cd = item_cd(module.slot, module.ident, research.nation_id)
+                if cd in owned:
+                    result.append((cd, 0, ()))
+                else:
+                    cost, parent = self._research_edge(research, owned, cd)
+                    result.append((cd, cost, (parent,)))
+                    owned.add(cd)
+            return result
+
+        try:
+            return steps(modules)
+        except ValueError:
+            if len(modules) == 1:
+                raise
+            return steps(modules[::-1])
+
+    def _plan_install(self, snapshot, inventory_id, slot, tag, *, paired_cd=0, research_modules=False):
         if slot not in _MODULE_SLOTS:
             raise ValueError('Unknown module slot')
         if inventory_id is not None and type(inventory_id) is not int:
@@ -518,26 +539,55 @@ class ProgressionService:
             raise ValueError('Module does not belong to the vehicle')
         if module.credits is None:
             raise ValueError('Module is not purchasable for credits')
+
+        def shells(configuration):
+            return _ap_shells(self.game, research.nation, research.name,
+                              configuration.turret, configuration.gun)
+
         configuration = replace(current.configuration, **{slot: tag})
-        if slot == 'gun':
-            options = _ap_shells(self.game, research.nation, research.name,
-                                 configuration.turret, tag)
+        modules = (module,)
+        request = dict(op='install_module', inventory_id=vehicle['id'], slot=slot, tag=tag)
+        if paired_cd:
+            opposite = {'gun': 'turret', 'turret': 'gun'}.get(slot)
+            paired = next((m for m in research.modules if m.slot == opposite
+                           and item_cd(m.slot, m.ident, research.nation_id) == paired_cd), None)
+            if paired is None or paired.credits is None:
+                raise ValueError('Paired module must be a gun or turret of this vehicle')
+            configuration = replace(configuration, **{paired.slot: paired.tag})
+            modules = (paired, module)
+            request['paired_cd'] = paired_cd
+        elif slot == 'gun' and research_modules and not shells(configuration):
+            candidates = []
+            for turret in research.modules:
+                if turret.slot != 'turret' or turret.credits is None:
+                    continue
+                candidate = replace(configuration, turret=turret.tag)
+                if not shells(candidate):
+                    continue
+                pair = (turret, module)
+                try:
+                    steps = self._module_steps(research, pair, snapshot['researched'])
+                except ValueError:
+                    continue
+                candidates.append((sum(step[1] for step in steps), turret.credits, turret.ident, candidate, pair))
+            if not candidates:
+                raise ValueError('Research the required turret prerequisites first')
+            _, _, _, configuration, modules = min(candidates, key=lambda row: row[:3])
+
+        if slot in ('gun', 'turret'):
+            options = shells(configuration)
+            if not options:
+                raise ValueError('Gun is incompatible with the turret or has no supported shell')
             if configuration.shell not in options:
-                if not options:
-                    raise ValueError('Gun has no supported shell')
                 configuration = replace(configuration, shell=options[0])
-        try:
-            definition = load_vehicle(self.game, research.nation, research.name, configuration)
-        except ValueError as error:
-            if slot == 'turret':
-                raise ValueError(f'Turret is incompatible with the installed gun: {error}') from error
-            raise
-        installed = tag == getattr(current.configuration, slot)
+
+        definition = load_vehicle(self.game, research.nation, research.name, configuration)
         return dict(
-            vehicle=vehicle, research=research, definition=definition,
+            vehicle=vehicle, definition=definition,
             target_cd=item_cd(slot, module.ident, research.nation_id),
-            credits_cost=0 if installed else module.credits,
-            operation_request=dict(op='install_module', inventory_id=vehicle['id'], slot=slot, tag=tag))
+            steps=self._module_steps(research, modules, snapshot['researched']) if research_modules else (),
+            credits_cost=sum(m.credits for m in modules if m.tag != getattr(current.configuration, m.slot)),
+            operation_request=request)
 
     def install(self, account_id, inventory_id, slot, tag, operation_id=None):
         plan = self._plan_install(self.prepare(account_id), inventory_id, slot, tag)
@@ -549,21 +599,17 @@ class ProgressionService:
             credits_cost=plan['credits_cost'], operation_id=operation_id,
             expected_descriptor=vehicle['descriptor'], operation_request=plan['operation_request'])
 
-    def research_and_install(self, account_id, inventory_id, slot, tag, operation_id=None):
-        """Research (if needed) and install a module atomically: one transaction, one revision."""
-        snapshot = self.prepare(account_id)
-        plan = self._plan_install(snapshot, inventory_id, slot, tag)
-        vehicle, definition, target = plan['vehicle'], plan['definition'], plan['target_cd']
-        if target in snapshot['researched']:
-            cost, parents = 0, ()
-        else:
-            cost, parent = self._research_edge(plan['research'], set(snapshot['researched']), target)
-            parents = (parent,)
+    def research_and_install(self, account_id, inventory_id, slot, tag, operation_id=None, *, paired_cd=0):
+        """Research missing parts and install the compatible configuration atomically."""
+        plan = self._plan_install(self.prepare(account_id), inventory_id, slot, tag,
+                                  paired_cd=paired_cd, research_modules=True)
+        vehicle, definition = plan['vehicle'], plan['definition']
+        *prior, (target, cost, parents) = plan['steps']
         return self.garage.research_and_install(
             account_id, vehicle['id'], definition.inventory,
             configuration=asdict(definition.configuration), item_cd=target, xp_cost=cost,
-            prerequisites=parents, credits_cost=plan['credits_cost'], operation_id=operation_id,
-            expected_descriptor=vehicle['descriptor'],
+            prerequisites=parents, prior_research=prior, credits_cost=plan['credits_cost'],
+            operation_id=operation_id, expected_descriptor=vehicle['descriptor'],
             operation_request=dict(plan['operation_request'], op='research_and_install'))
 
 

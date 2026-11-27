@@ -141,6 +141,10 @@ class PackagingTests(unittest.TestCase):
                 self.assertEqual(archive.read('Solbreaker/'+path), contact.read_bytes())
                 checksums = archive.read('Solbreaker/SHA256SUMS').decode()
                 self.assertIn(hashlib.sha256(contact.read_bytes()).hexdigest() + '  ' + path, checksums)
+                # The already-shipped 0.3.0 updater checks this path before loading the new updater.
+                legacy = 'solbreaker/native/rapier_dynamic/libtfs_rapier_dynamic.so'
+                self.assertEqual(archive.read('Solbreaker/'+legacy),
+                                 (native/'rapier_dynamic/libtfs_rapier_dynamic.so').read_bytes())
 
     def test_windows_package_accepts_rebuilt_contact_module(self):
         with TemporaryDirectory() as temporary:

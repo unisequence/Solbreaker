@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 from solbreaker.arena_owner import ArenaOwner, AsyncArenaOwner, Command, OwnerError
 from solbreaker.owner_channel import FramedChannel, configured_ipc
-from solbreaker.rapier_dynamic import library_path
+from tools.rapier_fixture import library_path
 
 
 class EchoHandler:
@@ -41,7 +41,7 @@ def failing_factory():
 
 class NativeWindowsTests(unittest.TestCase):
     def test_rapier_selects_native_windows_dll(self):
-        with patch('solbreaker.rapier_dynamic.sys.platform', 'win32'):
+        with patch('tools.rapier_fixture.sys.platform', 'win32'):
             self.assertEqual(library_path().name, 'tfs_rapier_dynamic.dll')
 
     def test_socket_transport_is_available_on_windows(self):

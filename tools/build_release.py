@@ -17,6 +17,8 @@ from package_source import ROOT, WINDOWS_LIBRARIES, WHEEL, package
 from solbreaker import __version__, updates
 from tools.windows_bundle import RUNTIME, records
 
+# The Windows runtime crates retain the accepted build invocation. The legacy fixture is opt-in.
+WINDOWS_BUILD_DRIVER_SHA256 = '7b63f17c462bfddeed651c6fb20481656bbbfac4f2270cbb0b8ed78344a727a4'
 WINDOWS_INPUT_TAG = 'v0.1.0-alpha.5'
 WINDOWS_INPUT_COMMIT = '51c8f69242ab46f9be70fe199b2114fdf0338167'
 WINDOWS_INPUT_SHA256 = 'e0ecca50d20919de18b26b7d62f76e17a44ecf95879bbdcdb70f6cc92f3a809d'
@@ -78,7 +80,9 @@ def stage_depot(directory):
 
 
 def verify_native_source(*, rebuilt_crates=(), rebuilt_contact=False):
-    paths = ['tools/build_native.py']
+    if sha256(ROOT/'tools/build_native.py') != WINDOWS_BUILD_DRIVER_SHA256:
+        raise ValueError('Windows build driver differs from the reviewed native build')
+    paths = []
     if not rebuilt_contact:
         paths.extend(('tools/build_contact_queries.py', 'solbreaker/native/contact_queries.c'))
     paths += [f'solbreaker/native/{crate}/{name}' for crate in WINDOWS_LIBRARIES
@@ -99,7 +103,8 @@ def stage_windows(directory, native_archive, *, rebuilt_crates=(), rebuilt_conta
 
     native = directory/'native'
     native.mkdir()
-    inputs = {native/name: f'solbreaker/native/{crate}/{name}' for crate, name in WINDOWS_LIBRARIES.items()}
+    inputs = {native/name: f'solbreaker/native/{crate}/{name}'
+              for crate, name in WINDOWS_LIBRARIES.items() if crate not in rebuilt_crates}
     if not rebuilt_contact:
         inputs[native/'_contact_queries.pyd'] = 'solbreaker/_contact_queries.pyd'
     inputs[directory/WHEEL] = f'wheels/{WHEEL}'
@@ -136,15 +141,14 @@ def release_version(tag):
     return tag[1:]
 
 
-def build(tag, output, native_archive, linux_native=None, windows_physics=None, windows_rapier=None,
+def build(tag, output, native_archive, linux_native=None, windows_physics=None,
           windows_contact=None, *, linux_contact=None):
     if linux_contact and not linux_native:
         raise ValueError('Linux contact collector requires dedicated Linux libraries')
     version = release_version(tag)
     with tempfile.TemporaryDirectory(prefix='solbreaker-release-') as temporary:
         work = Path(temporary)
-        rebuilt_crates = {crate for crate, path in (('physics_core', windows_physics),
-                                                    ('rapier_dynamic', windows_rapier)) if path is not None}
+        rebuilt_crates = {'physics_core'} if windows_physics is not None else set()
         native = stage_windows(work, native_archive, rebuilt_crates=rebuilt_crates,
                                rebuilt_contact=windows_contact is not None)
         depot = stage_depot(work)
@@ -154,7 +158,7 @@ def build(tag, output, native_archive, linux_native=None, windows_physics=None, 
         package(source, depot_bundle=depot['linux-x64'])
         windows_inputs = dict(windows_native=native, windows_wheel=work/WHEEL,
                               windows_runtime=work, windows_physics=windows_physics,
-                              windows_rapier=windows_rapier, windows_contact=windows_contact)
+                              windows_contact=windows_contact)
         package(windows, **windows_inputs, depot_bundle=depot['windows-x64'])
         package(server, **windows_inputs, server_only=True)
         archives = [(source, 'source'), (windows, 'windows-x64'), (server, 'server-windows-x64')]
@@ -182,8 +186,7 @@ if __name__ == '__main__':
     parser.add_argument('--linux-native', type=Path, help='Freshly built Linux native crate directory')
     parser.add_argument('--linux-contact', type=Path, help='Contact collector built for the Linux bundle')
     parser.add_argument('--windows-physics', type=Path, help='Ground controller DLL built from this checkout')
-    parser.add_argument('--windows-rapier', type=Path, help='Rapier DLL built from this checkout')
     parser.add_argument('--windows-contact', type=Path, help='Contact query module built from this checkout')
     args = parser.parse_args()
     build(args.tag, args.output, args.windows_input, args.linux_native, args.windows_physics,
-          args.windows_rapier, args.windows_contact, linux_contact=args.linux_contact)
+          args.windows_contact, linux_contact=args.linux_contact)

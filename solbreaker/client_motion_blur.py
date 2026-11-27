@@ -14,6 +14,7 @@ GRAPHICS = Path('UI/Screens/Options/GraphicsOptions/GraphicsOptionsPage.yaml.dvp
 BATTLE = Path('UI/Screens3/Battle/BattleScreen.yaml.dvpl')
 RECEIPT = 'motion_blur_shader_sha256'
 LABEL_KEY = '#solbreaker:MotionBlur'
+RECOVERY_KEY = '#solbreaker:Battle/AutoRecovery'
 
 
 def _range_ability_hud():
@@ -53,14 +54,78 @@ def _range_ability_hud():
             'children': rows}
 
 
+RECOVERY_ATLAS = 'auto-recovery.packed.webp'
+RECOVERY_ART = 'SolbreakerRecovery'
+
+
+def _recovery_warning_hud():
+    def label(name, text, y, height, font, color):
+        return {
+            'class': 'UIStaticText', 'name': name, 'input': False,
+            'position': [0., y], 'size': [152., height],
+            'components': {'UITextComponent': {
+                'text': text, 'fontPath': '~res:/Fonts/WarHeliosCondCBold.ttf',
+                'fontSize': font, 'align': ['HCENTER', 'VCENTER'], 'color': color,
+                'colorInheritType': 'COLOR_IGNORE_PARENT',
+                'shadowColor': [0., 0., 0., .9], 'shadowOffset': [0., 1.],
+            }},
+        }
+
+    rings = [
+        {'class': 'UIControl', 'name': f'Ring{seconds}', 'input': False, 'visible': False,
+         'size': [112., 112.], 'position': [20., 0.], 'components': {'Background': {
+             'drawType': 'DRAW_SCALE_TO_RECT', 'sprite': f'~res:/{RECOVERY_ART}/ring{seconds}',
+         }}}
+        for seconds in range(1, 4)
+    ]
+    return {
+        'class': 'UIControl', 'name': 'SolAutoRecovery', 'input': False,
+        'visible': False, 'size': [152., 131.],
+        'components': {'Anchor': {'hCenterAnchorEnabled': True,
+                                  'vCenterAnchorEnabled': True, 'vCenterAnchor': 150.}},
+        'children': [
+            *rings,
+            label('Time', '3', 60., 34., 33., [1., .97, 1., 1.]),
+            label('Recovery', RECOVERY_KEY, 111., 19., 16., [.91, .84, 1., 1.]),
+        ],
+    }
+
+
+def _install_recovery_art(data):
+    from .connection import atomic_write
+
+    directory = data / RECOVERY_ART
+    directory.mkdir(exist_ok=True)
+    if directory.resolve(strict=True) != directory:
+        raise ValueError('Auto-recovery art requires a private resource directory')
+    atlas = Path(__file__).with_name('assets') / RECOVERY_ATLAS
+    files = {RECOVERY_ATLAS: atlas.read_bytes()}
+    for seconds in range(1, 4):
+        x = (seconds - 1) * 256 + 16
+        files[f'ring{seconds}.txt'] = (
+            f'1\n{RECOVERY_ATLAS}\n224 224\n1\n{x} 16 224 224 0 0 0 frame0\n'.encode())
+    for name, payload in files.items():
+        target = directory / f'{name}.dvpl'
+        encoded = dvpl.encode(payload)
+        if target.is_symlink() or not target.is_file() or target.read_bytes() != encoded:
+            atomic_write(target, encoded, replace_symlink=True)
+
+
 def battle_framebuffer(source):
     from .client_time_stop import patch_hud
 
     document = yaml.safe_load(dvpl.decode(source))
-    patch_boss_screen(document)
     root, = document['Prototypes']
+    names = {node.get('name') for node in root['children']}
+    if 'SolAimTime' in names:
+        if 'SolAutoRecovery' in names:
+            return source
+        root['children'].insert(-1, _recovery_warning_hud())
+        return dvpl.encode(yaml.safe_dump(document, sort_keys=False).encode())
+    patch_boss_screen(document)
     patch_hud(root)
     root['children'].insert(-1, _range_ability_hud())
+    root['children'].insert(-1, _recovery_warning_hud())
     root['children'].insert(-1, {
         'class': 'UIStaticText', 'name': 'SolAimTime', 'input': False, 'visible': False,
         'size': [64., 26.],
@@ -143,6 +208,8 @@ def graphics_slider(source):
     document = yaml.safe_load(dvpl.decode(source))
     root, = document['Prototypes']
     rows, = (node for node in _walk(root) if node.get('name') == 'scrollContainerControl')
+    if any(row.get('name') == 'SolbreakerMotionBlur' for row in rows['children']):
+        return source
     document['ImportedPackages'].append('~res:/UI/Screens/Common/Slider.yaml')
     rows['children'].insert(1, {
         'prototype': 'OptionEditor/EditorRow', 'name': 'SolbreakerMotionBlur',
@@ -166,12 +233,12 @@ def graphics_slider(source):
     return dvpl.encode(yaml.safe_dump(document, sort_keys=False, allow_unicode=True).encode())
 
 
-def install_motion_blur(lab, manifest):
+def install_motion_blur(lab, manifest, *, copied=False):
     from .client_ui import STRINGS_EN, STRINGS_RU, _StringsLoader, local_directory
     from .connection import atomic_write
 
     previous = manifest.get(RECEIPT)
-    source = Path(manifest.get('source_game', manifest['game'])).resolve(strict=True)
+    source = lab/'client' if copied else Path(manifest.get('source_game', manifest['game'])).resolve(strict=True)
     data = lab/'client/Data'
     local_directory(data, source)
     changes = {}
@@ -179,7 +246,10 @@ def install_motion_blur(lab, manifest):
     for relative, patch in ((SHADER, motion_blur_shader), (BATTLE, battle_framebuffer),
                             (GRAPHICS, graphics_slider)):
         original = (source/'Data'/relative).read_bytes()
-        modified = patch(original)
+        recorded = previous if isinstance(previous, str) and relative == SHADER else (
+            previous.get(relative.as_posix()) if isinstance(previous, dict) else None)
+        modified = (original if copied and relative == SHADER
+                    and hashlib.sha256(original).hexdigest() == recorded else patch(original))
         parent = data
         for name in relative.parts[:-1]:
             parent /= name
@@ -188,25 +258,27 @@ def install_motion_blur(lab, manifest):
                 raise ValueError('Motion blur requires private client directories')
         target = lab/'client/Data'/relative
         current = target.read_bytes()
-        recorded = previous if isinstance(previous, str) and relative == SHADER else (
-            previous.get(relative.as_posix()) if isinstance(previous, dict) else None)
         if current not in (original, modified) and hashlib.sha256(current).hexdigest() not in (recorded, overrides.get(relative.as_posix())):
             raise ValueError('A motion blur resource already has a different local modification')
         changes[relative] = (target, current, modified)
+    _install_recovery_art(data)
     manifest_path = lab/'manifest.json'
     manifest = dict(manifest)
     receipts = {key.as_posix(): hashlib.sha256(row[2]).hexdigest()
                 for key, row in changes.items()}
     if BATTLE.as_posix() in overrides:
         overrides[BATTLE.as_posix()] = receipts[BATTLE.as_posix()]
-    for relative, label in ((STRINGS_EN, 'MOTION BLUR'), (STRINGS_RU, 'РАЗМЫТИЕ В ДВИЖЕНИИ')):
+    for relative, labels in (
+        (STRINGS_EN, {LABEL_KEY: 'MOTION BLUR', RECOVERY_KEY: 'Auto-righting'}),
+        (STRINGS_RU, {LABEL_KEY: 'РАЗМЫТИЕ В ДВИЖЕНИИ', RECOVERY_KEY: 'Автопереворот'}),
+    ):
         target = data/relative
         document = yaml.load(dvpl.read(target), Loader=_StringsLoader)
-        if document.get(LABEL_KEY) != label:
+        if any(document.get(key) != value for key, value in labels.items()):
             local_directory(target.parent, source)
             if target.parent.resolve(strict=True) != target.parent:
                 raise ValueError('Motion blur requires private client directories')
-            document[LABEL_KEY] = label
+            document.update(labels)
             content = dvpl.encode(yaml.safe_dump(
                 document, sort_keys=False, allow_unicode=True, width=1 << 30).encode())
             atomic_write(target, content, replace_symlink=True)

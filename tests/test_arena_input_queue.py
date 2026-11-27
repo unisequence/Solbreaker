@@ -11,6 +11,28 @@ from solbreaker.base import BaseEndpoint, ChannelOverflow
 from solbreaker.motion import tick_sync
 
 
+class ArenaClockTests(TestCase):
+    def test_invalid_time_does_not_interrupt_the_next_fixed_steps(self):
+        from solbreaker.arena import Arena
+
+        players = [dict(id=1, nickname='Driver')]
+        terrain = SimpleNamespace(height=lambda x, z: 0.)
+        arena = Arena(players, b'', terrain, solo=True, now=1.)
+        self.addCleanup(arena.close)
+        arena.ready(1, 1.)
+        for invalid in (float('nan'), float('inf'), -float('inf')):
+            with self.subTest(invalid=invalid):
+                with self.assertRaises(ValueError):
+                    Arena(players, b'', terrain, solo=True, now=invalid)
+                previous = arena.last_tick, arena.accumulator, arena.dropped_time, arena.step_count
+                with self.assertRaises(ValueError):
+                    arena.step(invalid)
+                self.assertEqual((arena.last_tick, arena.accumulator, arena.dropped_time,
+                                  arena.step_count), previous)
+                arena.step(previous[0] + .1)
+                self.assertEqual(arena.step_count, previous[3] + 6)
+
+
 class ArenaInputQueueTests(TestCase):
     def setUp(self):
         self.endpoint = BaseEndpoint.__new__(BaseEndpoint)

@@ -37,6 +37,8 @@ def map_only(spec, files):
     scene.vertices = np.array(((0., 0., 0.), (0., 2., 0.), (0., 0., 2.)))
     scene.triangles = np.array(((0, 1, 2),), dtype=np.int32)
     scene.object_names = ['wall']
+    scene.water_triangles = [((0., 4., 0.), (4., 4., 0.), (0., 4., 4.))]
+    scene.foliage_bounds = [((0., .5, 0.), (1., 2., 2.), 7)]
     scene.destructibles = {7: Destructible(7, 'wall', 3, 12, scene.vertices+1, scene.triangles.copy())}
     return scene
 
@@ -78,6 +80,20 @@ class MapCacheTests(unittest.TestCase):
         self.spec = fixture(self.root)
         self.terrain = MapTerrain(self.root, self.spec)
 
+    def test_tiled_height_samples_are_shared_in_row_order(self):
+        from array import array
+
+        path = self.spec.heightmap_path
+        # Four tiles with distinct rows and unsigned samples above 32767.
+        tiles = [40000 + i for i in (0,1,4,5,2,3,6,7,8,9,12,13,10,11,14,15)]
+        path.write_bytes(struct.pack('<II16H', 4, 2, *tiles))
+        terrain = MapTerrain(self.root, self.spec)
+        self.assertIsInstance(terrain.heights, array)
+        self.assertEqual(list(terrain.heights), list(range(40000, 40016)))
+        grid = np.asarray(terrain.heights)
+        self.assertTrue(np.shares_memory(grid, np.ascontiguousarray(terrain.heights, dtype=np.uint16)))
+        self.assertAlmostEqual(terrain.height(0., 0.), terrain.HEIGHT_MIN + 40010*terrain.HEIGHT/65535)
+
     def test_reuses_exact_arrays_and_obj_after_reopen(self):
         prepared, cold = self.cache.acquire(self.spec, self.terrain)
         path = prepared.path
@@ -92,6 +108,10 @@ class MapCacheTests(unittest.TestCase):
         self.addCleanup(reference.close)
         np.testing.assert_array_equal(scene.vertices, reference.vertices)
         np.testing.assert_array_equal(scene.destructibles[7].triangles, reference.destructibles[7].triangles)
+        self.assertEqual(scene.environment.water_height(1., 1.), 4.)
+        self.assertIsNone(scene.environment.water_height(3., 3.))
+        self.assertGreater(scene.environment.foliage_bonus((-1., 1., 1.), (2., 1., 1.), set()), 0.)
+        self.assertEqual(scene.environment.foliage_bonus((-1., 1., 1.), (2., 1., 1.), {7}), 0.)
         expected = [Path(name).read_bytes() for name in reference.prepare_map(self.terrain)]
         actual = [Path(name).read_bytes() for name in scene.prepare_map(self.terrain)]
         self.assertEqual(actual, expected)

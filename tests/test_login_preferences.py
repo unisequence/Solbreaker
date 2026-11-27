@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import unittest
 
 from solbreaker.connection import regions_config
+from solbreaker.control_preferences import restore_mouse_sensitivity
 from solbreaker.dava_scene import Archive
 from solbreaker.login_preferences import automatic_login_archive, configure_automatic_login
 from solbreaker.management import Settings, command
@@ -51,6 +52,35 @@ class LoginPreferencesTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 configure_automatic_login(root, False)
             self.assertEqual(primary.read_bytes(), device_archive())
+
+    def test_mouse_sensitivity_restores_saved_values_into_the_native_cache(self):
+        with TemporaryDirectory() as temporary:
+            documents = Path(temporary)
+            cache = documents/'DAVAProject/cache'
+            cache.mkdir(parents=True)
+            entries = {
+                'MouseSensitivity': '0.403109',
+                'MouseSensitivityInSnipperMode': '0.575907',
+                'ControlType': 'MouseKeyboard',
+            }
+            archive = b'KA\x01\x00' + struct.pack('<I', len(entries)) + b''.join(
+                string(key) + string(value) for key, value in entries.items())
+            main = cache/'game_options_local_options.dat'
+            backup = cache/'game_options_local_options.dat.bk'
+            main.write_bytes(archive)
+            backup.write_bytes(archive)
+            controls = documents/'solbreaker-controls.bin'
+            controls.write_bytes(struct.pack('<4sIIff', b'SBC1', 0x30, 0, .925259, .752891))
+
+            restore_mouse_sensitivity(documents)
+            expected = dict(entries, MouseSensitivity='0.925259', MouseSensitivityInSnipperMode='0.752891')
+            self.assertEqual(Archive(main.read_bytes()).load(), expected)
+            self.assertEqual(backup.read_bytes(), main.read_bytes())
+
+            modified = main.stat().st_mtime_ns
+            controls.write_bytes(struct.pack('<4sIIff', b'SBC1', 0x10, 0, float('nan'), .2))
+            restore_mouse_sensitivity(documents)
+            self.assertEqual(main.stat().st_mtime_ns, modified)
 
     def test_launcher_passes_both_checkbox_states_to_the_normal_client_command(self):
         for enabled in (False, True):

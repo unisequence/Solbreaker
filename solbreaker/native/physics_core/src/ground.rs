@@ -1,5 +1,5 @@
 //! Authoritative tracked-ground state and contact response.
-use super::{vector, World};
+use super::{vector, ContactClearance, World};
 use crate::bullet_api::{Contact, RayHit};
 use crate::support::fit as fit_plane;
 use serde_json::Value;
@@ -17,21 +17,11 @@ pub struct Heightfield {
 }
 
 impl Heightfield {
-    pub fn new(value: &Value) -> Result<Self, String> {
+    pub fn new(value: &Value, heights: &[u16]) -> Result<Self, String> {
         let size = value["size"].as_u64().ok_or("Missing terrain size")?;
         if size == 0 || size > 8192 {
             return Err("Invalid terrain size".into());
         }
-        let heights = value["heights"]
-            .as_array()
-            .ok_or("Missing terrain heights")?
-            .iter()
-            .map(|v| {
-                v.as_u64()
-                    .and_then(|v| u16::try_from(v).ok())
-                    .ok_or("Invalid height".to_string())
-            })
-            .collect::<Result<Vec<_>, _>>()?;
         if heights.len() != (size * size) as usize {
             return Err("Invalid terrain grid".into());
         }
@@ -40,7 +30,7 @@ impl Heightfield {
             return Err("Invalid terrain dimensions".into());
         }
         Ok(Self {
-            heights,
+            heights: heights.to_vec(),
             size: size as u32,
             origin: vector::<2>(&value["origin"])?,
             dimensions,
@@ -85,6 +75,7 @@ pub struct Configuration {
     slope: f64,
     support_span: f64,
     bounds: [f64; 4],
+    border_radius: f64,
     components: Vec<([f64; 3], [f64; 3])>,
     track_links: Vec<i32>,
 }
@@ -136,7 +127,7 @@ impl Configuration {
                 })
             })
             .collect::<Result<Vec<_>, String>>()?;
-        let components = value["components"]
+        let components: Vec<([f64; 3], [f64; 3])> = value["components"]
             .as_array()
             .ok_or("Missing component bounds")?
             .iter()
@@ -158,6 +149,9 @@ impl Configuration {
             p,
             weights,
             tracks,
+            border_radius: components.iter().map(|(low, high)| {
+                low[0].abs().max(high[0].abs()).hypot(low[2].abs().max(high[2].abs()))
+            }).fold(0., f64::max) + 1e-7,
             components,
             track_links,
             patch: value["patch"].as_f64().ok_or("Missing patch")?,
@@ -229,6 +223,8 @@ struct Support {
 #[derive(Clone)]
 pub struct State {
     configuration: Rc<Configuration>,
+    bounds_override: Option<[f64; 4]>,
+    circle: Option<[f64; 3]>,
     pose: Pose,
     road: Pose,
     motion: Motion,
@@ -245,9 +241,23 @@ pub struct State {
 }
 
 impl State {
+    pub fn set_limits(&mut self, bounds: Option<[f64; 4]>, circle: Option<[f64; 3]>) -> Result<(), String> {
+        if bounds.is_some_and(|[lx, lz, hx, hz]| lx >= hx || lz >= hz)
+            || circle.is_some_and(|c| c[2] <= 0.)
+        {
+            return Err("Invalid movement bounds".into());
+        }
+        self.bounds_override = bounds;
+        self.circle = circle;
+        self.bounds_pose = None;
+        Ok(())
+    }
+
     pub fn new(configuration: Configuration) -> Self {
         Self {
             configuration: Rc::new(configuration),
+            bounds_override: None,
+            circle: None,
             pose: Pose::default(),
             road: Pose::default(),
             motion: Motion::default(),
@@ -317,6 +327,7 @@ struct Movement<'a> {
     constants: [f64; 8],
     effort: [f64; 3],
     contact_cache: BTreeMap<[u64; 6], Vec<Contact>>,
+    contact_clearance: ContactClearance,
 }
 
 impl Movement<'_> {
@@ -324,7 +335,7 @@ impl Movement<'_> {
         self.constants[0]
     }
     fn terrain(&self, x: f64, z: f64) -> f64 {
-        self.world.heightfield.as_ref().unwrap().height(x, z)
+        self.world.heightfield.height(x, z)
     }
 
     fn ray(&self, start: [f64; 3], end: [f64; 3]) -> Result<RayHit, String> {
@@ -342,12 +353,23 @@ impl Movement<'_> {
 
     fn sample(&self, xs: &[f64], zs: &[f64], reference: Pose) -> Result<Vec<f64>, String> {
         let reach = self.constants[3];
+        // A vertical support ray can only raise the terrain sample on solid
+        // map geometry. The mesh index excludes terrain and breakable props.
+        // Empty columns skip both terrain-plane projections and Bullet queries.
+        let map_index = self.world.static_triangles.as_ref();
+        if let Some(tree) = map_index {
+            let range = |values: &[f64]| values.iter().fold(
+                (f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), &v| (lo.min(v), hi.max(v)));
+            let (lx, hx) = range(xs);
+            let (lz, hz) = range(zs);
+            if !tree.may_intersect([lx, f64::NEG_INFINITY, lz], [hx, f64::INFINITY, hz]) {
+                return Ok(xs.iter().zip(zs).map(|(&x, &z)| self.terrain(x, z)).collect());
+            }
+        }
         let mut ground = Vec::with_capacity(xs.len());
         let mut rays = Vec::with_capacity(xs.len() * 2);
         let mut raised = Vec::new();
         let mut tops = Vec::new();
-        let mut low = [f64::INFINITY; 3];
-        let mut high = [f64::NEG_INFINITY; 3];
         for (&x, &z) in xs.iter().zip(zs) {
             let terrain = self.terrain(x, z);
             let top = terrain.max(reference.y) + reach;
@@ -358,20 +380,6 @@ impl Movement<'_> {
             if start > top {
                 raised.push((ground.len() - 1, ([x, start, z], [x, terrain - 0.4, z])));
             }
-            for (i, a, b) in [(0, x, x), (1, terrain - 0.4, top.max(start)), (2, z, z)] {
-                low[i] = low[i].min(a - self.skin());
-                high[i] = high[i].max(b + self.skin());
-            }
-        }
-        let near = self.world.client.overlapping(low, high)?;
-        let trees: Vec<_> = near
-            .iter()
-            .filter_map(|row| self.world.original_ids.get(&row.body))
-            .filter(|body| self.world.solid_map(**body))
-            .map(|body| self.world.static_triangles.get(body))
-            .collect();
-        if trees.is_empty() {
-            return Ok(ground);
         }
         rays.extend(raised.iter().map(|row| row.1));
         let mut selected = Vec::with_capacity(rays.len());
@@ -379,16 +387,12 @@ impl Movement<'_> {
         // A ray can only modify the sampled height if its closest hit is a
         // solid map body. Keep the complete Bullet query for every ray that
         // could reach such a body, including any geometry that occludes it.
-        let can_filter = trees.iter().all(Option::is_some);
         for (index, ray) in rays.into_iter().enumerate() {
             let (start, end) = ray;
-            if can_filter {
+            if let Some(tree) = map_index {
                 let bottom = std::array::from_fn(|axis| start[axis].min(end[axis]));
                 let top = std::array::from_fn(|axis| start[axis].max(end[axis]));
-                if trees
-                    .iter()
-                    .flatten()
-                    .all(|tree| !tree.may_intersect(bottom, top))
+                if !tree.may_intersect(bottom, top)
                 {
                     continue;
                 }
@@ -460,14 +464,18 @@ impl Movement<'_> {
     }
 
     fn contacts(&mut self, pose: Pose) -> Result<Vec<Contact>, String> {
-        let original = self.world.entities[&self.entity];
-        self.world
-            .set_pose(original, position(pose), quaternion(pose), None)?;
-        let key = [pose.x, pose.y, pose.z, pose.yaw, pose.pitch, pose.roll].map(f64::to_bits);
+        let coordinates = [pose.x, pose.y, pose.z, pose.yaw, pose.pitch, pose.roll];
+        if self.contact_clearance.covers(&coordinates) {
+            return Ok(Vec::new());
+        }
+        let key = coordinates.map(f64::to_bits);
         let raw = if let Some(points) = self.contact_cache.get(&key) {
             points.clone()
         } else {
-            let points = self.world.contact_points(self.entity, self.skin(), Some(key))?;
+            let original = self.world.entities[&self.entity];
+            self.world.set_pose(original, position(pose), quaternion(pose))?;
+            let points = self.world.contact_points(self.entity, self.skin(), Some(key),
+                Some(&mut self.contact_clearance))?;
             if self.contact_cache.len() < 128 {
                 self.contact_cache.insert(key, points.clone());
             }
@@ -475,6 +483,13 @@ impl Movement<'_> {
         };
         let mut result = Vec::new();
         for point in raw {
+            if let Some([cx, cz, radius]) = self.world.collision_zone {
+                if self.world.bodies.contains_key(&point.body_b)
+                    && ((pose.x - cx).hypot(pose.z - cz) <= radius) != self.world.inside_zone.contains(&point.body_b)
+                {
+                    continue;
+                }
+            }
             let map = self.world.map_bodies.contains(&point.body_b);
             if point.distance >= self.skin()
                 || (map && point.normal[1] > 0.65 && point.distance > -0.025)
@@ -519,8 +534,19 @@ impl Movement<'_> {
     }
 
     fn inside(&self, pose: Pose) -> bool {
+        if let Some([cx, cz, radius]) = self.state.circle {
+            if (pose.x - cx).hypot(pose.z - cz) > radius + 1e-9 {
+                return false;
+            }
+        }
+        let [lx, lz, hx, hz] = self.state.bounds_override.unwrap_or(self.state.configuration.bounds);
+        let margin = self.state.configuration.border_radius + self.skin();
+        if pose.x >= lx + margin && pose.x <= hx - margin
+            && pose.z >= lz + margin && pose.z <= hz - margin
+        {
+            return true;
+        }
         let matrix = rotation(pose);
-        let [lx, lz, hx, hz] = self.state.configuration.bounds;
         self.state
             .configuration
             .components
@@ -552,8 +578,8 @@ impl Movement<'_> {
             let horizontal = (candidate.x - previous.x).hypot(candidate.z - previous.z);
             let layout = &self.state.configuration;
             let span = layout.support_span.min(
-                self.world.heightfield.as_ref().unwrap().dimensions[0]
-                    / self.world.heightfield.as_ref().unwrap().size as f64,
+                self.world.heightfield.dimensions[0]
+                    / self.world.heightfield.size as f64,
             );
             if rise > layout.slope.tan() * horizontal.max(span * 0.5) {
                 return Ok((false, Vec::new()));
@@ -1069,7 +1095,7 @@ impl Movement<'_> {
         let prior = self.contacts(previous)?;
         let sensor = self.world.entities[&self.entity];
         self.world
-            .set_pose(sensor, position(candidate), quaternion(candidate), None)?;
+            .set_pose(sensor, position(candidate), quaternion(candidate))?;
         if points.iter().all(|point| {
             prior.iter().any(|old| {
                 old.body_b == point.body_b
@@ -1690,7 +1716,6 @@ impl Movement<'_> {
                 self.world.entities[&self.entity],
                 position(pose),
                 quaternion(pose),
-                None,
             )?;
         }
         if let Some([nx, nz, closing, speed]) = wall_hit {
@@ -1768,6 +1793,7 @@ pub fn step(
         constants: input.constants,
         effort: input.effort,
         contact_cache: BTreeMap::new(),
+        contact_clearance: ContactClearance::Unknown,
     };
     let outcome = movement.run(input, seed)?;
     Ok((movement.state, outcome))
@@ -1807,5 +1833,22 @@ impl State {
             has_latch: u32::from(self.latch.is_some()),
             latch: self.latch.unwrap_or([0.; 4]),
         }
+    }
+}
+
+#[cfg(test)]
+mod heightfield_tests {
+    use super::Heightfield;
+    use serde_json::json;
+
+    #[test]
+    fn attached_samples_are_validated_and_owned_by_the_arena() {
+        let grid = json!({"size": 2, "origin": [0., 0.], "dimensions": [10., 10.],
+            "vertical": [0., 20.]});
+        let mut samples = [0, 1, 65534, 65535];
+        assert!(Heightfield::new(&grid, &samples[..3]).is_err());
+        let terrain = Heightfield::new(&grid, &samples).unwrap();
+        samples.fill(42);
+        assert_eq!(terrain.heights, [0, 1, 65534, 65535]);
     }
 }

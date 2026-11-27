@@ -3,6 +3,7 @@
 from dataclasses import dataclass, field
 import math
 
+from .arena_bounds import CircularZone
 from .bot_ai import TrainingBot
 from .consumables import GRAVITY_JUMP_SPEC
 from .mad_games import ACCELERATOR, HIGH_OCTANE
@@ -11,6 +12,7 @@ from .mad_games import ACCELERATOR, HIGH_OCTANE
 MAP_KEY = 'solbreaker_proving_ground'
 PVP_CENTER = (300., -295.)
 PVP_RADIUS = 125.
+in_pvp = CircularZone(*PVP_CENTER, PVP_RADIUS)
 SERVICE_PUMPS = ((-91., -49.), (69., -50.))
 LOOP_CENTER = (357., 275.)
 LOOP_RADIUS = 18.
@@ -20,11 +22,6 @@ ABILITIES = (GRAVITY_JUMP_SPEC, ACCELERATOR, HIGH_OCTANE)
 def loop_east(angle):
     fraction = angle / math.tau
     return LOOP_CENTER[0] + 7. * (2. * fraction * fraction * (3. - 2. * fraction) - 1.)
-
-
-def in_pvp(position):
-    x, _, z = position
-    return math.hypot(x - PVP_CENTER[0], z - PVP_CENTER[1]) <= PVP_RADIUS
 
 
 def in_range(position):

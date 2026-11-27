@@ -910,8 +910,8 @@ def run(args):
     os.environ['SOLBREAKER_ARENA_OWNERS'] = '1' if args.engine == 'owner' else '0'
     if args.engine == 'owner':
         defaults = {
-            'SIM_BACKEND': 'rust', 'DYNAMIC_BACKEND': 'rapier', 'OWNER_IPC': 'socket',
-            'SIM_WORKERS': '0', 'RAPIER_PARALLEL_DRIVE': '1', 'RAPIER_QUERIES': 'bullet',
+            'SIM_BACKEND': 'rust', 'OWNER_IPC': 'socket',
+            'SIM_WORKERS': '0',
             'DRIVE_PREFIX': '1', 'ROTATION_PREFIX': '1', 'SUPPORT_PIPELINE': '1',
             'REPLICA_PIPELINE': '1', 'GROUND_RAY_BATCH': '1',
         }
@@ -927,7 +927,7 @@ def run(args):
               'mode': f'{args.engine}_udp_loopback_scripted_clients', 'target_step_hz': STEP_HZ,
               'requested_seconds': args.seconds, 'warmup_seconds': args.warmup, 'vehicle': args.vehicle,
               'cold_map_metadata': args.cold, 'input_pattern': args.input_pattern, 'diagnostics_enabled': args.diagnostic_dir is not None,
-              'dynamic_backend': os.environ.get('SOLBREAKER_DYNAMIC_BACKEND', 'bullet'),
+              'dynamic_backend': 'bullet',
               'complete': False, 'runs': []}
     if 'solo' in scenarios and any(tank not in (2, None) for tank in tanks):
         raise ValueError('Solo benchmark uses exactly two tanks. Select bots or players for denser battles')

@@ -85,18 +85,6 @@ class LocalServer:
         self.arena_owners = owner_setting == '1'
         from .owner_channel import configured_ipc
         self.owner_ipc = configured_ipc()
-        self.dynamic_backend = os.environ.get('SOLBREAKER_DYNAMIC_BACKEND', 'bullet')
-        if self.dynamic_backend not in ('bullet', 'rapier'):
-            raise ValueError('SOLBREAKER_DYNAMIC_BACKEND must be bullet or rapier')
-        parallel = os.environ.get('SOLBREAKER_RAPIER_PARALLEL_DRIVE', '0')
-        if parallel not in ('0', '1'):
-            raise ValueError('SOLBREAKER_RAPIER_PARALLEL_DRIVE must be 0 or 1')
-        self.rapier_parallel_drive = parallel == '1'
-        self.rapier_queries = os.environ.get('SOLBREAKER_RAPIER_QUERIES', 'bullet')
-        if self.rapier_queries not in ('bullet', 'shadow', 'rapier'):
-            raise ValueError('SOLBREAKER_RAPIER_QUERIES must be bullet, shadow or rapier')
-        if self.rapier_queries != 'bullet' and self.dynamic_backend != 'rapier':
-            raise ValueError('SOLBREAKER_RAPIER_QUERIES requires SOLBREAKER_DYNAMIC_BACKEND=rapier')
         import yaml
         regions = yaml.safe_load((lab / "regions.yaml").read_bytes())
         regions = regions_config(regions,self.network)
@@ -149,10 +137,10 @@ class LocalServer:
                        'duration_ms', 'simulation_steps', 'dropped_seconds', 'owner', 'winner',
                        'finish_reason', 'kind', 'target', 'actor', 'step', 'operation',
                        'cache', 'cache_wait_ms', 'cache_bytes', 'cache_objects', 'cache_ms', 'cache_cpu_ms',
-                       'geometry_ms', 'scene_ms', 'collision_ms', 'physics_ms', 'visibility_ms',
-                       'rapier_ms', 'navigation_ms', 'roster_ms', 'arena_ms', 'owner_overhead_ms',
-                       'static_bodies', 'vehicle_bodies', 'visibility_shapes', 'collision_cpu_ms',
-                       'physics_cpu_ms', 'visibility_cpu_ms', 'rapier_cpu_ms', 'rapier_worker_cpu_ms',
+                       'geometry_ms', 'scene_ms', 'collision_ms', 'physics_ms',
+                       'navigation_ms', 'roster_ms', 'arena_ms', 'owner_overhead_ms',
+                       'static_bodies', 'vehicle_bodies', 'collision_cpu_ms',
+                       'physics_cpu_ms',
                        'native_ground_ms', 'native_ground_cpu_ms', 'navigation_cpu_ms',
                        'nav_grid_ms', 'nav_landmarks_ms', 'nav_routes_ms',
                        'nav_cache_hits', 'nav_cache_misses'}
@@ -220,9 +208,7 @@ class LocalServer:
                     "arena_owners": getattr(self, "arena_owners", None),
                     "sandbox": getattr(self, "sandbox", False),
                     "owner_ipc": getattr(self, "owner_ipc", 'queue'),
-                    "dynamic_backend": getattr(self, "dynamic_backend", None),
-                    "rapier_parallel_drive": getattr(self, "rapier_parallel_drive", False),
-                    "rapier_queries": getattr(self, "rapier_queries", 'bullet'),
+                    "dynamic_backend": "bullet",
                     "developer_mode": getattr(self, "developer_mode", False),
                     "diagnostic_status": dict(queued_records=self.diagnostics.queue.qsize(),
                         queued_peak_records=self.diagnostics.peak_queue.qsize(),

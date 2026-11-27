@@ -662,7 +662,7 @@ def prepare_world(geometry):
     return CollisionWorld(geometry.assets, geometry.terrain, vehicles=geometry.poses,
         vehicle_assets=geometry.vehicle_assets, experimental_6dof=geometry.experimental_6dof,
         experimental_ground_impacts=False, wall_trampoline=geometry.wall_trampoline,
-        sprung_tracks=geometry.sprung_tracks, gravity=geometry.gravity, dynamic_backend='bullet')
+        sprung_tracks=geometry.sprung_tracks, gravity=geometry.gravity)
 
 
 class TimelineSimulation:
@@ -959,7 +959,8 @@ class TimelineSimulation:
         self.gun.tick(self.STEP, pose.position, pose.yaw, pose.pitch, pose.roll)
         loadout = self.snapshot.gun_loadout
         self.gun.update_dispersion(loadout.aiming, previous, pose, previous_turret, self.STEP,
-                                   loadout.aiming_time_factor, previous_pitch=previous_pitch)
+                                   loadout.aiming_time_factor, previous_pitch=previous_pitch,
+                                   shot_age=None if self.last_shot_at is None else self.time+self.STEP-self.last_shot_at)
         self.world.set_turret(self.gun.yaw, self.entity, self.gun.pitch)
         self.steps += 1
         if self.world.destruction_events:

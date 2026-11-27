@@ -37,7 +37,7 @@ def _finite(value, name):
 
 @dataclass(frozen=True)
 class TrackFallConfig:
-    free_height: float = 1.5     # m; drops up to this never damage
+    free_height: float = 2.5     # m; drops up to this never damage
     break_height: float = 7.    # m; height term reaches 1 (needs full speed)
     min_speed: float = 3.5       # m/s; at or below this the touchdown is soft
     full_speed: float = 10.      # m/s; speed term saturates (~5.1 m free fall)

@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.4.0-rc.1
+
+- Each arena runs on one Bullet world. The Rust track controller uses the
+  same terrain and contacts as airborne tanks. Improved traction, landings
+  and recovery after rollovers.
+- Fixed spotting in Big Boss and feedback for blind hits. Trees and bushes
+  contribute to concealment. Aim time and dispersion match the server.
+- Water starts a ten-second drowning countdown when it covers the hull.
+  An on-screen warning shows the time remaining before automatic recovery.
+- Control settings persist across restarts. Spend Free XP to research and
+  install a gun and its required turret together.
+- Fixed discovery on Linux adapters named `radminvpn0` and similar.
+
 ## 0.3.2
 
 - On Windows, a fully copied Solbreaker client can start and provide resources

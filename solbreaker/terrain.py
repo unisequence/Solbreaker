@@ -1,4 +1,5 @@
 """Height lookup from validated installed map terrain for the pinned build."""
+from array import array
 import math
 import struct
 from pathlib import Path
@@ -28,14 +29,14 @@ class MapTerrain:
         if (self.size < 2 or tile < 1 or self.size % tile
                 or len(raw) != 8 + self.size ** 2 * 2):
             raise ValueError(f"Unexpected {self.map_spec.key} heightmap layout")
-        self.heights = [0] * (self.size ** 2)
-        offset = 8
-        for ty in range(0, self.size, tile):
-            for tx in range(0, self.size, tile):
-                for y in range(tile):
-                    at = (ty + y) * self.size + tx
-                    self.heights[at:at + tile] = struct.unpack_from(f"<{tile}H", raw, offset)
-                    offset += tile * 2
+        # File order is tile row/column followed by the sample row/column.
+        # Store the decoded grid packed; native views can share its buffer.
+        import numpy as np
+        across = self.size // tile
+        tiles = np.frombuffer(raw, dtype='<u2', offset=8).reshape(across, across, tile, tile)
+        rows = tiles.transpose(0, 2, 1, 3)
+        self.heights = array('H')
+        self.heights.frombytes(rows.astype(np.uint16, copy=False).tobytes())
         # MapSettings/TerrainDataComponent identifies this companion. The
         # native MKM reader accepts four 2-bit codes per byte, low bits first.
         # Codes remain evidence-only; their drive-surface meaning is unproved.

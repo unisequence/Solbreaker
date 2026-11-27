@@ -124,3 +124,50 @@ class LoadoutPricesTests(unittest.TestCase):
             self.assertEqual(garage.loadout(1, 1)['unlocked'], 1)
             self.assertEqual(garage.loadout(1, 1)['devices'][0], 'calibrated')
             self.assertEqual(store.get(1).progress['credits'], 200001 - equipment_slot_credits(8, 0))
+
+    def test_paired_module_research_rolls_back_and_charges_once(self):
+        temporary = TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        store = AccountStore(Path(temporary.name))
+        self.addCleanup(store.close)
+        original = (b'\x01\x01' + bytes(13)).hex()
+        upgraded = (b'\x01\x01' + bytes(8) + b'\x02\0\x03\0\0').hex()
+        with store.db:
+            store.db.execute('UPDATE accounts SET inventory=?, progress=? WHERE id=1', (
+                json.dumps(dict(descriptor=original, shells=[10, 1])),
+                json.dumps(dict(store.get(1).progress, credits=70))))
+        garage = GarageStore(store)
+        garage.ensure(1)
+        with store.db:
+            store.db.execute('UPDATE garage_profiles SET free_xp=29 WHERE account_id=1')
+        turret, gun = 0x203, 0x304
+
+        def equip():
+            return garage.research_and_install(
+                1, 1, dict(descriptor=upgraded, shells=[10, 1]),
+                configuration={'turret': 'new', 'gun': 'new'},
+                item_cd=gun, xp_cost=20, prerequisites=(turret,),
+                prior_research=((turret, 10, (0x101,)),), credits_cost=80,
+                expected_descriptor=original, operation_id='paired')
+
+        before = garage.snapshot(1)
+        with self.assertRaisesRegex(ValueError, 'Not enough XP'):
+            equip()
+        self.assertEqual(garage.snapshot(1), before)
+        garage.grant_xp(1, 1)
+        before = garage.snapshot(1)
+        with self.assertRaisesRegex(ValueError, 'Not enough credits'):
+            equip()
+        self.assertEqual(garage.snapshot(1), before)
+        with store.db:
+            store.db.execute('UPDATE accounts SET progress=? WHERE id=1',
+                             (json.dumps(dict(store.get(1).progress, credits=90)),))
+        revision = store.get(1).progress['revision']
+        result = equip()
+        self.assertEqual(result['free_xp'], 0)
+        self.assertEqual(store.get(1).progress['credits'], 10)
+        self.assertEqual(store.get(1).progress['revision'], revision + 1)
+        self.assertEqual(result['vehicles'][0]['descriptor'], upgraded)
+        self.assertTrue({turret, gun} <= set(result['researched']))
+        self.assertEqual(equip(), result)
+        self.assertEqual(store.get(1).progress['credits'], 10)

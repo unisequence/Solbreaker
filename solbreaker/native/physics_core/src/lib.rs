@@ -1,6 +1,7 @@
 //! Stateful native physics and geometry for the experimental server branch.
 mod bullet_api;
 mod ground;
+mod plugin;
 mod static_triangles;
 mod support;
 
@@ -8,12 +9,11 @@ use bullet_api::{Client, Contact};
 use serde_json::{json, Value};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
-use std::ffi::{c_char, c_void, CStr, CString};
+use std::ffi::{c_char, c_void, CStr};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use tfs_sim_core::{DriveInput, Motion, Pose, Terrain};
 
-const ZERO: [f64; 3] = [0.; 3];
-const IDENTITY: [f64; 4] = [0., 0., 0., 1.];
+use std::sync::{Arc, RwLockReadGuard};
 thread_local! { static CREATE_ERROR: RefCell<String> = const { RefCell::new(String::new()) }; }
 
 #[repr(C)]
@@ -38,6 +38,7 @@ pub struct StepInput {
     carrying_supported: u32,
     supports: [CachedSupport; 16],
     latch: [f64; 4],
+    turret_yaw: f64,
 }
 
 #[repr(C)]
@@ -72,76 +73,9 @@ pub struct StepOutput {
     latch: [f64; 4],
 }
 
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct SensorState {
-    entity: u32,
-    pose: Pose,
-    turret: f64,
-}
-
 #[no_mangle]
 pub extern "C" fn solbreaker_physics_abi_sizes() -> u64 {
-    ((std::mem::size_of::<StepInput>() as u64) << 32)
-        | ((std::mem::size_of::<StepOutput>() as u64) << 16)
-        | std::mem::size_of::<SensorState>() as u64
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn solbreaker_physics_sync(
-    handle: *mut c_void,
-    states: *const SensorState,
-    count: usize,
-) -> i32 {
-    if handle.is_null() || states.is_null() || !states.is_aligned() || count > 1024 {
-        return -1;
-    }
-    let world = &mut *handle.cast::<World>();
-    if world.poisoned {
-        return -2;
-    }
-    let states = std::slice::from_raw_parts(states, count);
-    if states.iter().any(|row| {
-        !world.entities.contains_key(&row.entity)
-            || ![
-                row.pose.x,
-                row.pose.y,
-                row.pose.z,
-                row.pose.yaw,
-                row.pose.pitch,
-                row.pose.roll,
-                row.turret,
-            ]
-            .iter()
-            .all(|v| v.is_finite())
-    }) {
-        world.error = "Invalid native sensor state".into();
-        return -3;
-    }
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        for row in states {
-            world.set_pose(
-                world.entities[&row.entity],
-                [row.pose.x, row.pose.y, row.pose.z],
-                ground::quaternion(row.pose),
-                Some(row.turret),
-            )?;
-        }
-        Ok::<_, String>(())
-    }));
-    match result {
-        Ok(Ok(())) => 0,
-        Ok(Err(error)) => {
-            world.error = error;
-            world.poisoned = true;
-            -3
-        }
-        Err(_) => {
-            world.error = "Panic synchronizing physics".into();
-            world.poisoned = true;
-            -4
-        }
-    }
+    ((std::mem::size_of::<StepInput>() as u64) << 32) | std::mem::size_of::<StepOutput>() as u64
 }
 
 impl StepInput {
@@ -162,7 +96,8 @@ impl StepInput {
             .chain(&self.displacement)
             .chain(&self.constants)
             .all(|v| v.is_finite());
-        if self.abi_version != 2
+        if self.abi_version != 3
+            || !self.turret_yaw.is_finite()
             || !finite
             || self.constants[..7].iter().any(|v| *v <= 0.)
             || self.constants[7] < 0.
@@ -250,10 +185,30 @@ struct StaticPairCache {
 const STATIC_PAIR_ENTRIES: usize = 512;
 const STATIC_PAIR_ROWS: usize = 4096;
 
+// During one synchronous drive only the probed hull changes transform. If
+// its expanded box contains no obstacles, nearby probes need no new SDK call.
+#[derive(Default)]
+enum ContactClearance {
+    #[default]
+    Unknown,
+    Occupied,
+    Empty { pose: [f64; 6], radius: f64 },
+}
+
+impl ContactClearance {
+    const PADDING: f64 = 0.75;
+
+    fn covers(&self, probe: &[f64; 6]) -> bool {
+        let Self::Empty { pose, radius } = self else { return false };
+        let displacement = (0..3).map(|i| (pose[i] - probe[i]).abs()).fold(0., f64::max);
+        // Arc length bounds the displacement under each Euler rotation.
+        let angle: f64 = (3..6).map(|i| (pose[i] - probe[i]).abs()).sum();
+        displacement + radius * angle < Self::PADDING
+    }
+}
+
 struct Body {
-    native_id: i32,
     links: i32,
-    turret: Option<i32>,
     turret_bits: std::cell::Cell<u64>,
     static_contacts: std::cell::RefCell<StaticPairCache>,
 }
@@ -261,19 +216,47 @@ struct Body {
 struct World {
     client: Client,
     bodies: BTreeMap<i32, Body>,
-    original_ids: BTreeMap<i32, i32>,
+    query_bodies: BTreeSet<i32>,
+    static_mask: i32,
+    disabled_during_step: Vec<i32>,
     entities: BTreeMap<u32, i32>,
     map_bodies: BTreeSet<i32>,
     solid_map_bodies: BTreeSet<i32>,
-    static_triangles: BTreeMap<i32, static_triangles::Tree>,
+    collision_zone: Option<[f64; 3]>,
+    inside_zone: BTreeSet<i32>,
+    static_triangles: Option<static_triangles::Tree>,
+    last_probe: std::cell::Cell<Option<(i32, [f64; 3], [f64; 4])>>,
     terrain_bodies: BTreeSet<i32>,
     breakables: BTreeMap<String, Vec<i32>>,
+    parked_props: BTreeMap<String, Vec<i32>>,
     error: String,
     poisoned: bool,
-    heightfield: Option<ground::Heightfield>,
+    heightfield: ground::Heightfield,
     ground: BTreeMap<u32, ground::State>,
     contact_events: Vec<(u32, tfs_sim_core::Pose, Vec<Contact>)>,
     destroyed_events: Vec<(String, f64, f64)>,
+}
+
+struct WorldHandle {
+    session: Arc<plugin::Session>,
+    world: World,
+}
+
+impl WorldHandle {
+    fn access(&mut self) -> Result<(&mut World, RwLockReadGuard<'_, bool>), ()> {
+        match self.session.guard() {
+            Ok(guard) => Ok((&mut self.world, guard)),
+            Err(reason) => {
+                self.world.error = reason.into();
+                Err(())
+            }
+        }
+    }
+}
+
+fn integer(value: &Value, field: &str) -> Result<i32, String> {
+    value[field].as_i64().and_then(|v| i32::try_from(v).ok())
+        .filter(|v| *v >= 0).ok_or_else(|| format!("Invalid {field}"))
 }
 
 fn vector<const N: usize>(value: &Value) -> Result<[f64; N], String> {
@@ -292,50 +275,50 @@ fn vector<const N: usize>(value: &Value) -> Result<[f64; N], String> {
 }
 
 impl World {
-    fn new(fixture: &Value, library: &str) -> Result<Self, String> {
+    fn new(fixture: &Value, library: &str, handle: bullet_api::Handle, heights: &[u16]) -> Result<Self, String> {
         let mut world = Self {
-            client: Client::open(library)?,
+            client: Client::borrow(library, handle, integer(fixture, "static_group")?)?,
             bodies: BTreeMap::new(),
-            original_ids: BTreeMap::new(),
+            query_bodies: BTreeSet::new(),
+            static_mask: integer(fixture, "static_mask")?,
+            disabled_during_step: Vec::new(),
             entities: BTreeMap::new(),
             map_bodies: BTreeSet::new(),
             solid_map_bodies: BTreeSet::new(),
-            static_triangles: BTreeMap::new(),
+            collision_zone: fixture.get("zone").map(vector::<3>).transpose()?,
+            inside_zone: BTreeSet::new(),
+            static_triangles: None,
+            last_probe: std::cell::Cell::new(None),
             terrain_bodies: BTreeSet::new(),
             breakables: BTreeMap::new(),
+            parked_props: BTreeMap::new(),
             error: String::new(),
             poisoned: false,
-            heightfield: fixture
-                .get("terrain")
-                .map(ground::Heightfield::new)
-                .transpose()?,
+            heightfield: ground::Heightfield::new(&fixture["terrain"], heights)?,
             ground: BTreeMap::new(),
             contact_events: Vec::new(),
             destroyed_events: Vec::new(),
         };
+        let mut static_paths = Some(Vec::new());
         for entry in fixture["static"]
             .as_array()
             .ok_or("Missing static geometry")?
         {
-            let shape = world.shape(entry, true)?;
-            let body = world.create_body(shape, &[], ZERO, IDENTITY)?;
-            unsafe {
-                let command = (world.client.api.filter_init)(world.client.handle);
-                (world.client.api.filter_mask)(command, body.native_id, -1, 1, -1);
-                world.client.execute(command)?;
+            let original = integer(entry, "body")?;
+            if !world.query_bodies.insert(original) {
+                return Err("Duplicate static body".into());
             }
-            let original = entry["body"].as_i64().ok_or("Missing static body id")? as i32;
-            world.original_ids.insert(body.native_id, original);
             let kind = entry["kind"].as_str().ok_or("Missing geometry kind")?;
-            if kind == "map" && entry.get("center").is_none() {
-                if let Some(tree) = entry["path"]
-                    .as_str()
-                    .and_then(|path| static_triangles::Tree::from_obj(std::path::Path::new(path)))
-                {
-                    world.static_triangles.insert(original, tree);
+            if kind != "terrain" && kind != "breakable" {
+                match (kind, entry.get("center"), entry["path"].as_str()) {
+                    ("map", None, Some(path)) => {
+                        if let Some(paths) = &mut static_paths {
+                            paths.push(std::path::Path::new(path));
+                        }
+                    }
+                    _ => static_paths = None,
                 }
             }
-
             if kind == "terrain" {
                 world.terrain_bodies.insert(original);
             } else {
@@ -345,17 +328,11 @@ impl World {
                 let key = entry["key"].to_string();
                 world.breakables.entry(key).or_default().push(original);
             }
-            world.bodies.insert(original, body);
         }
+        world.static_triangles = static_paths.and_then(|paths| static_triangles::Tree::from_paths(paths.into_iter()));
         world.solid_map_bodies = world.map_bodies.clone();
         for body in world.breakables.values().flatten() {
             world.solid_map_bodies.remove(body);
-        }
-        // Match the query world's static broad-phase preparation.
-        for _ in 0..10 {
-            world
-                .client
-                .execute(unsafe { (world.client.api.detect)(world.client.handle) })?;
         }
         for entry in fixture["entities"]
             .as_array()
@@ -368,57 +345,21 @@ impl World {
 
     fn install_vehicle(&mut self, entry: &Value) -> Result<(), String> {
         let entity = entry["id"].as_u64().ok_or("Missing entity id")? as u32;
-        let original = entry["body"].as_i64().ok_or("Missing vehicle body id")? as i32;
+        let original = integer(entry, "body")?;
         let ground = entry.get("ground").map(ground::Configuration::new).transpose()?;
-        let parts = entry["parts"].as_array().ok_or("Missing vehicle parts")?;
-        let hull = parts
-            .iter()
-            .position(|part| part["name"] == "hull")
-            .ok_or("Missing hull part")?;
-        let shape = self.shape(&parts[hull], false)?;
-        let mut links = Vec::new();
-        let mut turret = None;
-        for (index, part) in parts.iter().enumerate() {
-            if index == hull {
-                continue;
-            }
-            let shape = self.shape(part, false)?;
-            let moving = part["turret"].as_bool().unwrap_or(false);
-            if moving {
-                turret = Some(links.len() as i32);
-            }
-            links.push((shape, vector::<3>(&part["offset"])?, moving));
+        let body = Body {
+            links: integer(entry, "links")?,
+            turret_bits: std::cell::Cell::new(0),
+            static_contacts: RefCell::new(StaticPairCache::default()),
+        };
+        if self.query_bodies.contains(&original) || self.bodies.contains_key(&original) {
+            return Err("Body already registered in arena".into());
         }
-        let mut body = self.create_body(
-            shape,
-            &links,
-            vector::<3>(&entry["position"])?,
-            vector::<4>(&entry["orientation"])?,
-        )?;
-        body.turret = turret;
-        unsafe {
-            let command = (self.client.api.filter_init)(self.client.handle);
-            for link in -1..body.links {
-                (self.client.api.filter_mask)(command, body.native_id, link, 2, -1);
-            }
-            self.client.execute(command)?;
-            let command = (self.client.api.dynamics_init)(self.client.handle);
-            (self.client.api.collision_margin)(command, body.native_id, 0.001);
-            self.client.execute(command)?;
+        if let Some(old) = self.entities.insert(entity, original) {
+            self.query_bodies.remove(&old);
+            self.bodies.remove(&old);
         }
-        if let Some(&old_id) = self.entities.get(&entity) {
-            let old = &self.bodies[&old_id];
-            if let Err(error) = self.client.execute(unsafe {
-                (self.client.api.remove)(self.client.handle, old.native_id)
-            }) {
-                self.poisoned = true;
-                return Err(error);
-            }
-            self.original_ids.remove(&old.native_id);
-            self.bodies.remove(&old_id);
-        }
-        self.original_ids.insert(body.native_id, original);
-        self.entities.insert(entity, original);
+        self.query_bodies.insert(original);
         self.bodies.insert(original, body);
         if let Some(config) = ground {
             self.ground.insert(entity, ground::State::new(config));
@@ -426,106 +367,20 @@ impl World {
         Ok(())
     }
 
-    fn shape(&self, value: &Value, concave: bool) -> Result<i32, String> {
-        unsafe {
-            let command = (self.client.api.shape_init)(self.client.handle);
-            let kind = value["kind"].as_str().unwrap_or("mesh");
-            let index = match kind {
-                "mesh" | "map" | "terrain" | "breakable" | "prism" => {
-                    let path = CString::new(value["path"].as_str().ok_or("Missing mesh path")?)
-                        .map_err(|error| error.to_string())?;
-                    (self.client.api.mesh)(command, path.as_ptr(), [1., 1., 1.].as_ptr())
-                }
-                "box" => (self.client.api.box_shape)(
-                    command,
-                    vector::<3>(&value["half_extents"])?.as_ptr(),
-                ),
-                "cylinder" => (self.client.api.cylinder)(
-                    command,
-                    value["radius"].as_f64().ok_or("Missing cylinder radius")?,
-                    value["length"].as_f64().ok_or("Missing cylinder length")?,
-                ),
-                _ => return Err("Unsupported query shape".into()),
-            };
-            if concave {
-                (self.client.api.shape_flags)(command, index, 1);
-            }
-            if let Some(center) = value.get("center") {
-                (self.client.api.shape_transform)(
-                    command,
-                    index,
-                    vector::<3>(center)?.as_ptr(),
-                    IDENTITY.as_ptr(),
-                );
-            }
-            let status = self.client.execute(command)?;
-            let shape = (self.client.api.shape_id)(status);
-            if shape < 0 {
-                return Err("Bullet shape creation failed".into());
-            }
-            Ok(shape)
-        }
-    }
-
-    fn create_body(
-        &self,
-        shape: i32,
-        links: &[(i32, [f64; 3], bool)],
-        position: [f64; 3],
-        orientation: [f64; 4],
-    ) -> Result<Body, String> {
-        unsafe {
-            let command = (self.client.api.body_init)(self.client.handle);
-            (self.client.api.body_base)(
-                command,
-                0.,
-                shape,
-                -1,
-                position.as_ptr(),
-                orientation.as_ptr(),
-                ZERO.as_ptr(),
-                IDENTITY.as_ptr(),
-            );
-            for (shape, offset, turret) in links {
-                (self.client.api.body_link)(
-                    command,
-                    0.,
-                    *shape as f64,
-                    -1.,
-                    offset.as_ptr(),
-                    IDENTITY.as_ptr(),
-                    ZERO.as_ptr(),
-                    IDENTITY.as_ptr(),
-                    0,
-                    if *turret { 0 } else { 4 },
-                    [0., 1., 0.].as_ptr(),
-                );
-            }
-            let status = self.client.execute(command)?;
-            let native_id = (self.client.api.body_id)(status);
-            if native_id < 0 {
-                return Err("Bullet body creation failed".into());
-            }
-            Ok(Body {
-                native_id,
-                links: links.len() as i32,
-                turret: None,
-                turret_bits: std::cell::Cell::new(0),
-                static_contacts: std::cell::RefCell::new(StaticPairCache::default()),
-            })
-        }
-    }
-
     fn set_pose(
         &self,
         original: i32,
         position: [f64; 3],
         rotation: [f64; 4],
-        turret: Option<f64>,
     ) -> Result<(), String> {
-        let body = self.bodies.get(&original).ok_or("Unknown body")?;
+        // Only reuse a transform within one synchronous step. Python can
+        // relocate the same body between steps, including flight handoffs.
+        let probe = Some((original, position, rotation));
+        if self.last_probe.get() == probe {
+            return Ok(());
+        }
         unsafe {
-            let command = (self.client.api.pose_init)(self.client.handle, body.native_id);
+            let command = (self.client.api.pose_init)(self.client.handle, original);
             (self.client.api.position)(command, position[0], position[1], position[2]);
             (self.client.api.orientation)(
                 command,
@@ -534,14 +389,9 @@ impl World {
                 rotation[2],
                 rotation[3],
             );
-            if let (Some(joint), Some(angle)) = (body.turret, turret) {
-                (self.client.api.joint_position)(self.client.handle, command, joint, angle);
-            }
             self.client.execute(command)?;
         }
-        if let (Some(_), Some(angle)) = (body.turret, turret) {
-            body.turret_bits.set(angle.to_bits());
-        }
+        self.last_probe.set(probe);
         Ok(())
     }
 
@@ -550,6 +400,7 @@ impl World {
         entity: u32,
         skin: f64,
         ground_pose: Option<[u64; 6]>,
+        clearance: Option<&mut ContactClearance>,
     ) -> Result<Vec<Contact>, String> {
         let original = *self.entities.get(&entity).ok_or("Unknown entity")?;
         let body = &self.bodies[&original];
@@ -558,7 +409,7 @@ impl World {
         unsafe {
             let status = self.client.execute((self.client.api.collision_info)(
                 self.client.handle,
-                body.native_id,
+                original,
             ))?;
             for link in -1..body.links {
                 let mut minimum = [0.; 3];
@@ -574,34 +425,42 @@ impl World {
                 }
             }
         }
+        if let (Some(bits), Some(state @ ContactClearance::Unknown)) = (ground_pose, clearance) {
+            let room_low = low.map(|v| v - ContactClearance::PADDING);
+            let room_high = high.map(|v| v + ContactClearance::PADDING);
+            let room = self.client.overlapping(room_low, room_high)?;
+            if room.iter().all(|row| row.body == original || !self.query_bodies.contains(&row.body)
+                || self.terrain_bodies.contains(&row.body))
+            {
+                let pose = bits.map(f64::from_bits);
+                let radius = (0..3).map(|i| (low[i] - pose[i]).abs().max((high[i] - pose[i]).abs()).powi(2))
+                    .sum::<f64>().sqrt();
+                *state = ContactClearance::Empty { pose, radius };
+                return Ok(Vec::new());
+            }
+            *state = ContactClearance::Occupied;
+        }
         let near = self.client.overlapping(low, high)?;
         let candidates: BTreeSet<_> = near
             .iter()
             .map(|row| row.body)
-            .filter(|id| *id != body.native_id && self.original_ids.contains_key(id))
+            .filter(|id| *id != original && self.query_bodies.contains(id))
             .collect();
         let mut points = Vec::new();
         for other in candidates {
-            let other_original = self.original_ids[&other];
-            if self.terrain_bodies.contains(&other_original) {
+            if self.terrain_bodies.contains(&other) {
                 continue;
             }
             // Probes in the same Bullet world can reuse exact contacts against
             // immutable map geometry. Vehicle and breakable pairs stay live.
-            let key = ground_pose.filter(|_| self.solid_map(other_original))
-                .map(|pose| (pose, body.turret_bits.get(), skin.to_bits(), other_original));
-            let map_ids = |mut point: Contact| {
-                point.body_a = original;
-                point.body_b = other_original;
-                point
-            };
+            let key = ground_pose.filter(|_| self.solid_map(other))
+                .map(|pose| (pose, body.turret_bits.get(), skin.to_bits(), other));
             if let Some(key) = key {
                 let mut cached = body.static_contacts.borrow_mut();
                 if let Some(previous) = cached.contacts.get(&key) {
                     points.extend(previous.iter().copied());
                 } else {
-                    let result: Vec<_> = self.client.closest(body.native_id, other, skin)?
-                        .into_iter().map(map_ids).collect();
+                    let result = self.client.closest(original, other, skin)?;
                     points.extend(result.iter().copied());
                     if result.len() <= STATIC_PAIR_ROWS {
                         if cached.contacts.len() >= STATIC_PAIR_ENTRIES
@@ -615,8 +474,7 @@ impl World {
                     }
                 }
             } else {
-                points.extend(self.client.closest(body.native_id, other, skin)?
-                    .into_iter().map(map_ids));
+                points.extend(self.client.closest(original, other, skin)?);
             }
         }
         Ok(points)
@@ -624,19 +482,10 @@ impl World {
 
     fn sensor_enabled(&mut self, entity: u32, enabled: bool) -> Result<(), String> {
         let original = *self.entities.get(&entity).ok_or("Unknown entity")?;
-        let body = &self.bodies[&original];
-        unsafe {
-            let command = (self.client.api.filter_init)(self.client.handle);
-            let (group, mask) = if enabled { (2, -1) } else { (0, 0) };
-            for link in -1..body.links {
-                (self.client.api.filter_mask)(command, body.native_id, link, group, mask);
-            }
-            self.client.execute(command)?;
-        }
         if enabled {
-            self.original_ids.insert(body.native_id, original);
+            self.query_bodies.insert(original);
         } else {
-            self.original_ids.remove(&body.native_id);
+            self.query_bodies.remove(&original);
         }
         Ok(())
     }
@@ -646,27 +495,30 @@ impl World {
             .as_str()
             .ok_or("Missing query operation")?
         {
-            "sync" => {
-                let mut states = Vec::new();
-                for row in request["entities"]
-                    .as_array()
-                    .ok_or("Missing sensor states")?
-                {
-                    let id = row["id"].as_u64().ok_or("Missing entity id")? as u32;
-                    let original = *self.entities.get(&id).ok_or("Unknown entity")?;
-                    states.push((
-                        original,
-                        vector::<3>(&row["position"])?,
-                        vector::<4>(&row["orientation"])?,
-                        row["turret"].as_f64(),
-                    ));
-                }
-                for (original, position, orientation, turret) in states {
-                    if let Err(error) = self.set_pose(original, position, orientation, turret) {
-                        self.poisoned = true;
-                        return Err(error);
-                    }
-                }
+            "movement_limits" => {
+                let entity = request["entity"].as_u64().and_then(|id| u32::try_from(id).ok())
+                    .ok_or("Invalid movement entity")?;
+                let bounds = request.get("bounds").map(vector::<4>).transpose()?;
+                let circle = request.get("circle").map(vector::<3>).transpose()?;
+                self.ground.get_mut(&entity).ok_or("Unknown movement entity")?.set_limits(bounds, circle)?;
+                Ok(Value::Null)
+            }
+            "zone_members" => {
+                let members = request["bodies"].as_array().ok_or("Missing zone members")?
+                    .iter().map(|v| v.as_i64().and_then(|n| i32::try_from(n).ok())
+                        .filter(|id| self.bodies.contains_key(id)).ok_or("Invalid zone member"))
+                    .collect::<Result<BTreeSet<_>, _>>()?;
+                self.inside_zone = members;
+                Ok(Value::Null)
+            }
+            "restore_prop" => {
+                let key = request["key"].to_string();
+                // The owner parks destructibles in range arenas. Their original IDs
+                // remain allocated until the arena closes and may be restored.
+                let bodies = self.parked_props.remove(&key).ok_or("Unknown parked prop")?;
+                self.query_bodies.extend(&bodies);
+                self.map_bodies.extend(&bodies);
+                self.breakables.insert(key, bodies);
                 Ok(Value::Null)
             }
             "replace_vehicle" => {
@@ -674,7 +526,7 @@ impl World {
                 Ok(Value::Null)
             }
             "destroy" => {
-                self.destroy_object(&request["key"].to_string())?;
+                self.forget_object(&request["key"].to_string());
                 Ok(Value::Null)
             }
             "state" => {
@@ -707,7 +559,7 @@ impl World {
                 if !skin.is_finite() || skin < 0. {
                     return Err("Invalid contact skin".into());
                 }
-                let points = self.contact_points(entity, skin, None)?;
+                let points = self.contact_points(entity, skin, None, None)?;
                 Ok(json!(points
                     .into_iter()
                     .map(|point| json!([
@@ -739,7 +591,7 @@ impl World {
                 Ok(json!(hits
                     .into_iter()
                     .map(|hit| json!([
-                        self.original_ids.get(&hit.body).copied().unwrap_or(-1),
+                        hit.body,
                         hit.link,
                         hit.fraction,
                         hit.point,
@@ -755,40 +607,44 @@ impl World {
         self.solid_map_bodies.contains(&original)
     }
 
-    fn destroy_object(&mut self, key: &str) -> Result<(), String> {
-        let Some(originals) = self.breakables.get(key).cloned() else {
-            return Ok(());
-        };
-        if originals
-            .iter()
-            .any(|original| !self.bodies.contains_key(original))
-        {
-            return Err("Missing breakable body".into());
-        }
-        for original in &originals {
-            let body = &self.bodies[original];
-            if let Err(error) = self
-                .client
-                .execute(unsafe { (self.client.api.remove)(self.client.handle, body.native_id) })
-            {
-                self.poisoned = true;
-                return Err(error);
+    fn forget_object(&mut self, key: &str) {
+        if let Some(bodies) = self.breakables.remove(key) {
+            for body in &bodies {
+                self.query_bodies.remove(body);
+                self.map_bodies.remove(body);
             }
-            self.original_ids.remove(&body.native_id);
-            self.map_bodies.remove(original);
-            self.bodies.remove(original);
+            if self.collision_zone.is_some() {
+                self.parked_props.insert(key.to_owned(), bodies);
+            }
         }
-        self.breakables.remove(key);
+    }
+
+    fn filter_static(&self, body: i32, group: i32, mask: i32) -> Result<(), String> {
+        unsafe {
+            let command = (self.client.api.filter_init)(self.client.handle);
+            (self.client.api.filter_mask)(command, body, -1, group, mask);
+            self.client.execute(command)?;
+        }
+        Ok(())
+    }
+
+    fn destroy_object(&mut self, key: &str) -> Result<(), String> {
+        // The same drive can retry through the prop. Exclude it from rays now.
+        // Python commits game damage and removes (or parks) the body once.
+        if let Some(bodies) = self.breakables.get(key) {
+            for &body in bodies {
+                self.filter_static(body, 0, 0)?;
+                self.disabled_during_step.push(body);
+            }
+        }
+        self.forget_object(key);
         Ok(())
     }
 
     fn cast(&self, rays: &[([f64; 3], [f64; 3])]) -> Result<Vec<bullet_api::RayHit>, String> {
-        let mut hits = self.client.cast_rays(rays)?;
-        for hit in &mut hits {
-            hit.body = self.original_ids.get(&hit.body).copied().unwrap_or(-1);
-        }
-        Ok(hits)
+        self.client.cast_rays(rays)
     }
+
 }
 
 fn contact_json(point: &Contact) -> Value {
@@ -824,7 +680,7 @@ pub unsafe extern "C" fn solbreaker_physics_step(
     {
         return -1;
     }
-    let world = &mut *handle.cast::<World>();
+    let Ok((world, _lease)) = (&mut *handle.cast::<WorldHandle>()).access() else { return -2 };
     if world.poisoned {
         return -2;
     }
@@ -837,10 +693,13 @@ pub unsafe extern "C" fn solbreaker_physics_step(
             return -3;
         }
     };
-    if !world.ground.contains_key(&command.entity) || world.heightfield.is_none() {
-        world.error = "Missing native vehicle or terrain configuration".into();
+    if !world.ground.contains_key(&command.entity) {
+        world.error = "Missing native vehicle configuration".into();
         return -3;
     }
+    world.bodies[&world.entities[&command.entity]].turret_bits.set(command.turret_yaw.to_bits());
+    world.last_probe.set(None);
+    world.disabled_during_step.clear();
     world.contact_events.clear();
     world.destroyed_events.clear();
     let result = catch_unwind(AssertUnwindSafe(|| {
@@ -851,11 +710,20 @@ pub unsafe extern "C" fn solbreaker_physics_step(
             world.entities[&command.entity],
             [value.pose.x, value.pose.y, value.pose.z],
             ground::quaternion(value.pose),
-            None,
         )?;
         world.ground.insert(command.entity, state);
         Ok::<_, String>(value)
     }));
+    if !matches!(result, Ok(Ok(_))) {
+        // Restore the physical arena even if this controller becomes unusable.
+        world.last_probe.set(None);
+        let pose = command.pose;
+        let _ = world.set_pose(world.entities[&command.entity],
+            [pose.x, pose.y, pose.z], ground::quaternion(pose));
+        for &body in &world.disabled_during_step {
+            let _ = world.filter_static(body, world.client.static_group, world.static_mask);
+        }
+    }
     match result {
         Ok(Ok(value)) => {
             *output = value;
@@ -888,7 +756,7 @@ pub unsafe extern "C" fn solbreaker_physics_sensor_enabled(
     if handle.is_null() {
         return -1;
     }
-    let world = &mut *handle.cast::<World>();
+    let Ok((world, _lease)) = (&mut *handle.cast::<WorldHandle>()).access() else { return -2 };
     if world.poisoned {
         return -2;
     }
@@ -907,21 +775,33 @@ pub unsafe extern "C" fn solbreaker_physics_sensor_enabled(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn solbreaker_physics_create(
+pub unsafe extern "C" fn solbreaker_physics_attach_grid(
+    token: i32,
     fixture: *const c_char,
     library: *const c_char,
+    heights: *const u16,
+    count: usize,
 ) -> *mut c_void {
     let result = catch_unwind(AssertUnwindSafe(|| {
         let fixture = json_argument(fixture)?;
         if library.is_null() {
             return Err("Missing Bullet library path".to_string());
         }
-        World::new(
+        if heights.is_null() || !heights.is_aligned() || count == 0 || count > 8192 * 8192 {
+            return Err("Invalid terrain grid buffer".to_string());
+        }
+        let session = plugin::session(token).ok_or("Unknown Bullet arena")?;
+        let guard = session.guard()?;
+        let world = World::new(
             &fixture,
             CStr::from_ptr(library)
                 .to_str()
                 .map_err(|error| error.to_string())?,
-        )
+            session.client(),
+            std::slice::from_raw_parts(heights, count),
+        )?;
+        drop(guard);
+        Ok(WorldHandle { session, world })
     }));
     match result {
         Ok(Ok(world)) => Box::into_raw(Box::new(world)).cast(),
@@ -946,7 +826,7 @@ pub unsafe extern "C" fn solbreaker_physics_query(
     if handle.is_null() || output.is_null() || capacity == 0 {
         return -1;
     }
-    let world = &mut *handle.cast::<World>();
+    let Ok((world, _lease)) = (&mut *handle.cast::<WorldHandle>()).access() else { return -2 };
     if world.poisoned {
         return -2;
     }
@@ -974,7 +854,7 @@ pub unsafe extern "C" fn solbreaker_physics_query(
 #[no_mangle]
 pub unsafe extern "C" fn solbreaker_physics_close(handle: *mut c_void) {
     if !handle.is_null() {
-        drop(Box::from_raw(handle.cast::<World>()));
+        drop(Box::from_raw(handle.cast::<WorldHandle>()));
     }
 }
 
@@ -990,7 +870,7 @@ pub unsafe extern "C" fn solbreaker_physics_error(
     let error = if handle.is_null() {
         CREATE_ERROR.with(|slot| slot.borrow().clone())
     } else {
-        (&*handle.cast::<World>()).error.clone()
+        (&*handle.cast::<WorldHandle>()).world.error.clone()
     };
     let length = error.len().min(capacity - 1);
     std::ptr::copy_nonoverlapping(error.as_ptr(), output, length);

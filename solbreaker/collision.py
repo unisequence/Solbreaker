@@ -1,23 +1,19 @@
-"""Authoritative contact queries against installed map and vehicle geometry.
+"""One Bullet world owns an arena's terrain, obstacles, tanks and rigid-body dynamics.
 
-Bullet is used in DIRECT mode as a collision library. The tracked drive uses
-small swept increments and ground support, without a free rigid body solver
-that could impart unexplained impulses to the client-controlled tank.
+Tracked motion uses bounded sweeps and suspension. Airborne vehicles use rigid
+bodies in the same world, with the arena owner advancing the fixed simulation step.
 """
 from collections.abc import Mapping
 from dataclasses import dataclass
 from functools import cached_property, partial
-import json
 import math
 import os
 from pathlib import Path
 import struct
-import tempfile
 import time
 
 import numpy as np
-from .rapier_dynamic import RapierStepRows
-from .vector_math import cross3_f64, vector_length as _vector_length
+from .vector_math import vector_length as _vector_length
 
 # Keep replaced numerical callbacks on their original path.
 _CONTACT_MEAN, _CONTACT_NORM = np.mean, np.linalg.norm
@@ -31,6 +27,7 @@ except (ImportError, OSError):
 if getattr(_contact_queries, 'API_VERSION', None) not in (1, 2):
     _contact_queries = None
 
+from .arena_bounds import CircularZone
 from .dava_scene import scene, geometry, components, active_nodes, world_vertices, Archive
 from .dvpl import read
 from .mass_properties import VehicleMassModel
@@ -39,7 +36,8 @@ from .mesh_files import MeshFiles, bullet_mesh_paths, create_bullet_mesh
 from .map_catalog import load_map_spec
 from .terrain import MapTerrain
 from .fall_damage import MIN_HULL_DAMAGE_SPEED, evaluate_fall_impact, impact_damage_speed
-from .map_materials import permeable_water_plant
+from .map_materials import (MapEnvironment, foliage_material, material_chain,
+                            permeable_water_plant, water_material)
 _BREAKABLE_TYPES = (3, 4, 5, 8)
 _RAY_GROUP = 1  # Bullet's default ray query group.
 _TRACKED_GROUP = 2
@@ -146,7 +144,6 @@ class DynamicBody:
     stationary_anchor: tuple = None
     contact_friction: float = .8
     restore_air_damping: bool = False
-    terrain_points: np.ndarray | None = None
     sandbox_landing: bool = False
 
 
@@ -189,6 +186,8 @@ class CollisionScene:
         self.map_spec = spec
         self.mesh_files = mesh_files
         self.terrain_meshes = {}
+        self.water_triangles = []
+        self.foliage_bounds = []
         self._owns_mesh_files = True
 
     @classmethod
@@ -198,11 +197,20 @@ class CollisionScene:
         result._load_map()
         return result
 
+    @cached_property
+    def environment(self):
+        return MapEnvironment(self.water_triangles, self.foliage_bounds)
+
     def _load_map(self):
         data = scene(self.map_spec.scene_path)
         meshes = geometry(self.map_spec.geometry_path)
         materials = {int.from_bytes(n['#id'], 'little'): n
                      for n in data['#dataNodes'] if n.get('##name') == 'NMaterial'}
+        traits = {}
+        for ident in materials:
+            chain = tuple(material_chain(materials, ident))
+            traits[ident] = (water_material(chain), foliage_material(chain),
+                             any('trunk' in m.get('materialName', '').lower() for m in chain))
         ids = Archive(read(self.map_spec.lka_path)).load()
         # State 0 meshes inherit their parent's .lka ID. Alternative ruined
         # states are excluded by active_nodes, as in the original collision map.
@@ -239,31 +247,31 @@ class CollisionScene:
             if 'MapBorderComponent' in comps:
                 self.bounds = struct.unpack('<4f', comps['MapBorderComponent']['mbc.rect'])
             kind = collision_types.get(node['id'], {}).get('CollisionType', 0)
-            if kind not in (3, 4, 5, 6, 7, 8):
-                continue
             key = owners[node['id']] if kind in _BREAKABLE_TYPES else None
             if kind in _BREAKABLE_TYPES and key is None:
                 key = -node['id']-1
             if key is not None and key >= 0 and key & 65535 > 255:
                 raise ValueError('Destructible ID exceeds native 8-bit index')
             added = False
+            canopy = []
             for batch in batches(comps):
-                if permeable_water_plant(node,kind,batch['rb.nmatname'],materials):
+                material_id = batch['rb.nmatname']
+                water, foliage, trunk = traits.get(material_id, (False, False, False))
+                cane = permeable_water_plant(node, kind, material_id, materials)
+                solid = kind in (3, 4, 5, 6, 7, 8) and not cane and (kind != 8 or trunk)
+                if not (water or foliage or solid):
                     continue
-                if kind == 8:
-                    # SpeedTree leaf cards/bushes are permeable. Its trunk
-                    # batches have separately named trunk materials.
-                    mat = materials[batch['rb.nmatname']]
-                    names = []
-                    for _ in range(16):
-                        names.append(mat.get('materialName', '').lower())
-                        if 'parentMaterialKey' not in mat:
-                            break
-                        mat = materials[mat['parentMaterialKey']]
-                    if not any('trunk' in name for name in names):
-                        continue
                 mesh = meshes[batch['rb.datasource']]
                 verts = world_vertices(mesh.vertices, comps.get('TransformComponent', {}))
+                if not len(verts):
+                    continue
+                if water:
+                    self.water_triangles.extend(verts[mesh.triangles].tolist())
+                    continue
+                if foliage:
+                    canopy.append((verts.min(axis=0), verts.max(axis=0)))
+                if not solid:
+                    continue
                 faces = mesh.triangles[:, (0,2,1)]
                 if key is None:
                     vertices.append(verts)
@@ -272,6 +280,10 @@ class CollisionScene:
                 else:
                     parts.setdefault(key,[]).append((node,comps,verts,faces))
                 added = True
+            if canopy:
+                low = np.min([bounds[0] for bounds in canopy], axis=0).tolist()
+                high = np.max([bounds[1] for bounds in canopy], axis=0).tolist()
+                self.foliage_bounds.append((low, high, key))
             if added:
                 self.object_names.append(node['name'])
         if self.bounds is None or (not vertices and not getattr(self.map_spec, 'allow_empty_obstacles', False)):
@@ -285,6 +297,9 @@ class CollisionScene:
             ct = comps['CollisionTypeComponent']
             self.destructibles[key] = Destructible(key,node['name'],ct['CollisionType'],
                     max(1,int(ct.get('Health',1))),np.concatenate(verts),np.concatenate(faces))
+
+        self.foliage_bounds = [(low, high, key if key in parts else None)
+                               for low, high, key in self.foliage_bounds]
 
     def for_vehicle(self, game, definition):
         """Share immutable map assets/cache; load only this vehicle's geometry."""
@@ -396,7 +411,7 @@ class CollisionScene:
             n = terrain.size
             x,z = np.meshgrid(np.arange(n)*terrain.WIDTH/n+terrain.MIN,
                              np.arange(n)*terrain.DEPTH/n+terrain.MIN_Z)
-            y = terrain.HEIGHT_MIN + np.array(terrain.heights).reshape(n,n)*terrain.HEIGHT/65535
+            y = terrain.HEIGHT_MIN + np.asarray(terrain.heights, dtype=float).reshape(n,n)*terrain.HEIGHT/65535
             vertices = np.column_stack((x.ravel(),y.ravel(),z.ravel()))
             base = (np.arange(n-1)[:,None]*n+np.arange(n-1)).ravel()
             indices = np.concatenate((np.column_stack((base,base+n,base+1)),
@@ -568,7 +583,8 @@ class CollisionWorld:
     # broad-phase update and the next.  This remains opt-in with 6DOF; the
     # established kinematic drive does not call Bullet stepping.
     DYNAMIC_MAX_STEP = 1. / 240.
-    DYNAMIC_LINEAR_DAMPING = .015
+    DYNAMIC_LINEAR_DAMPING = .003
+    DYNAMIC_ANGULAR_DAMPING = .05
     DYNAMIC_DEEP_TERRAIN_OVERLAP = .75
     LOW_GRAVITY_TERRAIN_OVERLAP = .12
     # A later collision after a real gap starts a new fall-impact episode.
@@ -618,8 +634,7 @@ class CollisionWorld:
     def __init__(self, assets, terrain, player_position=None, target_position=None, *, vehicles=None,
                  incremental=False, vehicle_assets=None, experimental_6dof=None,
                  experimental_ground_impacts=None, wall_trampoline=None,
-                 sprung_tracks=None, visibility=False, parallel_native_build=False, gravity=9.81,
-                 dynamic_backend=None, collision_zone=None):
+                 sprung_tracks=None, visibility=False, gravity=9.81, collision_zone=None):
         self.collision_zone = collision_zone
         self._body_zones = {}
         self.assets, self.terrain = assets, terrain
@@ -646,11 +661,9 @@ class CollisionWorld:
         native = os.environ.get('SOLBREAKER_NATIVE_PHYSICS', '1')
         if native not in ('0', '1'):
             raise ValueError('SOLBREAKER_NATIVE_PHYSICS must be 0 or 1')
-        # The native terrain/vehicle ABI has no collision layers or prop revival.
-        self._native_physics_enabled = native == '1' and collision_zone is None
-        self._parallel_native_build = parallel_native_build
+        self._native_physics_enabled = native == '1' and (
+            collision_zone is None or isinstance(collision_zone, CircularZone))
         self.cid = None
-        self._visibility = None
         self.closed = False
         self.closing = False
         self._closer = None
@@ -666,24 +679,13 @@ class CollisionWorld:
         self.motion = {}
         self.dynamic_bodies = {}
         self.pending_dynamics = {}
+        self._separating_launches = {}
+        self._blocked_launches = {}
         self.suspended_entities = set()
-        self._rapier = None
-        self._dynamic_backend = (os.environ.get('SOLBREAKER_DYNAMIC_BACKEND', 'bullet')
-                                 if dynamic_backend is None else dynamic_backend)
-        self.rapier_parallel_drive = os.environ.get('SOLBREAKER_RAPIER_PARALLEL_DRIVE', '0') == '1'
-        self._rapier_query_backend = os.environ.get('SOLBREAKER_RAPIER_QUERIES', 'bullet')
-        if self._rapier_query_backend not in ('bullet', 'shadow', 'rapier'):
-            raise ValueError('SOLBREAKER_RAPIER_QUERIES must be bullet, shadow or rapier')
-        if self.GRAVITY != CollisionWorld.GRAVITY or self._dynamic_backend != 'rapier':
-            self._rapier_query_backend = 'bullet'
-        self.rapier_query_stats = dict(batches=0, rays=0, hit_mismatch=0, body_mismatch=0,
-            max_position_error=0., max_normal_error=0., bullet_seconds=0., rapier_seconds=0., samples=[])
-        self._rapier_fixture = None
-        self._rapier_orientations = {}
-        self._rapier_angular_states = {}
         self.dynamic_shapes = {}
         self._shared_dynamic_shapes = {}
         self._mass_models = {}
+        self._terrain_probes = {}
         self._kinematic_shapes = {}
         self.dynamic_bounds = {}
         self.dynamic_fall_peak = {}
@@ -735,8 +737,7 @@ class CollisionWorld:
         self._rust_drive = None
         self._native_physics = None
         self.build_timings = {}
-        self._builder = self._build(assets,terrain,player_position,target_position,vehicles,
-                                    visibility=visibility)
+        self._builder = self._build(assets,terrain,player_position,target_position,vehicles)
         if not incremental:
             while not self.advance_build():
                 pass
@@ -757,7 +758,7 @@ class CollisionWorld:
             self.close()
             raise
 
-    def _build(self,assets,terrain,player_position,target_position,vehicles,*,visibility=False):
+    def _build(self,assets,terrain,player_position,target_position,vehicles):
         started = time.monotonic()
         started_cpu = time.thread_time()
         self.cid = bullet.connect(bullet.DIRECT)
@@ -776,7 +777,7 @@ class CollisionWorld:
         for key,obj in assets.destructibles.items():
             bodies = set()
             for path in assets.mesh_files.partition(obj.vertices,obj.triangles):
-                bodies.add(self._mesh_body(path))
+                bodies.add(self._mesh_body(path, breakable=True))
                 yield
             self.object_bodies[key] = bodies
             self.breakable_bodies.update((b,key) for b in bodies)
@@ -841,33 +842,10 @@ class CollisionWorld:
                 self.dynamic_shapes[entity] = cached[1]
                 self.dynamic_bounds[entity] = cached[2]
                 yield
-        # The current Rapier dynamics ABI hardcodes 9.81. Low-gravity arenas
-        # use Bullet for airborne motion and keep the regular ground solver.
-        rapier = (self.GRAVITY == CollisionWorld.GRAVITY
-                  and self._dynamic_backend == 'rapier')
-        if rapier and self._parallel_native_build and self._native_physics_enabled:
-            yield from self._build_native_parallel()
-        else:
-            if rapier:
-                rapier_started, rapier_cpu = time.monotonic(), time.thread_time()
-                self._init_rapier()
-                self.build_timings['rapier_ms'] = (time.monotonic()-rapier_started)*1000
-                self.build_timings['rapier_cpu_ms'] = (time.thread_time()-rapier_cpu)*1000
-                yield
-            yield from self._build_ground_physics()
-        visibility_started = time.monotonic()
-        visibility_cpu = time.thread_time()
-        self.build_timings['physics_ms'] = (visibility_started-physical_started)*1000
-        self.build_timings['physics_cpu_ms'] = ((visibility_cpu-physical_cpu)*1000
-                                               + self.build_timings.get('rapier_worker_cpu_ms', 0.))
+        yield from self._build_ground_physics()
+        self.build_timings['physics_ms'] = (time.monotonic()-physical_started)*1000
+        self.build_timings['physics_cpu_ms'] = (time.thread_time()-physical_cpu)*1000
         self.build_timings['vehicle_bodies'] = len(self.bodies)
-        if visibility and self._rapier_query_backend == 'bullet':
-            from .static_visibility import VisibilityWorld
-            self._visibility = VisibilityWorld()
-            yield from self._visibility.build(assets)
-            self.build_timings['visibility_ms'] = (time.monotonic()-visibility_started)*1000
-            self.build_timings['visibility_cpu_ms'] = (time.thread_time()-visibility_cpu)*1000
-            self.build_timings['visibility_shapes'] = self._visibility.shape_count
 
     def _build_ground_physics(self):
         if self.experimental_ground_impacts:
@@ -892,146 +870,23 @@ class CollisionWorld:
             self.build_timings['native_ground_cpu_ms'] = (time.thread_time()-native_cpu)*1000
             yield
 
-    def _build_native_parallel(self):
-        from concurrent.futures import ThreadPoolExecutor
-
-        start, cpu = time.monotonic(), time.thread_time()
-        fixture = self._prepare_rapier_fixture()
-        fixture_ms, fixture_cpu = (time.monotonic()-start)*1000, (time.thread_time()-cpu)*1000
-        # The Rapier thread receives only the finished fixture path. Bullet and
-        # the native ground controller stay on the arena's owning thread.
-        with ThreadPoolExecutor(max_workers=1, thread_name_prefix='rapier-startup') as executor:
-            future = executor.submit(self._load_rapier_world, fixture)
-            try:
-                yield from self._build_ground_physics()
-                self._rapier, wall_ms, cpu_ms = future.result()
-            finally:
-                if self._rapier is None and not future.cancel():
-                    try:
-                        pending, _, _ = future.result()
-                    except Exception:
-                        pass  # Preserve the original initialization error.
-                    else:
-                        pending.close()
-        self.build_timings.update(rapier_ms=fixture_ms+wall_ms,
-                                  rapier_cpu_ms=fixture_cpu+cpu_ms, rapier_worker_cpu_ms=cpu_ms)
-
-    @staticmethod
-    def _load_rapier_world(fixture):
-        from .rapier_dynamic import RapierDynamic
-
-        start, cpu = time.monotonic(), time.thread_time()
-        world = RapierDynamic(fixture)
-        return world, (time.monotonic()-start)*1000, (time.thread_time()-cpu)*1000
-
-    def _init_rapier(self, *, static_only=False):
-        from .rapier_dynamic import RapierDynamic
-
-        self._rapier = RapierDynamic(self._prepare_rapier_fixture(static_only=static_only))
-
-    def _prepare_rapier_fixture(self, *, static_only=False):
-        static = []
-        static_bodies = self.map_bodies | self.terrain_bodies
-        if not static_bodies.issubset(self._mesh_body_paths):
-            raise ValueError('Rapier requires mesh provenance for every static collider')
-        for body in sorted(static_bodies):
-            path = self._mesh_body_paths[body]
-            key = self.breakable_bodies.get(body)
-            kind = 'breakable' if key is not None else ('terrain' if body in self.terrain_bodies else 'map')
-            static.append(dict(path=path, kind=kind, key=key, body=body))
-        entities = [] if static_only else [self._rapier_vehicle(entity, pose)
-                                           for entity, pose in self.poses.items()]
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', prefix='tfs-rapier-', delete=False) as stream:
-            json.dump(dict(static=static, entities=entities), stream)
-            self._rapier_fixture = stream.name
-        return self._rapier_fixture
-
-    def _rapier_vehicle(self, entity, pose):
-        from .physics_proxy import swept_turret
-
-        assets = self.assets_for(entity)
-        parts = []
-        for source in assets.contact_proxies:
-            part = swept_turret(source) if source.name == assets.turret_node else source
-            offset = np.asarray(assets.definition.aiming.turret_position
-                                if source.name == assets.turret_node else (0., 0., 0.), dtype=float)
-            row = dict(kind=part.kind, offset=(offset+np.asarray(
-                (0., 0., 0.) if part.kind == 'prism' else part.center)).tolist())
-            if part.kind == 'prism':
-                row['path'] = assets.mesh_files.mesh(part.vertices)
-            elif part.kind == 'box':
-                row['half_extents'] = list(part.half_extents)
-            else:
-                row['radius'] = part.radius
-                row['length'] = part.length
-            parts.append(row)
-        properties = self._dynamic_mass_properties(entity, self.gun_angles[entity][0])
-        return dict(id=entity, initial_position=pose.position,
-            initial_orientation=quaternion(pose.yaw, pose.pitch, pose.roll),
-            mass=properties.mass, center_of_mass=properties.center_of_mass,
-            inertia=properties.inertia_diagonal, parts=parts)
-
     def _static_rays(self, starts, ends, *, _single=False):
         """Map/terrain/breakable rays. Vehicle armor keeps its exact model."""
-        def legacy():
-            if _single:
-                return (bullet.rayTest(starts[0], ends[0], collisionFilterMask=_STATIC_GROUP,
-                                       physicsClientId=self.cid)[0],)
-            # Large visibility batches amortize a second Bullet worker.
-            return bullet.rayTestBatch(starts, ends, collisionFilterMask=_STATIC_GROUP,
-                                       numThreads=(getattr(self, '_ray_threads', 1)
-                                                   if len(starts) >= 128 else 1),
-                                       physicsClientId=self.cid)
-        if getattr(self, '_rapier', None) is None or self._rapier_query_backend == 'bullet':
-            return legacy()
-        if self._rapier_query_backend == 'rapier':
-            return self._rapier.static_rays(starts, ends)
-        # Shadow mode is observational: Bullet alone determines gameplay.
-        begin = time.perf_counter()
-        expected = legacy()
-        middle = time.perf_counter()
-        actual = self._rapier.static_rays(starts, ends)
-        stats = self.rapier_query_stats
-        stats['bullet_seconds'] += middle-begin
-        stats['rapier_seconds'] += time.perf_counter()-middle
-        stats['batches'] += 1
-        stats['rays'] += len(starts)
-        for start, end, a, b in zip(starts, ends, expected, actual):
-            mismatch = (a[0] >= 0) != (b[0] >= 0)
-            stats['hit_mismatch'] += mismatch
-            stats['body_mismatch'] += a[0] != b[0]
-            error = math.dist(a[3], b[3]) if a[0] >= 0 and b[0] >= 0 else 0.
-            normal_error = math.dist(a[4], b[4])
-            sample = None
-            if error > stats['max_position_error'] or normal_error > stats['max_normal_error']:
-                sample = dict(start=tuple(start), end=tuple(end), bullet=a, rapier=b)
-            if error > stats['max_position_error']:
-                stats['worst_position'] = sample
-            if normal_error > stats['max_normal_error']:
-                stats['worst_normal'] = sample
-            stats['max_position_error'] = max(stats['max_position_error'], error)
-            stats['max_normal_error'] = max(stats['max_normal_error'], normal_error)
-            if (mismatch or error > 1e-5) and len(stats['samples']) < 16:
-                stats['samples'].append(dict(start=tuple(start), end=tuple(end), bullet=a, rapier=b))
-        return expected
+        if _single:
+            return (bullet.rayTest(starts[0], ends[0], collisionFilterMask=_STATIC_GROUP,
+                                   physicsClientId=self.cid)[0],)
+        # Large visibility batches amortize a second Bullet worker.
+        return bullet.rayTestBatch(starts, ends, collisionFilterMask=_STATIC_GROUP,
+                                   numThreads=(getattr(self, '_ray_threads', 1)
+                                               if len(starts) >= 128 else 1),
+                                   physicsClientId=self.cid)
 
     def _static_ray(self, start, end):
         return self._static_rays([start], [end], _single=True)[0]
 
     def _visibility_rays(self, starts, ends):
-        """Bot occlusion at the .999 cutoff, with query-local hit body IDs."""
-        query = getattr(self, '_visibility', None)
-        if (query is None or self._rapier_query_backend != 'bullet'
-                or getattr(self._static_rays, '__func__', None) is not _GROUND_RAYS_IMPL
-                or bullet.rayTestBatch is not _GROUND_RAY_BATCH_SOURCE):
-            return self._static_rays(starts, ends)
-        hits = list(query.rays(starts, ends, self._ray_threads if len(starts) >= 128 else 1))
-        clear = [i for i, hit in enumerate(hits) if hit[0] < 0 or hit[2] >= .999]
-        if clear:
-            checked = self._static_rays([starts[i] for i in clear], [ends[i] for i in clear])
-            for i, hit in zip(clear, checked):
-                hits[i] = hit
-        return hits
+        """Trace sight lines against the same terrain and live props as movement."""
+        return self._static_rays(starts, ends)
 
     def assets_for(self, entity=None):
         entity = self.primary_id if entity is None else entity
@@ -1046,6 +901,101 @@ class CollisionWorld:
                            for name,vertices in assets.tank_shapes)
             cached = self._component_bound_cache[id(assets)] = (assets,bounds)
         return cached[1]
+
+    def auto_recovery_remaining(self, entity, *, showing=False):
+        dynamic = self.dynamic_bodies.get(entity)
+        if dynamic is None:
+            return None
+        # The anchor can reset in a single step when a tipped tank slides.
+        # Wait for a settled onset, then keep the warning through such resets
+        # and through small oscillations around the entry angle.
+        if not showing and dynamic.stationary_time < .2:
+            return None
+        pose = self.poses[entity]
+        upright = math.cos(pose.pitch) * math.cos(pose.roll)
+        if upright >= (.6 if showing else .5):
+            return None
+        return max(0., self.DYNAMIC_RECOVER_AFTER - dynamic.stationary_time)
+
+    def is_submerged(self, entity):
+        environment = getattr(self.assets, 'environment', None)
+        if environment is None or not environment.water:
+            return False
+        pose = self.poses[entity]
+        x, y, z = pose.position
+        level = environment.water_height(x, z)
+        if level is None or self.terrain.height(x, z) >= level:
+            return False
+        rotation = self._dynamic_rotation(entity)
+        if rotation is None:
+            rotation = matrix(pose.yaw, pose.pitch, pose.roll)
+        hull = next(vertices for name, vertices in self.assets_for(entity).tank_shapes
+                    if name == 'hull')
+        return bool(y + np.max(hull @ rotation[1]) <= level)
+
+    def spotting_rays(self, observer_entity, target_entity, port=0):
+        """Six visibility checks from one of two estimated vehicle viewports.
+
+        This local approximation uses selected hull/turret bounds and the XML
+        gun pivot. These are not recovered native visibility-point coordinates.
+        Port 0 uses the neutral roof location fixed to the hull; port 1 follows
+        turret yaw at the mantlet. One cached point set per entity is replaced
+        whenever its selected assets, hull pose or turret yaw changes.
+        """
+        if type(port) is not int or port not in (0, 1):
+            raise ValueError('Spotting viewport must be 0 or 1')
+        cache = getattr(self, '_spotting_point_cache', None)
+        if cache is None:
+            cache = self._spotting_point_cache = {}
+
+        def points(entity):
+            assets = self.assets_for(entity)
+            pose = self.poses[entity]
+            yaw = self.gun_angles.get(entity, (0., 0.))[0]
+            cached = cache.get(entity)
+            if (cached is not None and cached[0] is assets
+                    and cached[1] == pose and cached[2] == yaw):
+                return cached[3], cached[4]
+            bounds = {name: (low, high) for name, low, high in self._component_bounds(entity)}
+            if 'hull' not in bounds:
+                raise ValueError('Spotting geometry requires hull bounds')
+            low, high = bounds['hull']
+            middle = (low + high) * .5
+            aiming = getattr(assets.definition, 'aiming', None)
+            pivot = np.asarray(getattr(aiming, 'turret_position', (0., 0., 0.)), dtype=float)
+            turret = bounds.get(assets.turret_node)
+            neutral_roof = roof = (float(middle[0]), float(high[1]), float(middle[2]))
+            if turret is not None and pivot[1] + turret[1][1] > high[1]:
+                turret_low, turret_high = turret
+                turret_middle = (turret_low + turret_high) * .5
+                turret_roof = (turret_middle[0], turret_high[1], turret_middle[2])
+                # The static viewport keeps the neutral top-component center.
+                # A target's checkpoint remains on its actual rotating roof.
+                neutral_roof = tuple(pivot + turret_roof)
+                roof = tuple(pivot + matrix(yaw) @ turret_roof)
+            gun = getattr(aiming, 'gun_position', None)
+            if gun is None:
+                mantlet = (float(middle[0]), float(low[1] + (high[1]-low[1])*.75), float(high[2]))
+            else:
+                mantlet = tuple(pivot + matrix(yaw) @ np.asarray(gun, dtype=float))
+            local = ((middle[0], middle[1], high[2]),
+                     (middle[0], middle[1], low[2]),
+                     (low[0], middle[1], middle[2]),
+                     (high[0], middle[1], middle[2]), roof, mantlet)
+            rotation = matrix(pose.yaw, pose.pitch, pose.roll)
+            origin = np.asarray(pose.position, dtype=float)
+
+            def world(point):
+                return tuple(float(value) for value in origin + rotation @ point)
+
+            checkpoints = tuple(world(point) for point in local)
+            ports = (world(neutral_roof), checkpoints[5])
+            cache[entity] = (assets, pose, yaw, ports, checkpoints)
+            return ports, checkpoints
+
+        observer, _ = points(observer_entity)
+        _, target = points(target_entity)
+        return tuple((observer[port], end) for end in target)
 
     def drive_pitch(self, entity=None):
         """Physical road pitch for traction, independent of hull suspension lean."""
@@ -1067,9 +1017,12 @@ class CollisionWorld:
             body = self.bodies[entity]
             saved_position,saved_orientation = bullet.getBasePositionAndOrientation(
                 body,physicsClientId=self.cid)
+            contacts = self._contacts
+            if getattr(contacts, '__func__', None) is _CONTACTS_IMPL:
+                contacts = partial(contacts, landing_probe=True)
             try:
                 for _ in range(3):
-                    points = self._contacts(candidate,entity,suspension=True)
+                    points = contacts(candidate,entity,suspension=True)
                     found = self._contact_supports(entity,candidate,points,reference)
                     if not found:
                         if contact_result is not None:
@@ -1125,19 +1078,28 @@ class CollisionWorld:
     def target_pose(self):
         return self.poses[self.target_id]
 
-    def _mesh_body(self, path):
+    def _mesh_body(self, path, *, breakable=False):
         shape = create_bullet_mesh(bullet, path,
                     flags=bullet.GEOM_FORCE_CONCAVE_TRIMESH,
                     physicsClientId=self.cid)
-        body = bullet.createMultiBody(baseMass=0, baseCollisionShapeIndex=shape, physicsClientId=self.cid)
+        # Map chunks have no joints. A fixed rigid body keeps them out of the
+        # articulated-body solver's per-substep pass over the whole arena.
+        body = bullet.createMultiBody(baseMass=0, baseCollisionShapeIndex=shape,
+                                      useMaximalCoordinates=True, physicsClientId=self.cid)
         # Native consumers open this same file from the arena's asset lease.
         # An absolute name suffices and avoids filesystem traversal per body.
         self._mesh_body_paths[body] = os.path.abspath(path)
-        # Tracked movement queries mesh contacts explicitly. In the rigid-body
-        # step, the static mesh chunks need contacts only with moving bodies.
-        bullet.setCollisionFilterGroupMask(body, -1, _STATIC_GROUP,
-            _RAY_GROUP | _DYNAMIC_GROUP | (_ZONE_DYNAMIC_GROUP if self.collision_zone else 0),
-            physicsClientId=self.cid)
+        # Bullet can recycle a removed body's id, even for different geometry
+        # created at the same transform. Recheck any blocked launches.
+        self._blocked_launches.clear()
+        # Keep breakable meshes queryable, without applying solver impulses.
+        mask = _RAY_GROUP
+        if not breakable:
+            mask |= _DYNAMIC_GROUP
+            if self.collision_zone:
+                mask |= _ZONE_DYNAMIC_GROUP
+        bullet.setCollisionFilterGroupMask(body, -1, _STATIC_GROUP, mask,
+                                           physicsClientId=self.cid)
         return body
 
     def _mesh_bodies(self, vertices, triangles):
@@ -1246,14 +1208,13 @@ class CollisionWorld:
                 self._sensor_filter(entity, _TRACKED_GROUP, _DYNAMIC_GROUP)
 
     def set_tracked_presence(self, entity, present):
-        """Remove or restore a grounded hull in both contact backends."""
+        """Remove or restore a stationary hull for contact queries."""
         if present == (entity not in self.suspended_entities):
             return
         if entity in self.dynamic_bodies or entity in self.pending_dynamics:
             raise ValueError('Changing vehicle presence requires a stationary sensor')
-        for backend in (self._native_physics, self._rapier):
-            if backend is not None:
-                backend.set_sensor_enabled(entity, present)
+        if self._native_physics is not None:
+            self._native_physics.set_sensor_enabled(entity, present)
         body = self.bodies[entity]
         if present:
             self._sensor_filter(entity, _TRACKED_GROUP, _DYNAMIC_GROUP)
@@ -1462,6 +1423,111 @@ class CollisionWorld:
         return min((point for point in points if point[2] in obstacles and point[8] < -self.SKIN),
                    key=lambda point: point[8], default=None)
 
+    def _launch_environment(self, entity, bounds):
+        """Fingerprint the actual bodies a stationary handoff could touch."""
+        nearby = {body for body, _ in bullet.getOverlappingObjects(*bounds, physicsClientId=self.cid) or ()}
+        nearby.discard(self.bodies[entity])
+        static = frozenset((body, bullet.getBasePositionAndOrientation(body, physicsClientId=self.cid),
+                            self.breakable_bodies.get(body))
+                           for body in nearby if body in self.map_bodies or body in self.terrain_bodies)
+        peers = nearby - {row[0] for row in static}
+        placement = frozenset((body, bullet.getBasePositionAndOrientation(body, physicsClientId=self.cid),
+                               self.gun_angles.get(self.body_entities.get(body)),
+                               body in self.body_entities)
+                              for body in peers)
+        return (static, placement, self.gun_angles.get(entity), self.dynamic_mass_yaws.get(entity),
+                self.dynamic_shapes.get(entity), tuple(self.movement_bounds(entity)),
+                self.movement_circle, tuple(self._contact_support_cache.get(entity, ())))
+
+    def _rises_clear_of_terrain(self, body, delta):
+        """Prove that every point gains height relative to the traversed terrain triangles."""
+        dx, dy, dz = delta
+        if not (dx or dz):
+            return dy > 0.
+        low, high = bullet.getAABB(body, physicsClientId=self.cid)
+        terrain = self.terrain
+        cell_x, cell_z = terrain.WIDTH / terrain.size, terrain.DEPTH / terrain.size
+        def cells(lo, hi, shift, origin, cell):
+            first = math.floor((lo + min(0., shift) - origin) / cell)
+            last = math.floor((hi + max(0., shift) - origin) / cell)
+            return slice(max(0, min(terrain.size-2, first)), max(0, min(terrain.size-2, last)) + 2)
+        xs = cells(low[0], high[0], dx, terrain.MIN, cell_x)
+        zs = cells(low[2], high[2], dz, terrain.MIN_Z, cell_z)
+        heights = np.asarray(terrain.heights).reshape(terrain.size, terrain.size)[zs, xs].astype(float)
+        heights *= terrain.HEIGHT / 65535.
+        # The two triangles of a cell share its (x+1,z)–(x,z+1) edge.
+        # Their directional slopes bound the rise everywhere along this slice.
+        bottom, left = heights[:-1, 1:], heights[1:, :-1]
+        rise_a = (bottom - heights[:-1, :-1])*(dx/cell_x) + (left - heights[:-1, :-1])*(dz/cell_z)
+        rise_b = (heights[1:, 1:] - left)*(dx/cell_x) + (heights[1:, 1:] - bottom)*(dz/cell_z)
+        return dy - max(rise_a.max(), rise_b.max()) > 1e-9
+
+    def _separate_blocked_launch(self, entity, pose, body, contact, obstacles):
+        """Move one swept slice away from a static face that blocks rigid takeoff."""
+        terrain = contact[2] in self.terrain_bodies
+        # Start above the heightfield or on the occupied side of the wall.
+        # The neighboring contact planes can constrain this initial direction.
+        normal = np.asarray((0., 1., 0.) if terrain else contact[7], dtype=float)
+        if not terrain and (contact[2] not in self.map_bodies or contact[2] in self.breakable_bodies
+                or not np.isfinite(normal).all() or abs(normal[1]) > .50
+                or np.dot(normal, np.subtract(pose.position, contact[6])) <= 0.):
+            return None
+        previous = bullet.getContactPoints(bodyA=body, physicsClientId=self.cid)
+        nearby_map = {p[2] for p in previous if p[2] in self.map_bodies and p[8] < self.STEP}
+        # Find a direction tangent to adjacent faces. A vertical lift by a
+        # sloping wall, or a sideward retreat on a ramp, must separate both.
+        normals = np.asarray([p[7] for other in nearby_map
+            for p in bullet.getClosestPoints(body, other, 0., physicsClientId=self.cid)])
+        if normals.size:
+            for _ in range(12):
+                speeds = normals @ normal
+                i = int(speeds.argmin())
+                if speeds[i] >= -1e-7:
+                    break
+                normal -= speeds[i] * normals[i]
+        # The full-yaw rigid turret can be wider than the tracked sensor. A
+        # large side overlap cannot be resolved in a single handoff. Retain a
+        # small separating movement only if both collider representations allow it.
+        step = min(self.STEP, self.DYNAMIC_MAX_START_CORRECTION)
+        delta = normal * step
+        if terrain and not self._rises_clear_of_terrain(body, delta):
+            return None
+        candidate = Pose(tuple(map(float, pose.position + delta)), pose.yaw, pose.pitch, pose.roll)
+        if self.collision_zone and self.collision_zone(pose.position) != self.collision_zone(candidate.position):
+            return None
+        if not self._valid_retreat(candidate, pose, entity)[0]:
+            self.set_pose(self.bodies[entity], pose)
+            return None
+        center, orientation = bullet.getBasePositionAndOrientation(body, physicsClientId=self.cid)
+        bullet.resetBasePositionAndOrientation(body, tuple(center + delta), orientation, physicsClientId=self.cid)
+        next_contact = self._dynamic_start_contact(body, obstacles)
+        if next_contact is not None:
+            contacts = bullet.getContactPoints(bodyA=body, physicsClientId=self.cid)
+            # Do not trade this overlap for another one behind the hull. A
+            # Bullet map body can contain several nearby, outward-facing walls.
+            for point in contacts:
+                if point[2] not in obstacles or point[8] >= -self.SKIN:
+                    continue
+                if terrain and point[2] in self.terrain_bodies:
+                    continue
+                if point[2] in nearby_map and np.dot(normal, point[7]) >= -1e-7:
+                    continue
+                if not any(old[2:5] == point[2:5] and old[8] <= point[8] + 1e-6
+                           and np.dot(old[7], point[7]) >= .95
+                           and abs(np.dot(old[7], np.subtract(old[6], point[6]))) <= self.SKIN
+                           for old in previous):
+                    break
+            else:
+                # The heightfield is solid below its upper surface. Bullet's
+                # double-sided triangles can report a larger back-face depth
+                # during a proven upward escape. Only a non-terrain blocker
+                # needs a decreasing penetration in the rigid manifold.
+                if terrain or next_contact[8] > contact[8] + 1e-5:
+                    return candidate
+            self.set_pose(self.bodies[entity], pose)
+            return None
+        return candidate
+
     @staticmethod
     def _center_velocity(velocity, angular, offset):
         vx, vy, vz = velocity
@@ -1470,7 +1536,7 @@ class CollisionWorld:
         return vx + (wy*z - wz*y), vy + (wz*x - wx*z), vz + (wx*y - wy*x)
 
     def _activate_dynamic(self, entity, pose, velocity, angular_velocity=(0.,0.,0.),
-                          *, initialize_bullet_velocity=True):
+                          *, initialize_bullet_velocity=True, allow_separation=False):
         """Transfer a released hull to Bullet, returning its corrected pose."""
         if not self.experimental_6dof or entity in self.dynamic_bodies:
             return None
@@ -1480,28 +1546,6 @@ class CollisionWorld:
         if (len(angular_velocity) != 3
                 or not all(math.isfinite(value) for value in angular_velocity)):
             raise ValueError('Invalid dynamic angular velocity')
-        if self._rapier is not None:
-            orientation = quaternion(pose.yaw, pose.pitch, pose.roll)
-            properties = self._dynamic_mass_properties(entity, self.gun_angles[entity][0])
-            self._rapier.set_mass(entity, properties.mass, properties.center_of_mass,
-                                  properties.inertia_diagonal)
-            # Rapier stores a body-origin transform but integrates COM velocity.
-            rotation = np.asarray(bullet.getMatrixFromQuaternion(orientation)).reshape(3, 3)
-            com_offset = rotation @ np.asarray(properties.center_of_mass)
-            com_velocity = np.asarray(velocity) + np.cross(angular_velocity, com_offset)
-            if entity not in self.dynamic_bounds:
-                self.dynamic_shapes[entity] = self._dynamic_shape(entity)
-            self._rapier.activate(entity, pose.position, orientation, tuple(com_velocity), angular_velocity)
-            self.dynamic_bodies[entity] = DynamicBody(entity, properties.mass,
-                properties.center_of_mass, properties.inertia_diagonal)
-            self._rapier_orientations[entity] = orientation
-            self._rapier_angular_states[entity] = angular_velocity
-            self.dynamic_fall_peak[entity] = 0.
-            self.dynamic_fall_gap[entity] = 0
-            self.dynamic_launch_angular_velocities.pop(entity, None)
-            self.set_pose(self.bodies[entity], pose)
-            self._synced[entity] = (pose, self.motion[entity])
-            return pose
         turret_yaw = self.dynamic_mass_yaws.setdefault(
             entity, float(self.gun_angles.get(entity, (0.,0.))[0]))
         launch_angular = self.dynamic_launch_angular_velocities.setdefault(
@@ -1525,10 +1569,10 @@ class CollisionWorld:
         contact_friction = self._ragdoll_friction(math.cos(pose.pitch)*math.cos(pose.roll))
         bullet.changeDynamics(body, -1, collisionMargin=.001, lateralFriction=contact_friction, restitution=.02,
                               rollingFriction=.01, spinningFriction=.01,
-                              linearDamping=self.DYNAMIC_LINEAR_DAMPING, angularDamping=.025,
+                              linearDamping=self.DYNAMIC_LINEAR_DAMPING, angularDamping=self.DYNAMIC_ANGULAR_DAMPING,
                               localInertiaDiagonal=properties.inertia_diagonal,
                               physicsClientId=self.cid)
-        obstacles = self.map_bodies | self.terrain_bodies
+        obstacles = (self.map_bodies - self.breakable_bodies.keys()) | self.terrain_bodies
         # Explicit pair queries do not check the collision masks. Include each
         # flying tank through its rigid hull and exclude its disabled sensor.
         obstacles.update(body_id for body_id, other in self.body_entities.items()
@@ -1538,8 +1582,11 @@ class CollisionWorld:
                          if not self.collision_zone or self.collision_zone(self.poses[other].position) == inside)
         corrected_by = 0.
         contact = self._dynamic_start_contact(body, obstacles)
+        start_center = None
         for _ in range(8):
             if contact is None:
+                break
+            if contact[2] in self.terrain_bodies and contact[7][1] <= 0.:
                 break
             depth = -float(contact[8]) + self.SKIN
             normal = np.asarray(contact[7], dtype=float)
@@ -1550,6 +1597,8 @@ class CollisionWorld:
             normal /= length
             correction = normal * depth
             center, orientation = bullet.getBasePositionAndOrientation(body, physicsClientId=self.cid)
+            if start_center is None:
+                start_center = (center, orientation)
             center = np.asarray(center, dtype=float)
             center += correction
             bullet.resetBasePositionAndOrientation(body, tuple(center), orientation,
@@ -1557,8 +1606,32 @@ class CollisionWorld:
             corrected_by += depth
             contact = self._dynamic_start_contact(body, obstacles)
         if contact is not None:
+            if allow_separation and math.isfinite(contact[8]):
+                if start_center is not None:
+                    # The full correction failed. Try a single safe slice
+                    # from the authoritative pose, not from a discarded trial.
+                    bullet.resetBasePositionAndOrientation(body, *start_center, physicsClientId=self.cid)
+                    contact = self._dynamic_start_contact(body, obstacles)
+                separated = (self._separate_blocked_launch(entity, pose, body, contact, obstacles)
+                             if contact is not None else None)
+                if separated is not None:
+                    self._separating_launches[entity] = separated
+                    self.poses[entity] = separated
+                    self._synced[entity] = (separated, self.motion[entity])
+            stationary = (allow_separation and not self.collision_zone and not self.trace_dynamic_contacts
+                          and not getattr(self, '_contact_query_observer', None)
+                          and self.poses[entity] == pose and velocity[0] == velocity[2] == 0.)
+            if stationary:
+                # The temporary body may have moved within the correction
+                # budget. Include every position a future attempt may query.
+                low, high = bullet.getAABB(body, physicsClientId=self.cid)
+                margin = 2*self.DYNAMIC_MAX_START_CORRECTION + self.STEP + self.SKIN
+                bounds = (tuple(x-margin for x in low), tuple(x+margin for x in high))
             bullet.removeBody(body, physicsClientId=self.cid)
             self._sensor_filter(entity, _TRACKED_GROUP, _DYNAMIC_GROUP)
+            if stationary:
+                self._blocked_launches[entity] = (pose, velocity, angular_velocity, bounds,
+                                                  self._launch_environment(entity, bounds))
             return None
         if initialize_bullet_velocity:
             launch_rotation = np.asarray(bullet.getMatrixFromQuaternion(launch_orientation)).reshape(3, 3)
@@ -1605,20 +1678,31 @@ class CollisionWorld:
 
     def _activate_pending_dynamics(self):
         pending, self.pending_dynamics = self.pending_dynamics, {}
-        activated = False
+        moved = False
         for entity, (pose, velocity, angular_velocity) in pending.items():
             if entity in self.dynamic_bodies:
                 continue
-            active = self._activate_dynamic(entity, pose, velocity, angular_velocity)
+            blocked = self._blocked_launches.get(entity)
+            if blocked is not None:
+                old_pose, old_velocity, old_spin, bounds, environment = blocked
+                if (not self.collision_zone and not self.trace_dynamic_contacts
+                        and not getattr(self, '_contact_query_observer', None)
+                        and (pose, velocity, angular_velocity) == (old_pose, old_velocity, old_spin)
+                        and self._launch_environment(entity, bounds) == environment):
+                    continue
+                del self._blocked_launches[entity]
+            active = self._activate_dynamic(entity, pose, velocity, angular_velocity,
+                                            allow_separation=True)
             if active is None:
+                moved |= self.poses[entity] != pose
                 continue
             state = self.motion[entity]
             state.velocity, state.grounded = velocity, False
             self.short_flight_spins.pop(entity,None)
             self.poses[entity] = active
             self._synced[entity] = (active,state)
-            activated = True
-        return activated
+            moved = True
+        return moved
 
     @staticmethod
     def _ground_handoff_pose(pose):
@@ -1669,8 +1753,6 @@ class CollisionWorld:
         dynamic = self.dynamic_bodies.pop(entity)
         self.dynamic_fall_peak.pop(entity,None)
         self.dynamic_fall_gap.pop(entity,None)
-        if velocity is None and self._rapier is not None:
-            velocity = self.motion[entity].velocity
         if velocity is None:
             center, orientation = bullet.getBasePositionAndOrientation(
                 dynamic.body, physicsClientId=self.cid)
@@ -1681,12 +1763,7 @@ class CollisionWorld:
             offset = rotation @ np.asarray(dynamic.center_of_mass, dtype=float)
             velocity = np.asarray(linear, dtype=float) - np.cross(
                 np.asarray(angular, dtype=float), offset)
-        if self._rapier is not None:
-            self._rapier.deactivate(entity)
-            self._rapier_orientations.pop(entity, None)
-            self._rapier_angular_states.pop(entity, None)
-        else:
-            bullet.removeBody(dynamic.body, physicsClientId=self.cid)
+        bullet.removeBody(dynamic.body, physicsClientId=self.cid)
         self.dynamic_launch_angular_velocities.pop(entity,None)
         self.short_flight_spins.pop(entity,None)
         self.dynamic_mass_yaws.pop(entity,None)
@@ -1722,6 +1799,12 @@ class CollisionWorld:
                    and point[7][1] > .35
                    and point[8] <= self.SKIN and point[9] > 0.
                    for point in contacts):
+            dynamic.settled_steps = 0
+            return None
+        # A terrain support fit has an upward normal. For an overturned hull,
+        # its horizontal up-vector component bounds the best possible alignment
+        # with any such normal, even on a vertical slope.
+        if up[1] < 0. and math.hypot(up[0], up[2]) + 1e-12 < self.DYNAMIC_GROUND_ALIGNMENT:
             dynamic.settled_steps = 0
             return None
         ground_pose = self._ground_handoff_pose(pose)
@@ -1780,7 +1863,6 @@ class CollisionWorld:
             and getattr(self._contacts, '__func__', None) is _CONTACTS_IMPL
             and getattr(self, '_contact_query_observer', None) is None
             and getattr(self, 'collision_zone', None) is None
-            and self._rapier_query_backend == 'bullet'
             and not self.trace_dynamic_contacts)
         self._sensor_filter(entity,_TRACKED_GROUP,_DYNAMIC_GROUP)
         prepare_contacts = (reuse_contacts
@@ -1789,11 +1871,7 @@ class CollisionWorld:
         if prepare_contacts:
             rotations = {}
             self._compressed_track_contact = partial(self._recovery_track_contact, rotations)
-        batch_contacts = (prepare_contacts
-            and getattr(self._static_ray, '__func__', None) is _RECOVERY_SCALAR_RAY
-            and getattr(self._static_rays, '__func__', None) is _GROUND_RAYS_IMPL
-            and bullet.rayTest is _RECOVERY_RAY_TEST
-            and bullet.rayTestBatch is _GROUND_RAY_BATCH_SOURCE)
+        batch_contacts = prepare_contacts and self._can_batch_incline_rays()
         if batch_contacts:
             self._recovery_batch_active = True
         cache_raw = (reuse_contacts and _contact_queries is not None
@@ -1859,211 +1937,14 @@ class CollisionWorld:
             bullet.changeDynamics(dynamic.body, -1, lateralFriction=value,
                 physicsClientId=self.cid)
 
-    def _rapier_handoff(self, entity, dynamic, pose, velocity, angular_velocity, up, contacts):
-        spin = math.sqrt(sum(value*value for value in angular_velocity))
-        if spin > self.DYNAMIC_SETTLE_ANGULAR_SPEED:
-            dynamic.settled_steps = 0
-            return None
-        static_support = self.map_bodies | self.terrain_bodies
-        if not any(point[2] in static_support and point[7][1] > .35
-                   and point[8] <= self.SKIN and point[9] > 0. for point in contacts):
-            dynamic.settled_steps = 0
-            return None
-        ground_pose = self._ground_handoff_pose(pose)
-        candidate = self._landing_support(pose.position[0], pose.position[2], ground_pose.yaw,
-                                         pose.position[1], entity)
-        candidate_up = matrix(candidate.yaw, candidate.pitch, candidate.roll)[:, 1]
-        if abs(float(np.dot(velocity, candidate_up))) > self.DYNAMIC_SETTLE_SPEED:
-            dynamic.settled_steps = 0
-            return None
-        suspension = self._has_suspension(entity)
-        if (float(np.dot(up, candidate_up)) < self.DYNAMIC_GROUND_ALIGNMENT
-                or (not suspension and math.dist(candidate.position, pose.position)
-                    > self.DYNAMIC_HANDOFF_DISTANCE)):
-            dynamic.settled_steps = 0
-            return None
-        # A sprung handoff retains the physical pose, so distance to the
-        # station fit is not a displacement we are about to apply. Convex
-        # tracks can rest on a different subset of a curved hill than that
-        # fit (Fort/Sheridan: 0.234 m apart). Validate the actual carrying
-        # footprint and penetration instead of waiting for stuck recovery to
-        # move the body up. Unsprung landings still need the distance bound.
-        if suspension and (not self._can_carry_origin(entity, ground_pose)
-                or any(point[2] in static_support and
-                       point[8] < -self.SUSPENSION_TRAVEL-self.SKIN for point in contacts)):
-            dynamic.settled_steps = 0
-            return None
-        dynamic.settled_steps += 1
-        if dynamic.settled_steps < self.DYNAMIC_SETTLE_STEPS:
-            return None
-        handoff = ground_pose if self.sprung_tracks else candidate
-        if not self._valid(handoff, pose, entity=entity, climb=False,
-                           suspension=self._has_suspension(entity))[0]:
-            dynamic.settled_steps = 0
-            return None
-        self._road_poses[entity] = candidate
-        return handoff
-
-    def _rapier_contacts(self, contacts, dt, metadata=None):
-        """Translate native contacts into the Bullet-shaped game contact ABI.
-
-        Entity IDs and destructible keys are not Bullet body IDs. Rapier's
-        accumulated contact impulse is N*s; Bullet field 9 is normal force.
-        """
-        grouped = {entity: [] for entity in self.dynamic_bodies}
-        known_bodies = self.map_bodies | self.terrain_bodies | set(self.bodies.values())
-        if metadata is None:
-            rows = ((contact['entity'], contact['other'],
-                     tuple(contact.get('point_a', contact['point'])),
-                     tuple(contact.get('point_b', contact['point'])), tuple(contact['normal']),
-                     contact['distance'], contact['impulse']) for contact in contacts)
-        else:
-            rows = ((row[0], metadata[row[1]], row[5:8], row[8:11], row[11:14], row[14], row[15])
-                    for row in contacts)
-        for entity, other, point, other_point, normal, distance, impulse in rows:
-            if entity not in grouped:
-                raise ValueError('Rapier contact refers to an inactive entity')
-            if other.get('kind') in ('dynamic', 'sensor'):
-                body = self.bodies.get(other.get('id'))
-            else:
-                body = other.get('body')
-            if type(body) is not int or body not in known_bodies:
-                raise ValueError('Rapier contact refers to an unknown body')
-            if (len(point) != 3 or len(other_point) != 3 or len(normal) != 3 or
-                    not all(math.isfinite(value) for value in (*point, *other_point, *normal, distance, impulse)) or
-                    impulse < 0. or not .99 <= math.sqrt(sum(value*value for value in normal)) <= 1.01):
-                raise ValueError('Invalid Rapier contact')
-            grouped[entity].append((0, self.bodies[entity], body, -1, -1,
-                point, other_point, normal, distance, impulse/dt))
-        return grouped
-
-    def _dynamic_commit_rapier(self, dt, piloted=()):
-        moved = False
-        final_contacts = {}
-        previous_poses = dict(self.poses)
-        # Keep the same maximum integration interval as the Bullet backend.
-        # New pending bodies activate below, after existing bodies finish dt.
-        if self.dynamic_bodies:
-            steps = max(1, math.ceil(dt / self.DYNAMIC_MAX_STEP))
-            sub_dt = dt / steps
-            # Only dynamic poses change inside this loop, and Rapier already
-            # owns those bodies. The kinematic sensors keep their tick-start pose
-            # until the next drive pass or the handoff below.
-            orientations = {entity: quaternion(pose.yaw, pose.pitch, pose.roll)
-                            for entity, pose in self.poses.items()}
-            self._rapier.sync([
-                dict(id=entity, position=pose.position, orientation=orientations[entity])
-                for entity, pose in self.poses.items()
-            ])
-            for step in range(steps):
-                before = {}
-                for entity, dynamic in self.dynamic_bodies.items():
-                    pose = self.poses[entity]
-                    orientation = (orientations[entity] if step == 0
-                                   else quaternion(pose.yaw, pose.pitch, pose.roll))
-                    rotation = np.asarray(bullet.getMatrixFromQuaternion(orientation)).reshape(3, 3)
-                    offset = rotation @ np.asarray(dynamic.center_of_mass)
-                    center = np.asarray(pose.position) + offset
-                    angular = np.asarray(self._rapier_angular_states[entity])
-                    linear = np.asarray(self.motion[entity].velocity) + cross3_f64(angular, offset)
-                    before[entity] = (center, rotation.ravel(), linear, angular)
-                result = self._rapier.step(sub_dt, rows=True)
-                packed = isinstance(result, RapierStepRows)
-                if packed:
-                    final_contacts = self._rapier_contacts(result.contacts, sub_dt, result.metadata)
-                else:
-                    final_contacts = self._rapier_contacts(result['contacts'], sub_dt)
-                self._record_air_rams(before, final_contacts)
-                for entity, dynamic in list(self.dynamic_bodies.items()):
-                    if packed:
-                        row = result.states[entity]
-                        position, orientation, velocity, spin = row[1:4], row[4:8], row[8:11], row[11:14]
-                    else:
-                        state = result['states'][str(entity)]
-                        position, orientation, velocity, spin = (
-                            state['position'], state['orientation'], state['velocity'], state['angular'])
-                    if (len(orientation) != 4 or not all(math.isfinite(value) for value in orientation)
-                            or not .99 <= sum(value*value for value in orientation) <= 1.01):
-                        raise ValueError('Invalid Rapier body orientation')
-                    rotation = np.asarray(bullet.getMatrixFromQuaternion(orientation)).reshape(3, 3)
-                    offset = rotation @ np.asarray(dynamic.center_of_mass)
-                    linear = np.asarray(velocity)
-                    angular = np.asarray(spin)
-                    origin_velocity = linear - cross3_f64(angular, offset)
-                    previous = self.poses[entity]
-                    pose = self._pose_from_quaternion(position, orientation, previous,
-                                                      rotation=rotation)
-                    if not all(math.isfinite(value) for value in (*pose.position, *origin_velocity, *angular)):
-                        raise ValueError('Non-finite Rapier dynamic body state')
-                    self.poses[entity] = pose
-                    self.motion[entity] = Motion(tuple(float(value) for value in origin_velocity), False)
-                    self._rapier_orientations[entity] = orientation
-                    self._rapier_angular_states[entity] = tuple(angular)
-                    self.set_pose(self.bodies[entity], pose)
-                    self._synced[entity] = (pose, self.motion[entity])
-                    moved |= math.dist(previous.position, pose.position) > 1e-7
-                    contacts = final_contacts[entity]
-                    keys = {self.breakable_bodies[point[2]] for point in contacts
-                            if point[2] in self.breakable_bodies and point[8] <= self.SKIN}
-                    for key in sorted(keys):
-                        self.destroy(key, (float(linear[0]), float(linear[2])))
-                    self._record_fall_contacts(entity, dynamic, before[entity], contacts)
-        # As with Bullet, quiet landing and stuck-time counters advance once
-        # per arena fixed step, not once per native integration substep.
-        for entity, dynamic in list(self.dynamic_bodies.items()):
-            pose = self.poses[entity]
-            previous = previous_poses[entity]
-            orientation = self._rapier_orientations[entity]
-            rotation = np.asarray(bullet.getMatrixFromQuaternion(orientation)).reshape(3, 3)
-            angular = np.asarray(self._rapier_angular_states[entity])
-            origin_velocity = np.asarray(self.motion[entity].velocity)
-            rotational_velocity = cross3_f64(angular, rotation @ np.asarray(dynamic.center_of_mass))
-            clipped, clipped_velocity = self._constrain_dynamic_pose(entity, pose, origin_velocity, rotation)
-            if clipped.position != pose.position:
-                self._rapier.deactivate(entity)
-                self._rapier.activate(entity, clipped.position, orientation,
-                                      clipped_velocity + rotational_velocity, angular)
-                self.poses[entity] = pose = clipped
-                self.motion[entity] = Motion(clipped_velocity, False)
-                self.set_pose(self.bodies[entity], pose)
-                self._synced[entity] = (pose, self.motion[entity])
-                origin_velocity = clipped_velocity
-            if entity in piloted:
-                dynamic.settled_steps = 0
-                dynamic.stationary_time = 0.
-                continue
-            linear = origin_velocity + rotational_velocity
-            contacts = final_contacts[entity]
-            handoff = self._rapier_handoff(entity, dynamic, pose, linear, angular, rotation[:, 1], contacts)
-            if handoff is not None:
-                forward = rotation[:, 2]
-                forward_rate = cross3_f64(angular, forward)
-                yaw_rate = float((forward[2]*forward_rate[0]-forward[0]*forward_rate[2])
-                                 / max(1e-8, forward[0]**2+forward[2]**2))
-                self._commit_dynamic_handoff(entity, handoff, pose, previous,
-                                              origin_velocity, yaw_rate, dt)
-                continue
-            if dynamic.stationary_anchor is None or math.dist(
-                    dynamic.stationary_anchor, pose.position) > self.DYNAMIC_STUCK_RADIUS:
-                dynamic.stationary_anchor = pose.position
-                dynamic.stationary_time = 0.
-            else:
-                dynamic.stationary_time += dt
-            if dynamic.stationary_time >= self.DYNAMIC_RECOVER_AFTER:
-                if not self._recover_dynamic(entity, dynamic, pose, rotation):
-                    dynamic.stationary_time = 0.
-        return self._activate_pending_dynamics() or moved
-
     @property
     def supports_flight(self):
-        return self.experimental_6dof and (self._rapier is None or self._rapier.supports_flight)
+        return self.experimental_6dof
 
     def flight_spin(self, entity):
         dynamic = self.dynamic_bodies.get(entity)
         if dynamic is None:
             return (0., 0., 0.)
-        if self._rapier is not None:
-            return self._rapier_angular_states[entity]
         return bullet.getBaseVelocity(dynamic.body, physicsClientId=self.cid)[1]
 
     def set_flight_velocity(self, entity, velocity, angular, *, sandbox_landing: bool | None = None):
@@ -2081,11 +1962,7 @@ class CollisionWorld:
             dynamic.sandbox_landing = sandbox_landing
         offset = matrix(pose.yaw, pose.pitch, pose.roll) @ dynamic.center_of_mass
         com_velocity = self._center_velocity(velocity, angular, offset)
-        if self._rapier is not None:
-            self._rapier.set_velocity(entity, com_velocity, angular)
-            self._rapier_angular_states[entity] = angular
-        else:
-            bullet.resetBaseVelocity(dynamic.body, com_velocity, angular, physicsClientId=self.cid)
+        bullet.resetBaseVelocity(dynamic.body, com_velocity, angular, physicsClientId=self.cid)
         state.velocity, state.grounded = velocity, False
         self._wall_glances.pop(entity,None)
         self._synced[entity] = (pose, state)
@@ -2101,7 +1978,7 @@ class CollisionWorld:
             angular = tuple(current+extra for current, extra in zip(angular, angular_delta))
         if not self.set_flight_velocity(entity, velocity, angular):
             return False
-        if linear_damping is not None and self._rapier is None:
+        if linear_damping is not None:
             dynamic = self.dynamic_bodies[entity]
             bullet.changeDynamics(dynamic.body, -1, linearDamping=linear_damping, physicsClientId=self.cid)
             dynamic.restore_air_damping = True
@@ -2132,6 +2009,37 @@ class CollisionWorld:
             self.pending_dynamics[entity] = pending[0], state.velocity, angular
         return True
 
+    def _terrain_probe_points(self, entity):
+        assets = self.assets_for(entity)
+        cached = self._terrain_probes.get(id(assets))
+        if cached is not None and cached[0] is assets:
+            return cached[1]
+        proxies = getattr(assets, 'contact_proxies', None)
+        if proxies:
+            components = []
+            for part in proxies:
+                if part.name == assets.turret_node:
+                    continue
+                if part.kind == 'box':
+                    cx, cy, cz = part.center
+                    hx, hy, hz = part.half_extents
+                    components.append([(x, y, z) for x in (cx-hx, cx+hx)
+                                       for y in (cy-hy, cy+hy) for z in (cz-hz, cz+hz)])
+                else:
+                    components.append(part.vertices)
+        else:
+            shapes = getattr(assets, '_convex_shapes', None) or assets.tank_shapes
+            components = [verts for name, verts in shapes if name != assets.turret_node]
+        points = np.concatenate(components)
+        points.setflags(write=False)
+        self._terrain_probes[id(assets)] = assets, points
+        return points
+
+    def _terrain_penetration(self, pose, rotation, points):
+        world_points = points @ rotation.T + pose.position
+        heights = self._terrain_heights(world_points[:, 0], world_points[:, 2])
+        return float(np.max(heights - world_points[:, 1]))
+
     def _constrain_dynamic_pose(self, entity, pose, velocity, rotation):
         """Keep dynamic hulls inside the red line and above terrain overlaps."""
         bounds = self.dynamic_bounds[entity]
@@ -2151,16 +2059,7 @@ class CollisionWorld:
         # a sloped hull or track nose and must not trigger depenetration.
         if y - down < self.terrain.height(x, z) + 2.:
             dynamic = self.dynamic_bodies[entity]
-            if dynamic.terrain_points is None:
-                assets = self.assets_for(entity)
-                proxies = getattr(assets, 'contact_proxies', None)
-                components = ((part.name, part.vertices) for part in proxies) if proxies else (
-                    getattr(assets, '_convex_shapes', None) or assets.tank_shapes)
-                dynamic.terrain_points = np.concatenate(
-                    [vertices for name, vertices in components if name != assets.turret_node])
-            world_points = dynamic.terrain_points @ rotation.T + clipped.position
-            heights = self._terrain_heights(world_points[:, 0], world_points[:, 2])
-            penetration = float(np.max(heights - world_points[:, 1]))
+            penetration = self._terrain_penetration(clipped, rotation, self._terrain_probe_points(entity))
             overlap = (self.LOW_GRAVITY_TERRAIN_OVERLAP if self.GRAVITY < CollisionWorld.GRAVITY
                        else self.DYNAMIC_DEEP_TERRAIN_OVERLAP)
             if dynamic.sandbox_landing:
@@ -2222,6 +2121,21 @@ class CollisionWorld:
                                         angular_delta=tuple(v-c for v, c in zip(omega, angular)),
                                         linear_damping=damping)
 
+    def _break_props_at_rigid_body(self, body, direction):
+        if not self.breakable_bodies:
+            return
+        low, high = bullet.getAABB(body, physicsClientId=self.cid)
+        nearby = bullet.getOverlappingObjects(
+            tuple(v-self.SKIN for v in low), tuple(v+self.SKIN for v in high),
+            physicsClientId=self.cid) or ()
+        keys = set()
+        for other, _ in nearby:
+            if other in self.breakable_bodies and bullet.getClosestPoints(
+                    body, other, self.SKIN, physicsClientId=self.cid):
+                keys.add(self.breakable_bodies[other])
+        for key in sorted(keys):
+            self.destroy(key, direction)
+
     def dynamic_commit(self, dt, *, piloted=()):
         """Advance live bodies and then start newly released hulls.
 
@@ -2232,8 +2146,6 @@ class CollisionWorld:
         """
         if not (math.isfinite(dt) and dt > 0):
             raise ValueError('Invalid dynamic motion interval')
-        if self._rapier is not None:
-            return self._dynamic_commit_rapier(dt, piloted)
         moved = False
         previous_contacts = {}
         if self.dynamic_bodies:
@@ -2255,14 +2167,12 @@ class CollisionWorld:
                 if self.collision_zone:
                     self.refresh_collision_zones()
                 bullet.stepSimulation(physicsClientId=self.cid)
-                # The tracked solver destroys breakables in _valid(), but an
-                # active rigid body never enters that path. Resolve its real
-                # Bullet contacts at each substep so a brief landing contact
-                # cannot leave an intact collider trapped under the hull.
+                # Breakable meshes remain available for explicit contact and
+                # ray queries, but cannot exert a rigid-body solver impulse.
                 current_contacts = {}
-                contacts_changed = False
-                breakables = self.breakable_bodies
                 for entity,dynamic in tuple(self.dynamic_bodies.items()):
+                    linear = before[entity][2]
+                    self._break_props_at_rigid_body(dynamic.body, (linear[0], linear[2]))
                     contacts = bullet.getContactPoints(bodyA=dynamic.body,
                                                        physicsClientId=self.cid)
                     current_contacts[entity] = contacts
@@ -2271,18 +2181,9 @@ class CollisionWorld:
                             bullet.changeDynamics(dynamic.body, -1, linearDamping=self.DYNAMIC_LINEAR_DAMPING,
                                                   physicsClientId=self.cid)
                             dynamic.restore_air_damping = False
-                        keys = {breakables[point[2]] for point in contacts
-                                if point[2] in breakables and point[8] <= self.SKIN}
-                        if keys:
-                            contacts_changed = True
-                            velocity, _ = bullet.getBaseVelocity(dynamic.body,
-                                                                 physicsClientId=self.cid)
-                            direction = (float(velocity[0]), float(velocity[2]))
-                            for key in sorted(keys):
-                                self.destroy(key, direction)
                     self._record_fall_contacts(entity,dynamic,before[entity],contacts)
                 self._record_air_rams(before, current_contacts, bullet_bodies=True)
-                previous_contacts = {} if contacts_changed else current_contacts
+                previous_contacts = current_contacts
         for entity, dynamic in list(self.dynamic_bodies.items()):
             contacts = previous_contacts.get(entity)
             if contacts is None:
@@ -2589,33 +2490,30 @@ class CollisionWorld:
     def _close_steps(self):
         if self._native_physics is not None:
             self._native_physics.close()
-            self._native_physics = None
             yield
-        if self._visibility is not None:
-            self._visibility.close()
-            self._visibility = None
-            yield
-        if self._rapier is not None:
-            self._rapier.close()
-            self._rapier = None
-        if self._rapier_fixture is not None:
-            Path(self._rapier_fixture).unlink(missing_ok=True)
-            self._rapier_fixture = None
-        self._rapier_orientations.clear()
-        self._rapier_angular_states.clear()
-        if self.cid is not None and bullet.isConnected(self.cid):
+        def connected():
+            return (self.cid is not None
+                    and (self._native_physics is None or self._native_physics.arena_alive())
+                    and bullet.isConnected(self.cid))
+
+        if connected():
             ids = [bullet.getBodyUniqueId(i,physicsClientId=self.cid)
                    for i in range(bullet.getNumBodies(physicsClientId=self.cid))]
             yield
             for body in ids:
+                if not connected():
+                    break
                 bullet.removeBody(body,physicsClientId=self.cid)
                 yield
-            bullet.disconnect(self.cid)
+            if connected():
+                bullet.disconnect(self.cid)
+        self._native_physics = None
         self.cid = None
         self.dynamic_bodies.clear()
         self.dynamic_shapes.clear()
         self._shared_dynamic_shapes.clear()
         self._mass_models.clear()
+        self._terrain_probes.clear()
         self._kinematic_shapes.clear()
         self.dynamic_bounds.clear()
         self.dynamic_fall_peak.clear()
@@ -2627,6 +2525,8 @@ class CollisionWorld:
         self._track_impact_peaks.clear()
         self.dynamic_contact_trace.clear()
         self.pending_dynamics.clear()
+        self._separating_launches.clear()
+        self._blocked_launches.clear()
         self.dynamic_mass_yaws.clear()
         self.dynamic_launch_angular_velocities.clear()
         self.short_flight_spins.clear()
@@ -2735,6 +2635,8 @@ class CollisionWorld:
     def relocate_training_body(self, entity, pose, *, motion=None, road=None, lean=None):
         """Move an existing body and start contact from the supplied physical state."""
         self.pending_dynamics.pop(entity, None)
+        self._separating_launches.pop(entity, None)
+        self._blocked_launches.pop(entity, None)
         road = pose if road is None else road
         self._road_poses[entity] = road
         if entity in self.dynamic_bodies:
@@ -2760,6 +2662,7 @@ class CollisionWorld:
     def replace_training_body(self, entity, assets, spawns):
         """Fit the replacement hull at a team spawn before committing it."""
         previous = self.assets_for(entity)
+        self._blocked_launches.clear()
         pose = self.poses[entity]
         if not self.vehicle_assets:
             self.vehicle_assets.update(dict.fromkeys(self.bodies, self.assets))
@@ -2798,15 +2701,14 @@ class CollisionWorld:
             if self.experimental_ground_impacts:
                 self.ground_mass_properties[entity] = self._dynamic_mass_properties(entity, 0.)
             if self._native_physics is not None:
-                self._native_physics.replace_vehicle(self, entity, placed)
-            if self._rapier is not None:
-                self._rapier.replace_vehicle(self._rapier_vehicle(entity, placed))
+                self._native_physics.replace_vehicle(self, entity)
             self.relocate_training_body(entity, placed)
             bullet.removeBody(old_body, physicsClientId=self.cid)
             del self.body_entities[old_body]
             self.body_entities[body] = entity
             if all(current is not previous for current in self.vehicle_assets.values()):
                 self._mass_models.pop(id(previous), None)
+                self._terrain_probes.pop(id(previous), None)
             return placed
         finally:
             if placed is None:
@@ -2819,6 +2721,7 @@ class CollisionWorld:
     def release_practice_scene(self, assets):
         self._support_layouts.pop(id(assets), None)
         self._mass_models.pop(id(assets), None)
+        self._terrain_probes.pop(id(assets), None)
         assets.close()
 
     def set_turret(self, yaw, entity=None, pitch=0.):
@@ -2911,8 +2814,7 @@ class CollisionWorld:
         raised_hits = None
         fuse = (os.environ.get('SOLBREAKER_GROUND_RAY_BATCH') == '1'
                 and bullet.rayTestBatch is _GROUND_RAY_BATCH_SOURCE
-                and getattr(self._static_rays,'__func__',None) is _GROUND_RAYS_IMPL
-                and (getattr(self,'_rapier',None) is None or self._rapier_query_backend == 'bullet'))
+                and getattr(self._static_rays,'__func__',None) is _GROUND_RAYS_IMPL)
         if plane is not None:
             if plan is None:
                 raised = np.flatnonzero(starts > tops)
@@ -3338,7 +3240,7 @@ class CollisionWorld:
         y = max(y, float(self._terrain_heights((x,), (z,))[0]))
         return Pose((float(x),float(y),float(z)),yaw,pitch,roll)
 
-    def _contacts(self, pose, entity=None, *, suspension=False, pair_queries=None):
+    def _contacts(self, pose, entity=None, *, suspension=False, pair_queries=None, landing_probe=False):
         entity = self.primary_id if entity is None else entity
         player = self.bodies[entity]
         self.set_pose(player, pose)
@@ -3383,7 +3285,19 @@ class CollisionWorld:
             for body in bodies:
                 points.extend(bullet.getClosestPoints(player, body, self.SKIN,
                                                        physicsClientId=self.cid))
-        filtered = CollisionWorld._blocking_contacts(self, pose, entity, suspension, points)
+        # Landing probes against a wall can return many track points on the
+        # same mesh. Their independent incline rays share one fixed pose.
+        if (landing_probe and suspension and len(points) >= 12
+                and self.experimental_6dof and not self.wall_trampoline
+                and CollisionWorld._blocking_contacts is _RECOVERY_BLOCKING_CONTACTS
+                and not getattr(self, 'collision_zone', None) and not self.trace_dynamic_contacts
+                and getattr(self, '_contact_query_observer', None) is None
+                and getattr(self._compressed_track_contact, '__func__', None) is _COMPRESSED_CONTACT_IMPL
+                and getattr(self._track_incline, '__func__', None) is _TRACK_INCLINE_IMPL
+                and self._can_batch_incline_rays()):
+            filtered = self._batch_track_contacts(pose, entity, points)
+        else:
+            filtered = CollisionWorld._blocking_contacts(self, pose, entity, suspension, points)
         if _contact_queries is not None and recovery is not None and recovery.filtered is not None:
             recovery.filtered[filter_key] = filtered
         return filtered
@@ -3401,7 +3315,7 @@ class CollisionWorld:
 
     def _blocking_contacts(self, pose, entity, suspension, points):
         if suspension and len(points) >= 12 and getattr(self, '_recovery_batch_active', False):
-            return self._recovery_batch_filter(pose, entity, points)
+            return self._batch_track_contacts(pose, entity, points)
         if getattr(self, 'collision_zone', None):
             inside = self.collision_zone(pose.position)
             points = (p for p in points if p[2] not in self.body_entities or
@@ -3443,7 +3357,13 @@ class CollisionWorld:
                 return True
         return False
 
-    def _recovery_batch_filter(self, pose, entity, points):
+    def _can_batch_incline_rays(self):
+        return (getattr(self._static_ray, '__func__', None) is _RECOVERY_SCALAR_RAY
+                and getattr(self._static_rays, '__func__', None) is _GROUND_RAYS_IMPL
+                and bullet.rayTest is _RECOVERY_RAY_TEST
+                and bullet.rayTestBatch is _GROUND_RAY_BATCH_SOURCE)
+
+    def _batch_track_contacts(self, pose, entity, points):
         # The pose, static world and support cache remain fixed throughout this call.
         tracks = self.track_links.get(entity,())
         supports = self._contact_support_cache.get(entity,())
@@ -3779,10 +3699,6 @@ class CollisionWorld:
             else:
                 bullet.removeBody(body,physicsClientId=self.cid)
         self.destroyed.add(key)
-        if self._visibility is not None:
-            self._visibility.destroy(key)
-        if self._rapier is not None:
-            self._rapier.destroy(key)
         if self._native_physics is not None:
             self._native_physics.query(operation='destroy', key=key)
         self.destruction_events.append((obj,yaw,angle))
@@ -3790,7 +3706,7 @@ class CollisionWorld:
 
     def restore_range_sector(self, contains):
         """Restore the range's parked Bullet props while every participant reloads."""
-        if not self.collision_zone or self._rapier or self._native_physics or self._visibility:
+        if not self.collision_zone:
             return ()
         keys = []
         for key, obj in self.assets.destructibles.items():
@@ -3815,9 +3731,11 @@ class CollisionWorld:
                 bullet.resetBasePositionAndOrientation(body, (0., 0., 0.), (0., 0., 0., 1.),
                                                        physicsClientId=self.cid)
                 bullet.setCollisionFilterGroupMask(body, -1, _STATIC_GROUP,
-                    _RAY_GROUP | _DYNAMIC_GROUP | _ZONE_DYNAMIC_GROUP, physicsClientId=self.cid)
+                    _RAY_GROUP, physicsClientId=self.cid)
                 self.map_bodies.add(body)
                 self.breakable_bodies[body] = key
+            if self._native_physics is not None:
+                self._native_physics.query(operation='restore_prop', key=key)
             self.destroyed.remove(key)
         if keys:
             self.destruction_events[:] = [event for event in self.destruction_events if event[0].key not in keys]
@@ -3965,19 +3883,11 @@ class CollisionWorld:
             else:
                 moved,rest = False,dt
                 if state.grounded:
-                    circle = self.movement_circle
-                    near_circle = False
-                    if circle is not None and entity == circle[0]:
-                        _, cx, cz, radius = circle
-                        x, _, z = self.poses[entity].position
-                        travel = math.hypot(*planar_displacement) if planar_displacement is not None else abs(distance)
-                        near_circle = math.hypot(x-cx, z-cz) + travel >= radius - self.SKIN
-                    if near_circle or entity in self.open_map_borders or self.collision_zone:
-                        # Native solvers use the original map rectangle.
-                        native = None
-                    elif self._native_physics is not None:
+                    if self._native_physics is not None:
                         native = self._native_physics.move(self,entity,distance,yaw_delta,dt,state,
                                                           planar_displacement)
+                    elif self.movement_circle or entity in self.open_map_borders or self.collision_zone:
+                        native = None
                     else:
                         if self._rust_drive is None:
                             from .sim_native import RustDrive
@@ -4065,7 +3975,6 @@ class CollisionWorld:
         if (getattr(_contact_queries, 'API_VERSION', None) == 2
                 and getattr(self, '_contact_query_observer', None) is None
                 and getattr(self, 'collision_zone', None) is None
-                and self._rapier_query_backend == 'bullet'
                 and not self.trace_dynamic_contacts
                 and getattr(self._valid, '__func__', None) is _VALID_IMPL
                 and getattr(self._contacts, '__func__', None) is _CONTACTS_IMPL):
@@ -4128,7 +4037,6 @@ class CollisionWorld:
         x,y,z = pose.position
         native = self._native_physics
         if native is not None:
-            native.sync(self,(entity,))
             # A wall can briefly clear the nose as the hull turns. Keep the
             # same measured face in range across that gap and mesh seams.
             skin = max(.45 if guide else 0.,min(.35,travel)+self.SKIN)
@@ -4245,8 +4153,6 @@ class CollisionWorld:
 
     def begin_ground_step(self):
         """Reset per-tick inputs for the opt-in planar contact solver."""
-        if self._native_physics is not None:
-            self._native_physics.sync(self)
         if self.experimental_ground_impacts:
             self.ground_commands.clear()
             self.ground_track_rates.clear()
@@ -5315,6 +5221,10 @@ class CollisionWorld:
     def _fly(self, entity, dt, state):
         """Ballistic flight without control, swept in short 3D increments."""
         pose = self.poses[entity]
+        # Continue a verified partial release next tick even inside the
+        # short-hop clearance. Otherwise gravity can undo the same lift
+        # repeatedly before the swept hull asks for rigid motion again.
+        separating = self._separating_launches.pop(entity, None) == pose
         if entity not in self._fall_peaks:
             self._begin_fall(entity,pose)
         assets = self.assets_for(entity)
@@ -5412,6 +5322,16 @@ class CollisionWorld:
                 # carrying landing: let the free body pivot/fall rather than
                 # reporting one grounded tick that drive immediately undoes.
                 ballistic = Pose((x+dx,y+dy,z+dz),pose.yaw,pose.pitch,pose.roll)
+                # The terrain mesh is excluded from swept obstacle queries.
+                # Put the lowest actual chassis point on the heightfield so
+                # Bullet can accept this body even on an unsupported edge.
+                rotation = matrix(pose.yaw, pose.pitch, pose.roll)
+                penetration = self._terrain_penetration(ballistic, rotation,
+                                                        self._terrain_probe_points(entity))
+                if penetration > self.SKIN:
+                    bx, by, bz = ballistic.position
+                    ballistic = Pose((bx, by + penetration - self.SKIN, bz),
+                                     pose.yaw, pose.pitch, pose.roll)
                 if self._valid(ballistic,pose,entity=entity,climb=False,suspension=True)[0]:
                     pose = ballistic
                     moved |= math.hypot(dx,dz) > 1e-5
@@ -5464,7 +5384,7 @@ class CollisionWorld:
                 # Keep the spin measured at takeoff when updating the queued
                 # pose after the swept remainder of this fixed step.
                 self._queue_dynamic(entity, pose, state.velocity)
-            elif pose.position[1]-ground.position[1] > self.DYNAMIC_MIN_CLEARANCE:
+            elif separating or pose.position[1]-ground.position[1] > self.DYNAMIC_MIN_CLEARANCE:
                 self._queue_dynamic(entity, pose, state.velocity,
                                     self.short_flight_spins.get(entity,(0.,0.,0.)))
         return moved
@@ -5496,13 +5416,8 @@ class CollisionWorld:
         dynamic = self.dynamic_bodies.get(entity)
         if dynamic is None:
             return None
-        if self._rapier is not None:
-            orientation = self._rapier_orientations.get(entity)
-            if orientation is None:
-                return None
-        else:
-            _, orientation = bullet.getBasePositionAndOrientation(
-                dynamic.body, physicsClientId=self.cid)
+        _, orientation = bullet.getBasePositionAndOrientation(
+            dynamic.body, physicsClientId=self.cid)
         return np.asarray(bullet.getMatrixFromQuaternion(orientation), dtype=float).reshape(3, 3)
 
     def _armor_state_snapshot_map(self, movable_armor_states):

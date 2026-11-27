@@ -71,7 +71,7 @@ class TimeStopTests(TestCase):
             self.owner.entity_id: Pose((0., 0., 0.), 0.),
             self.enemy.entity_id: Pose((0., 0., 12.), 0.),
             self.ally.entity_id: Pose((10., 0., 5.), 0.),
-        }, experimental_ground_impacts=False, dynamic_backend='bullet')
+        }, experimental_ground_impacts=False)
         for vehicle in (self.owner, self.enemy, self.ally):
             vehicle.pose = self.arena.world.poses[vehicle.entity_id]
         for account_id in (1, 2, 3):
@@ -116,10 +116,10 @@ class TimeStopTests(TestCase):
         end = Pose((0., 0., 5.), math.radians(20.))
         self.owner.gun.yaw = math.radians(30.)
         self.owner.gun.update_dispersion(aiming, start, end, 0., 1., 1.)
-        peak = math.hypot(1., 18.*.2, 20.*.1, 30.*.12)
+        peak = math.hypot(1., .6*18.*.2, .6*20.*.1, .6*30.*.12)
         self.assertAlmostEqual(self.owner.gun.movement_dispersion, peak)
         self.owner.gun.update_dispersion(aiming, end, end, self.owner.gun.yaw, 1., 1.)
-        settled = 1. + (peak - 1.) * math.exp(-.5)
+        settled = 1. + (peak - 1.) * math.exp(-1.)
         self.assertAlmostEqual(self.owner.gun.movement_dispersion, settled)
         gun_state = self.arena.guns[self.owner.entity_id] = GunState(GunSpec(100., 80., 0.))
         gun_state.damage(10.)
@@ -139,7 +139,7 @@ class TimeStopTests(TestCase):
         self.assertEqual(branch_marker[:2], (branch_origin, branch_velocity))
         self.assertEqual(branch_origin, branch.projectiles[1].position)
         ratio = math.tan(math.acos(sum(a*b/self.shell.speed for a, b in zip(branch_direction, velocity))))
-        self.assertAlmostEqual(ratio, .016 * 2. * settled)
+        self.assertAlmostEqual(ratio, .004 * 2. * 4.)
         self.assertAlmostEqual(branch_marker[2], ratio)
         self.assertAlmostEqual(_frame(branch).movement_dispersion, settled)
 
@@ -182,7 +182,7 @@ class TimeStopTests(TestCase):
         world = self.arena.world
         poses = dict(world.poses)
         world.close()
-        self.arena.world = CollisionWorld(assets, self.arena.terrain, vehicles=poses, dynamic_backend='bullet')
+        self.arena.world = CollisionWorld(assets, self.arena.terrain, vehicles=poses)
         self.geometry = build_spec(self.arena.world, include_armor=True)
 
     def worker(self, snapshot=None, *, rules=Rules()):
@@ -1033,8 +1033,7 @@ class TimeStopTests(TestCase):
         world = self.arena.world
         poses = dict(world.poses)
         world.close()
-        world = self.arena.world = CollisionWorld(assets, self.arena.terrain, vehicles=poses,
-                                                  dynamic_backend='bullet')
+        world = self.arena.world = CollisionWorld(assets, self.arena.terrain, vehicles=poses)
         entity, other = self.owner.entity_id, self.enemy.entity_id
         target = world.training_placement(other, 0., 12., 0., stationary=True, reference=3.)
         self.assertIsNotNone(target)

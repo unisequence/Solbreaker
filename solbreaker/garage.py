@@ -1125,19 +1125,27 @@ class GarageStore:
 
     def research_and_install(self, account_id, inventory_id, inventory, *, configuration, item_cd,
                              xp_cost, prerequisites=(), allow_free_xp=True, credits_cost=0,
-                             operation_id=None, expected_descriptor=None, operation_request=None):
-        """Research `item_cd` and install the configuration in one transaction and revision."""
-        research = self._research_spec(item_cd, xp_cost, prerequisites, allow_free_xp)
+                             operation_id=None, expected_descriptor=None, operation_request=None,
+                             prior_research=()):
+        """Research the module set in dependency order and install it in one transaction."""
+        primary = self._research_spec(item_cd, xp_cost, prerequisites, allow_free_xp)
+        prior = tuple(self._research_spec(cd, cost, parents, allow_free_xp)
+                      for cd, cost, parents in prior_research)
+        research = (*prior, primary)
         spec, request = self._install_spec(
-            inventory_id, inventory, configuration, (item_cd,), credits_cost, expected_descriptor,
+            inventory_id, inventory, configuration, tuple(row[0] for row in research),
+            credits_cost, expected_descriptor,
             operation_request, op='research_and_install')
         if operation_request is None:
-            request.update(xp_cost=research[1], prerequisites=research[2],
-                           allow_free_xp=research[3])
+            request.update(xp_cost=primary[1], prerequisites=primary[2],
+                           allow_free_xp=primary[3])
+            if prior:
+                request['prior_research'] = prior
 
         def action(ctx):
             self._require(ctx)
-            self._research(ctx, inventory_id, *research)
+            for row in research:
+                self._research(ctx, inventory_id, *row)
             self._install(ctx, inventory_id, *spec)
         return self._run(account_id, operation_id, request, action)
 

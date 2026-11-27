@@ -294,6 +294,7 @@ solbreaker/account.py
 solbreaker/aiming.py
 solbreaker/ammunition.py
 solbreaker/arena.py
+solbreaker/arena_bounds.py
 solbreaker/arena_commands.py
 solbreaker/arena_loading.py
 solbreaker/arena_owner.py
@@ -307,6 +308,7 @@ solbreaker/arena_retirement.py
 solbreaker/arena_time_stop.py
 solbreaker/armor.py
 solbreaker/armor_native.py
+solbreaker/assets/auto-recovery.packed.webp
 solbreaker/assets/benchmark-report.html
 solbreaker/assets/build-11.21.0.1235_7376187-files.json.gz
 solbreaker/assets/icon-source.json
@@ -371,6 +373,7 @@ solbreaker/client_ui.py
 solbreaker/client_x11_input.py
 solbreaker/collision.py
 solbreaker/connection.py
+solbreaker/control_preferences.py
 solbreaker/consumables.py
 solbreaker/crew.py
 solbreaker/datagram.py
@@ -433,6 +436,7 @@ solbreaker/native/physics_core/Cargo.toml
 solbreaker/native/physics_core/src/bullet_api.rs
 solbreaker/native/physics_core/src/ground.rs
 solbreaker/native/physics_core/src/lib.rs
+solbreaker/native/physics_core/src/plugin.rs
 solbreaker/native/physics_core/src/static_triangles.rs
 solbreaker/native/physics_core/src/support.rs
 solbreaker/native/rapier_dynamic/Cargo.lock
@@ -473,7 +477,6 @@ solbreaker/proving_ground_layout.py
 solbreaker/proving_ground_map.py
 solbreaker/proving_ground_rules.py
 solbreaker/proving_ground_signs.py
-solbreaker/rapier_dynamic.py
 solbreaker/recon.py
 solbreaker/recon_binding.py
 solbreaker/recon_catalog.py
@@ -500,7 +503,6 @@ solbreaker/server_identity.py
 solbreaker/setup_progress.py
 solbreaker/sim_native.py
 solbreaker/social_chat.py
-solbreaker/static_visibility.py
 solbreaker/stats_patch.py
 solbreaker/steam_depot.py
 solbreaker/storage.py
@@ -573,6 +575,7 @@ tests/test_time_stop.py
 tests/test_training_reentry.py
 tests/test_training_room_bots.py
 tests/test_token_capacity.py
+tests/test_unified_dynamics.py
 tests/test_updates.py
 tests/test_uprising.py
 tests/test_windows_bundle.py
@@ -587,6 +590,7 @@ tools/create-shortcut.vbs
 tools/install_dependencies.py
 tools/launch_gui.pyw
 tools/package_source.py
+tools/rapier_fixture.py
 tools/refresh_wsl_network.py
 tools/render_proving_ground.py
 tools/server_depot.py

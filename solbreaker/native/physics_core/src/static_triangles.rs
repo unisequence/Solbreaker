@@ -41,13 +41,17 @@ pub struct Tree {
 }
 
 impl Tree {
-    pub fn from_obj(path: &Path) -> Option<Self> {
-        Self::parse_obj(&std::fs::read_to_string(path).ok()?)
+    pub fn from_paths<'a>(paths: impl Iterator<Item = &'a Path>) -> Option<Self> {
+        let mut triangles = Vec::new();
+        for path in paths {
+            Self::append_obj(&std::fs::read_to_string(path).ok()?, &mut triangles)?;
+        }
+        Some(Self::new(triangles))
     }
 
-    fn parse_obj(data: &str) -> Option<Self> {
+    fn append_obj(data: &str, triangles: &mut Vec<Bounds>) -> Option<()> {
+        let first = triangles.len();
         let mut vertices: Vec<[f64; 3]> = Vec::new();
-        let mut triangles = Vec::new();
         for line in data.lines() {
             let mut columns = line.split_whitespace();
             match columns.next() {
@@ -82,12 +86,22 @@ impl Tree {
                 _ => return None,
             }
         }
-        if triangles.is_empty() {
-            return None;
-        }
+        (triangles.len() > first).then_some(())
+    }
+
+    fn new(mut triangles: Vec<Bounds>) -> Self {
         let mut nodes = Vec::new();
-        Self::build(&mut nodes, &mut triangles, 0);
-        Some(Self { nodes, triangles })
+        if !triangles.is_empty() {
+            Self::build(&mut nodes, &mut triangles, 0);
+        }
+        Self { nodes, triangles }
+    }
+
+    #[cfg(test)]
+    fn parse_obj(data: &str) -> Option<Self> {
+        let mut triangles = Vec::new();
+        Self::append_obj(data, &mut triangles)?;
+        Some(Self::new(triangles))
     }
 
     fn build(nodes: &mut Vec<Node>, triangles: &mut [Bounds], start: usize) -> usize {
@@ -120,7 +134,7 @@ impl Tree {
         // Widen the query for importer rounding and Bullet's mesh tolerances.
         // The index only rejects candidates and never determines an intersection.
         const PADDING: f64 = 0.25;
-        self.search(
+        !self.nodes.is_empty() && self.search(
             0,
             Bounds {
                 low: low.map(|v| v - PADDING),
@@ -157,6 +171,18 @@ mod tests {
         assert!(tree.may_intersect([2.1, 0., 1.], [2.1, 2., 1.]));
         assert!(!tree.may_intersect([3., 0., 1.], [3., 2., 1.]));
         assert!(!tree.may_intersect([1., 2., 1.], [1., 4., 1.]));
+    }
+
+    #[test]
+    fn combined_map_keeps_separate_obj_vertex_indices() {
+        let mut triangles = Vec::new();
+        Tree::append_obj(TRIANGLE, &mut triangles).unwrap();
+        Tree::append_obj("v 60 1 0\nv 62 1 0\nv 60 1 2\nf 1 2 3", &mut triangles).unwrap();
+        let tree = Tree::new(triangles);
+        assert!(tree.may_intersect([1., 0., 1.], [1., 2., 1.]));
+        assert!(tree.may_intersect([61., 0., 1.], [61., 2., 1.]));
+        assert!(!tree.may_intersect([30., -1e6, 0.], [31., 1e6, 1.]));
+        assert!(!Tree::new(Vec::new()).may_intersect([0.; 3], [100.; 3]));
     }
 
     #[test]

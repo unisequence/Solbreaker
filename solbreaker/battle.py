@@ -1038,10 +1038,12 @@ def gun_marker(origin, velocity, dispersion):
     return avatar_method(24, struct.pack('<7f', *origin, *velocity, dispersion))
 
 
-def aim_time_message(aiming, aim_factor, progress):
+def aim_time_message(aiming, aim_factor, progress, *, remaining=None):
     from .aiming import FULL_SETTLE_TIME_CONSTANTS, settling_time
     seconds = ((1.-progress) * FULL_SETTLE_TIME_CONSTANTS * settling_time(aiming, aim_factor)
                if getattr(aiming, 'dispersion_radius', 0.) else 0.)
+    if remaining is not None:
+        seconds = remaining
     tenths = min(999, math.ceil(max(0.,seconds-1e-6)*10.))
     return b'\x13' + variable8(96, b'\x03TFS1AIMT' + struct.pack('<I', tenths) + b'\0')
 
@@ -1093,7 +1095,15 @@ def motion_messages(arena, player, frame=None, *, world_messages=None):
     result += b'\x13\xa7'+struct.pack('<f',sample.gun_yaw if sample is not None else own.gun.yaw)
     if frame is None or frame.tick % 3 == 0:
         aiming = getattr(getattr(own, 'definition', None), 'aiming', None) if own.alive else None
-        result += aim_time_message(aiming, own.effective_aiming_time_factor, own.gun.aim_progress)
+        from .aiming import aim_time_remaining
+        remaining = sample.aim_remaining if sample is not None else None
+        if remaining is None:
+            at = frame.at if frame is not None else arena.simulation_time
+            remaining = aim_time_remaining(aiming,
+                shot_age=None if own.last_shot_at is None else at-own.last_shot_at,
+                aim_factor=own.effective_aiming_time_factor, movement_factor=own.gun.movement_dispersion)
+        result += aim_time_message(aiming, own.effective_aiming_time_factor, own.gun.aim_progress,
+                                   remaining=remaining)
     if own.alive:
         if sample is None:
             result += marker_message(arena,own)
@@ -1121,7 +1131,11 @@ def temporal_motion(arena, player, timeline):
         result += b'\x13\xa7'+struct.pack('<f', local.aim[0])
         if local.marker is not None:
             loadout = timeline.snapshot.gun_loadout
-            result += aim_time_message(loadout.aiming, loadout.aiming_time_factor, local.aim_progress)
+            from .aiming import aim_time_remaining
+            remaining = aim_time_remaining(loadout.aiming, shot_age=local.shot_age,
+                aim_factor=loadout.aiming_time_factor, movement_factor=local.movement_dispersion)
+            result += aim_time_message(loadout.aiming, loadout.aiming_time_factor, local.aim_progress,
+                                       remaining=remaining)
             result += gun_marker(*local.marker)
     if getattr(arena, 'practice_client_ids', None):
         result += practice_roster_message(arena)
@@ -1133,6 +1147,31 @@ def time_stop_message(status, position, *, seconds=0., energy=0):
     return b'\x13' + variable8(96, b'\x04TFS1TIME'
         + struct.pack('<II', status, seconds_tenths | energy << 16)
         + b'\x03' + struct.pack('<3f', *position))
+
+
+def drowning_timer_message(entity, seconds=0.):
+    # Avatar client method 19, updateVehicleMiscStatus, code 4.
+    # The stock HUD starts its clock on entry to state 2 and hides on state 0.
+    return avatar_method(19, struct.pack('<IBIf', entity, 4, 2 if seconds > 0. else 0, seconds))
+
+
+def recovery_warning_message(seconds=0):
+    # Status 8 extends the private TIME envelope. Earlier patched clients
+    # consume this status without forwarding it to native listeners.
+    value = (2 << 16 | seconds) if seconds else 0
+    return b'\x13' + variable8(96, b'\x04TFS1TIME'
+        + struct.pack('<II', 8, value) + b'\x03' + bytes(12))
+
+
+def hazard_warning_messages(entity, previous, warning):
+    old_kind = previous[0] if previous is not None else None
+    kind, seconds = warning if warning is not None else (None, 0)
+    result = bytearray()
+    if old_kind == 'recovery' or kind == 'recovery':
+        result += recovery_warning_message(seconds if kind == 'recovery' else 0)
+    if old_kind != kind and 'drowning' in (old_kind, kind):
+        result += drowning_timer_message(entity, seconds if kind == 'drowning' else 0.)
+    return result
 
 
 def time_stop_roster_message(entity):
@@ -1183,6 +1222,7 @@ def event_messages(arena, player, events):
             result += time_stop_message(1 if own else 2, d['position'],
                                         seconds=d['seconds'], energy=d['energy'])
             if own:
+                result += drowning_timer_message(client_actor) + recovery_warning_message()
                 for trace in d['traces']:
                     result += projectile_trace_message(trace, shooter=vehicle_wire_id(arena, trace.shooter))
             else:
@@ -1507,6 +1547,8 @@ def event_messages(arena, player, events):
                 result += uprising_offers_message(d['offers'])
                 result += uprising_respawn_time_message(d['seconds'])
             result += uprising_wait_respawn_message(event.actor, event.target)
+        elif event.kind == 'hazard_warning' and own:
+            result += hazard_warning_messages(client_actor, d['previous'], d['warning'])
         elif event.kind == 'mad_observation_warning' and own:
             result += observed_status_message(event.actor, d['observed'])
             if d['observed']:
@@ -1516,9 +1558,13 @@ def event_messages(arena, player, events):
                 viewer = arena.vehicles[player.vehicle_id]
                 update_revenge_targets |= (event.actor, actor.generation) in viewer.mad_revenge
                 pose = chameleon_pose(d['pose']) if d['enabled'] else d['pose']
-                result += b'\x14' + struct.pack('<III6f', event.actor, arena.space_id, 0,
+                result += b'\x14' + struct.pack('<III6f', client_actor, arena.space_id, 0,
                                                 *pose.position, pose.roll, pose.pitch, pose.yaw)
                 enemy_sighted |= not d['enabled'] and actor.alive
+                if not d['enabled'] and actor.alive:
+                    health = d.get('health', actor.health)
+                    result += vehicle_property(client_actor, 3, struct.pack('<h', health))
+                    result += health_changed(client_actor, health, 0)
                 if not d['enabled'] and _can_view_reload(arena, player, actor):
                     allied_reload.add(event.actor)
         elif event.kind == 'uprising_cloak_fx' and actor.team == player.team:
@@ -1644,7 +1690,11 @@ def event_messages(arena, player, events):
                     outcome=outcome,blocked_damage=min(0xffff, blocked_damage),
                     hit_effect=d.get('hit_effect'), reflector_hit=reflector_hit)
         elif event.kind=='feedback' and own:
-            result += shot_feedback(client_target,d['outcome'])
+            victim = arena.vehicles.get(event.target)
+            hidden = (d['hidden_from_team'] == player.team if 'hidden_from_team' in d
+                      else victim is not None and mad_games.concealed(victim, player.team))
+            if not hidden:
+                result += shot_feedback(client_target,d['outcome'])
         elif event.kind=='damage_statistics' and own:
             # Avatar cell property 10 (+0x118): cumulative damage dealt.
             result += b'\x13\xa8'+struct.pack('<I',d['damage'])
@@ -1655,6 +1705,11 @@ def event_messages(arena, player, events):
             # Property 12 (+0x120): damage assisted by immobilisation.
             result += b'\x13\xaa'+struct.pack('<I',d['damage'])
         elif event.kind=='health':
+            victim = arena.vehicles.get(event.target)
+            hidden = (d['hidden_from_team'] == player.team if 'hidden_from_team' in d
+                      else victim is not None and mad_games.concealed(victim, player.team))
+            if hidden and d['health'] > 0:
+                continue
             # Private incoming hit notification. Send while the native vehicle
             # is still alive, including a lethal hit; HP state follows below.
             if (event.target == player.vehicle_id or reflector_hit) and d.get('received_damage'):
@@ -1662,7 +1717,7 @@ def event_messages(arena, player, events):
                                                    hit_effect=d.get('hit_effect'), reflector_hit=reflector_hit)
             result += vehicle_property(client_target,3,struct.pack('<h',d['health']))
             healed = d.get('healed')
-            result += health_changed(client_target, d['health'], client_actor,
+            result += health_changed(client_target, d['health'], 0 if hidden else client_actor,
                 healing_marker=bool(healed and event.target != player.vehicle_id
                                     and arena.vehicles[event.target].team == player.team))
             if healed and (own or event.target == player.vehicle_id):
@@ -1751,6 +1806,8 @@ def reconnect_message_parts(arena, player, *, refresh_period=True):
              ammo_message(own), *provision_messages(own), b'\x13\xa8'+struct.pack('<I',own.damage),
              b'\x13\xa9'+struct.pack('<I',own.blocked_damage),
              b'\x13\xaa'+struct.pack('<I',own.assisted_damage)]
+    if own.hazard_warning is not None:
+        parts.append(hazard_warning_messages(vehicle_wire_id(arena, own.entity_id), None, own.hazard_warning))
     if getattr(arena, 'mad_games_mode', False) and own.mad_revenge:
         parts.append(revenge_targets_message(arena, own))
     if (resurrection := getattr(arena, 'uprising', None)) is not None:

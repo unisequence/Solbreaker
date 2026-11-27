@@ -241,7 +241,7 @@ class ProvingGroundTests(TestCase):
         cid = world.cid = bullet.connect(bullet.DIRECT)
         self.addCleanup(bullet.disconnect, cid)
         world.collision_zone = rules.in_pvp
-        world._visibility = world._rapier = world._native_physics = None
+        world._native_physics = None
         world.terrain = arena.terrain
         world.destroyed, world.destruction_events = set(), []
         world.object_bodies, world.breakable_bodies, world.body_entities = {}, {}, {}

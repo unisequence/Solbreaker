@@ -430,7 +430,7 @@ class GameArenaFactory:
                           recon_game=self.game if self.recon_enabled else None,
                           bot_roster=self.bot_roster, bot_game=self.game,
                           bot_scene_settings=self.bot_scene_settings, custom_bot_slots=self.custom_bot_slots,
-                          prebattle_seconds=self.prebattle_seconds, parallel_native_build=True,
+                          prebattle_seconds=self.prebattle_seconds,
                           sandbox_enabled=self.sandbox_enabled, room_mode=self.room_mode,
                           room_settings=self.room_settings)
             roster_ms = (time.monotonic()-roster_started)*1000

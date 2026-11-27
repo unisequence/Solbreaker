@@ -19,7 +19,7 @@
 ## Переменные окружения
 
 Собственные флаги сервера используют префикс `SOLBREAKER_`. Например,
-`SOLBREAKER_SIM_BACKEND=rust`, `SOLBREAKER_DYNAMIC_BACKEND=rapier`,
+`SOLBREAKER_SIM_BACKEND=rust`,
 `SOLBREAKER_ARENA_OWNERS=1`, `SOLBREAKER_OWNER_IPC=socket` и
 `SOLBREAKER_SIM_WORKERS=0`. Скрипты запуска задают принятые значения по умолчанию.
 При обновлении старых ручных команд и служб замените прежний префикс флагов

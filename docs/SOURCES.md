@@ -12,7 +12,7 @@ The historical TFS ABI and protocol prefixes remain visible in some internal int
 
 | Source | Role in Solbreaker |
 | --- | --- |
-| [Rapier](https://github.com/dimforge/rapier) and [documentation](https://rapier.rs/docs/) | Rigid-body solver used by the experimental and accepted Rapier backend |
+| [Rapier](https://github.com/dimforge/rapier) and [documentation](https://rapier.rs/docs/) | Reference implementation for historical rigid-body fixtures |
 | [Bullet / PyBullet](https://github.com/bulletphysics/bullet3) | Geometry queries and Bullet backend |
 | [Qt for Python](https://doc.qt.io/qtforpython-6/) | GUI widgets and desktop integration |
 | [Textual](https://github.com/Textualize/textual) | Terminal management interface |

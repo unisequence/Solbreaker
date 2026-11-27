@@ -3,7 +3,7 @@
 //! Structure layouts follow SharedMemoryPublic.h from Bullet 3.25 / PyBullet
 //! 3.2.7. Bullet is covered by the project's existing third-party notices.
 use libloading::Library;
-use std::ffi::{c_char, c_void};
+use std::ffi::c_void;
 
 pub type Handle = *mut c_void;
 
@@ -82,30 +82,13 @@ macro_rules! bullet_api {
 }
 
 bullet_api! {
-    connect: "b3ConnectPhysicsDirect" () -> Handle;
-    disconnect: "b3DisconnectSharedMemory" (Handle) -> ();
     submit: "b3SubmitClientCommandAndWaitStatus" (Handle, Handle) -> Handle;
     status_type: "b3GetStatusType" (Handle) -> i32;
-    shape_init: "b3CreateCollisionShapeCommandInit" (Handle) -> Handle;
-    mesh: "b3CreateCollisionShapeAddMesh" (Handle, *const c_char, *const f64) -> i32;
-    box_shape: "b3CreateCollisionShapeAddBox" (Handle, *const f64) -> i32;
-    cylinder: "b3CreateCollisionShapeAddCylinder" (Handle, f64, f64) -> i32;
-    shape_flags: "b3CreateCollisionSetFlag" (Handle, i32, i32) -> ();
-    shape_transform: "b3CreateCollisionShapeSetChildTransform" (Handle, i32, *const f64, *const f64) -> ();
-    shape_id: "b3GetStatusCollisionShapeUniqueId" (Handle) -> i32;
-    body_init: "b3CreateMultiBodyCommandInit" (Handle) -> Handle;
-    body_base: "b3CreateMultiBodyBase" (Handle, f64, i32, i32, *const f64, *const f64, *const f64, *const f64) -> i32;
-    body_link: "b3CreateMultiBodyLink" (Handle, f64, f64, f64, *const f64, *const f64, *const f64, *const f64, i32, i32, *const f64) -> i32;
-    body_id: "b3GetStatusBodyIndex" (Handle) -> i32;
     pose_init: "b3CreatePoseCommandInit" (Handle, i32) -> Handle;
     position: "b3CreatePoseCommandSetBasePosition" (Handle, f64, f64, f64) -> i32;
     orientation: "b3CreatePoseCommandSetBaseOrientation" (Handle, f64, f64, f64, f64) -> i32;
-    joint_position: "b3CreatePoseCommandSetJointPosition" (Handle, Handle, i32, f64) -> i32;
     filter_init: "b3CollisionFilterCommandInit" (Handle) -> Handle;
     filter_mask: "b3SetCollisionFilterGroupMask" (Handle, i32, i32, i32, i32) -> ();
-    dynamics_init: "b3InitChangeDynamicsInfo" (Handle) -> Handle;
-    collision_margin: "b3ChangeDynamicsInfoSetCollisionMargin" (Handle, i32, f64) -> i32;
-    detect: "b3InitPerformCollisionDetectionCommand" (Handle) -> Handle;
     collision_info: "b3RequestCollisionInfoCommandInit" (Handle, i32) -> Handle;
     aabb: "b3GetStatusAABB" (Handle, i32, *mut f64, *mut f64) -> i32;
     overlap_init: "b3InitAABBOverlapQuery" (Handle, *const f64, *const f64) -> Handle;
@@ -119,22 +102,18 @@ bullet_api! {
     ray_add: "b3RaycastBatchAddRay" (Handle, *const f64, *const f64) -> ();
     ray_filter: "b3RaycastBatchSetCollisionFilterMask" (Handle, i32) -> ();
     rays: "b3GetRaycastInformation" (Handle, *mut RayHits) -> ();
-    remove: "b3InitRemoveBodyCommand" (Handle, i32) -> Handle;
 }
 
 pub struct Client {
     pub api: Api,
     pub handle: Handle,
+    pub static_group: i32,
 }
 
 impl Client {
-    pub fn open(path: &str) -> Result<Self, String> {
+    pub fn borrow(path: &str, handle: Handle, static_group: i32) -> Result<Self, String> {
         let api = unsafe { Api::load(path)? };
-        let handle = unsafe { (api.connect)() };
-        if handle.is_null() {
-            return Err("Bullet direct connection failed".into());
-        }
-        Ok(Self { api, handle })
+        Ok(Self { api, handle, static_group })
     }
 
     pub fn execute(&self, command: Handle) -> Result<Handle, String> {
@@ -185,7 +164,7 @@ impl Client {
         for chunk in rays.chunks(256) {
             unsafe {
                 let command = (self.api.ray_init)(self.handle);
-                (self.api.ray_filter)(command, 1);
+                (self.api.ray_filter)(command, self.static_group);
                 for (start, end) in chunk {
                     (self.api.ray_add)(command, start.as_ptr(), end.as_ptr());
                 }
@@ -214,10 +193,4 @@ fn copy_results<T: Copy>(pointer: *const T, count: i32) -> Result<Vec<T>, String
         return Ok(Vec::new());
     }
     Ok(unsafe { std::slice::from_raw_parts(pointer, count as usize) }.to_vec())
-}
-
-impl Drop for Client {
-    fn drop(&mut self) {
-        unsafe { (self.api.disconnect)(self.handle) };
-    }
 }

@@ -211,7 +211,6 @@ def unpack(archive, payload, kind, *, progress=None):
                             'solbreaker/native/sim_core/tfs_sim_core.so',
                             'solbreaker/native/impact_core/tfs_impact_core.so',
                             'solbreaker/native/armor_query/tfs_armor_query.so',
-                            'solbreaker/native/rapier_dynamic/libtfs_rapier_dynamic.so',
                             'solbreaker/native/physics_core/libsolbreaker_physics_core.so'}
             else:
                 required = {'launch-gui.sh'}
@@ -288,7 +287,7 @@ def build_native(root, payload, after, *, progress=None):
 
     def build_input(name):
         return (name.startswith(('solbreaker/native/sim_core/', 'solbreaker/native/impact_core/',
-                                 'solbreaker/native/armor_query/', 'solbreaker/native/rapier_dynamic/',
+                                 'solbreaker/native/armor_query/',
                                  'solbreaker/native/physics_core/')) or name in (
                     'solbreaker/native/contact_queries.c', 'tools/build_native.py', 'tools/build_contact_queries.py'))
 

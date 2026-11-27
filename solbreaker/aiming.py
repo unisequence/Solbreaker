@@ -11,7 +11,10 @@ from .orientation import matrix
 SHOT_DISPERSION_CENTER_BIAS = 1.50
 UNSETTLED_CENTER_CHANCE = .5 ** (2. / SHOT_DISPERSION_CENTER_BIAS)
 SETTLED_CENTER_CHANCE = .90  # Probability inside half of the dispersion radius.
-FULL_SETTLE_TIME_CONSTANTS = 3.  # About 95% of exponential bloom has decayed.
+MAX_DISPERSION_BLOOM = 4.
+MOTION_BLOOM_SCALE = .6
+SETTLE_TIME_SCALE = .5
+FULL_SETTLE_TIME_CONSTANTS = 3.  # Settled when excess radius is <= exp(-3) of base.
 
 
 def wrap(angle):
@@ -19,7 +22,38 @@ def wrap(angle):
 
 
 def settling_time(config, aim_factor):
-    return max(1. / 60., config.aiming_time * aim_factor)
+    return max(1. / 60., config.aiming_time * aim_factor * SETTLE_TIME_SCALE)
+
+
+def aim_time_remaining(config, *, shot_age=None, aim_factor=1., movement_factor=1.):
+    """Seconds until the actual cone is within 5% of its settled radius.
+
+    Shot bloom and movement bloom both decay with the configured time
+    constant. Their product is also used by the marker and ballistics, so
+    solve that product instead of running a separate stationary timer.
+    """
+    if not getattr(config, 'dispersion_radius', 0.):
+        return 0.
+    settle = settling_time(config, aim_factor)
+    shot = ((getattr(config, 'after_shot_dispersion', 1.) - 1.)
+            * math.exp(-max(0., shot_age) / settle) if shot_age is not None else 0.)
+    movement = max(0., movement_factor - 1.)
+    threshold = math.exp(-FULL_SETTLE_TIME_CONSTANTS)
+    linear = shot + movement
+    quadratic = shot * movement
+    # Some pinned missile guns have afterShot < 1. Their signed shot term
+    # can temporarily suppress movement bloom, then expose it as it decays.
+    # Find the maximum future excess on u in [0, 1] before solving for the
+    # final crossing. Checking only the present cone would claim it settled
+    # before that later expansion; taking sqrt blindly can also go negative.
+    peak_u = min(1., max(0., -linear / (2. * quadratic))) if quadratic < 0. else 1.
+    if linear * peak_u + quadratic * peak_u * peak_u <= threshold:
+        return 0.
+    # The smaller positive root is the final crossing as u decreases to 0,
+    # including the concave, nonmonotonic afterShot < 1 case.
+    discriminant = max(0., linear * linear + 4. * quadratic * threshold)
+    u = 2. * threshold / (linear + math.sqrt(discriminant))
+    return max(0., -settle * math.log(u))
 
 
 def dispersion_tangent(config, *, shot_age=None, factor=1., aim_factor=1.,
@@ -32,8 +66,8 @@ def dispersion_tangent(config, *, shot_age=None, factor=1., aim_factor=1.,
         dispersion *= getattr(config, 'damaged_gun_dispersion', 1.)
     if shot_age is not None:
         settle = settling_time(config, aim_factor)
-        dispersion *= 1. + (config.after_shot_dispersion - 1.) * math.exp(-max(0., shot_age) / settle)
-    return dispersion * factor * movement_factor / 100.
+        movement_factor *= 1. + (config.after_shot_dispersion - 1.) * math.exp(-max(0., shot_age) / settle)
+    return dispersion * factor * min(MAX_DISPERSION_BLOOM, movement_factor) / 100.
 
 
 def disperse_shot(direction, tangent, rng, aim_progress=0.):
@@ -81,7 +115,7 @@ class GunAim:
             self.PACKED_MIN, self.PACKED_MAX = config.packed_pitch_limits
         self.yaw = self.pitch = 0.0
         self.movement_dispersion = 1.
-        self.aim_progress = 0.
+        self.aim_progress = 1.
         self.desired_yaw = self.desired_pitch = 0.0
         self.point = None
         self.angles_requested = False
@@ -132,34 +166,33 @@ class GunAim:
         self.desired_yaw, self.desired_pitch = wrap(yaw), pitch
         return True
 
-    def update_dispersion(self, config, before, after, previous_turret, dt, aim_factor, *, previous_pitch=None):
+    def update_dispersion(self, config, before, after, previous_turret, dt, aim_factor, *,
+                          previous_pitch=None, shot_age=None):
         if not getattr(config, 'dispersion_radius', 0.):
             return
         x, _, z = before.position
         dx, _, dz = after.position
         speed = 3.6 * math.hypot(dx-x, dz-z) / dt
         hull_rate = math.degrees(wrap(after.yaw - before.yaw)) / dt
-        turret_rate = math.degrees(wrap(self.yaw - previous_turret)) / dt
-        # Ignore tiny suspension and turret corrections while the gun settles.
+        yaw_delta = wrap(self.yaw - previous_turret)
         pitch_delta = 0. if previous_pitch is None else self.pitch - previous_pitch
-        tilt = max(abs(pitch_delta), abs(wrap(after.pitch - before.pitch)),
-                   abs(wrap(after.roll - before.roll)))
-        if (speed > .3 or abs(after.position[1] - before.position[1]) > .10 * dt
-                or max(abs(hull_rate), abs(turret_rate), math.degrees(tilt) / dt) > 1.):
-            self.aim_progress = 0.
-        else:
-            duration = FULL_SETTLE_TIME_CONSTANTS * settling_time(config, aim_factor)
-            self.aim_progress = min(1., self.aim_progress + dt / duration)
+        turret_rate = math.degrees(math.hypot(yaw_delta, pitch_delta)) / dt
         # Use horizontal vehicle speed (km/h) and local traverse (degrees/s).
-        steady = math.hypot(1., speed * getattr(config, 'movement_dispersion', 0.),
-                            hull_rate * getattr(config, 'hull_rotation_dispersion', 0.),
-                            turret_rate * getattr(config, 'turret_rotation_dispersion', 0.))
+        steady = math.hypot(1., MOTION_BLOOM_SCALE * math.hypot(
+            speed * getattr(config, 'movement_dispersion', 0.),
+            hull_rate * getattr(config, 'hull_rotation_dispersion', 0.),
+            turret_rate * getattr(config, 'turret_rotation_dispersion', 0.)))
+        steady = min(MAX_DISPERSION_BLOOM, steady)
         if steady >= self.movement_dispersion:
             self.movement_dispersion = steady
-            return
-        settle = settling_time(config, aim_factor)
-        remaining = 1. + (self.movement_dispersion - 1.) * math.exp(-dt / settle)
-        self.movement_dispersion = max(steady, remaining)
+        else:
+            settle = settling_time(config, aim_factor)
+            remaining = 1. + (self.movement_dispersion - 1.) * math.exp(-dt / settle)
+            self.movement_dispersion = max(steady, remaining)
+        seconds = aim_time_remaining(config, shot_age=shot_age, aim_factor=aim_factor,
+                                     movement_factor=self.movement_dispersion)
+        duration = FULL_SETTLE_TIME_CONSTANTS * settling_time(config, aim_factor)
+        self.aim_progress = max(0., min(1., 1. - seconds / duration))
 
     def tick(self, dt, position, hull_yaw, hull_pitch=0., hull_roll=0., hull_omega=0.):
         """Slew one fixed simulation step at the current configured rates."""

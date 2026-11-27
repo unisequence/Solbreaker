@@ -132,7 +132,7 @@ class Recorder:
                     argv=[Path(sys.argv[0]).name], resource_sample=_resources(),
                     flags={k: v for k, v in os.environ.items()
                            if k.startswith(('SOLBREAKER_SIM_', 'SOLBREAKER_DYNAMIC_', 'SOLBREAKER_ARENA_',
-                                            'SOLBREAKER_OWNER_', 'SOLBREAKER_RAPIER_', 'SOLBREAKER_'))
+                                            'SOLBREAKER_OWNER_', 'SOLBREAKER_'))
                            and k != ENVIRONMENT and not any(part in k for part in
                                ('KEY', 'TOKEN', 'PASSWORD', 'SECRET', 'AUTH', 'COOKIE'))},
                     limits=dict(file_bytes=file_bytes, backups=backups, queue_records=capacity,
@@ -327,7 +327,7 @@ def _vehicle_state(arena):
                          gun_yaw=vehicle.gun.yaw, gun_pitch=vehicle.gun.pitch,
                          center_of_mass=getattr(dynamic, 'center_of_mass', None),
                          inertia_diagonal=getattr(dynamic, 'inertia_diagonal', None),
-                         angular_velocity=getattr(world, '_rapier_angular_states', {}).get(vehicle.entity_id),
+                         angular_velocity=world.flight_spin(vehicle.entity_id) if dynamic is not None else None,
                          velocity=getattr(motion, 'velocity', None), grounded=getattr(motion, 'grounded', None),
                          dynamic=dynamic is not None,
                          dynamic_contacts=getattr(world, 'dynamic_contact_trace', {}).get(vehicle.entity_id, ())
@@ -516,8 +516,6 @@ def install(path=None):
     from .bot_ai import BotDirector
     from .bot_navigation import Navigation
     from .drive_workers import DriveWorkers
-    from .rapier_dynamic import RapierDynamic
-    from .static_visibility import VisibilityWorld
     from .arena_loading import ArenaLoader
     from .armor import ArmorModel
     from .internal_geometry import PreparedInternalGeometry
@@ -534,13 +532,11 @@ def install(path=None):
         (ArenaLoader, ('_advance',)),
         (CollisionWorld, ('__init__', 'move', 'dynamic_commit', 'resolve_ground_impacts',
                           '_static_rays', '_visibility_rays', '_contacts')),
-        (VisibilityWorld, ('_mesh', 'rays', 'destroy', 'close')),
         (ArmorModel, ('intersections',)),
         (PreparedInternalGeometry, ('volume_segment',)),
         (BotDirector, ('step',)),
         (Navigation, ('request', 'step')),
         (DriveWorkers, ('poll', 'submit', 'take')),
-        (RapierDynamic, ('step', 'static_rays')),
         (BaseEndpoint, ('tick', 'tick_client', '_flush_arena_results', 'send_packet',
                         'datagram_received')),
     ):

@@ -22,13 +22,14 @@ FILES = ('README.md', 'README.ru.md', 'CHANGELOG.md', 'CONTRIBUTING.md', 'SECURI
          'release-files.txt', 'launch-tui.cmd')
 FOLDERS = ('solbreaker', 'tools', 'tests', 'examples', 'licenses', 'docs', 'requirements', '.github')
 OPTIONAL = ('LICENSE', 'LICENSE.md', 'LICENSE.txt')
-CRATES = ('sim_core', 'impact_core', 'armor_query', 'rapier_dynamic', 'physics_core')
-SOURCE_CRATES = CRATES
+CRATES = ('sim_core', 'impact_core', 'armor_query', 'physics_core')
+SOURCE_CRATES = (*CRATES, 'rapier_dynamic')  # Historical fixture reader and Linux update compatibility.
 WINDOWS_LIBRARIES = {crate: 'tfs_'+crate+'.dll' for crate in CRATES}
 WINDOWS_LIBRARIES['physics_core'] = 'solbreaker_physics_core.dll'
 LINUX_LIBRARIES = {crate: f'tfs_{crate}.so' for crate in CRATES}
-LINUX_LIBRARIES.update(rapier_dynamic='libtfs_rapier_dynamic.so',
-                       physics_core='libsolbreaker_physics_core.so')
+LINUX_LIBRARIES['physics_core'] = 'libsolbreaker_physics_core.so'
+# The Linux updater shipped through 0.3.0 validates this filename before replacing its own code.
+LINUX_LIBRARIES['rapier_dynamic'] = 'libtfs_rapier_dynamic.so'
 WHEEL = 'pybullet-3.2.7-cp312-cp312-win_amd64.whl'
 DEPOT_BUNDLE = 'tools/depotdownloader'
 DEPOT_NOTICES = {'LICENSE', 'DepotDownloader-source.tar.gz', 'DOTNET-LICENSE.txt', 'DOTNET-THIRD-PARTY-NOTICES.txt'}
@@ -132,14 +133,14 @@ def validate_contents(payloads):
 
 
 def package(output, *, windows_native=None, windows_wheel=None, windows_runtime=None,
-            linux_native=None, server_only=False, windows_physics=None, windows_rapier=None,
+            linux_native=None, server_only=False, windows_physics=None,
             linux_contact=None,
             windows_contact=None, depot_bundle=None):
     if bool(windows_native) != bool(windows_wheel):
         raise ValueError('Provide both the Windows DLL directory and the Python 3.12 Bullet wheel')
     if windows_runtime and not windows_native:
         raise ValueError('Portable runtime requires the accepted Windows native inputs')
-    if (windows_physics or windows_rapier or windows_contact) and not windows_native:
+    if (windows_physics or windows_contact) and not windows_native:
         raise ValueError('Rebuilt Windows libraries require the remaining pinned Windows inputs')
     if linux_native and (windows_native or not server_only):
         raise ValueError('Linux libraries are only supported in a dedicated Linux package')
@@ -168,7 +169,8 @@ def package(output, *, windows_native=None, windows_wheel=None, windows_runtime=
     if windows_native:
         expected = json.loads(payloads['requirements/native-artifacts.json'])['sha256']
         binaries = {'solbreaker/native/'+crate+'/'+filename:
-                    Path(windows_native)/filename for crate, filename in WINDOWS_LIBRARIES.items()}
+                    Path(windows_native)/filename for crate, filename in WINDOWS_LIBRARIES.items()
+                    if crate != 'physics_core' or windows_physics is None}
         # Older accepted native sets retain the Python contact-query fallback.
         contact = Path(windows_native)/'_contact_queries.pyd'
         if windows_contact is None and contact.exists():
@@ -187,9 +189,8 @@ def package(output, *, windows_native=None, windows_wheel=None, windows_runtime=
             if hashlib.sha256(content).hexdigest() != expected[path.name]:
                 raise ValueError('Native package input differs from accepted SHA-256: '+path.name)
             payloads[name] = content
-        rebuilt = {f'solbreaker/native/{crate}/{WINDOWS_LIBRARIES[crate]}': path
-                   for crate, path in (('physics_core', windows_physics), ('rapier_dynamic', windows_rapier))}
-        rebuilt['solbreaker/_contact_queries.pyd'] = windows_contact
+        rebuilt = {'solbreaker/native/physics_core/solbreaker_physics_core.dll': windows_physics,
+                   'solbreaker/_contact_queries.pyd': windows_contact}
         for name, path in rebuilt.items():
             if path is None:
                 continue

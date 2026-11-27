@@ -4,9 +4,9 @@ Solbreaker is an independent project for the pinned World of Tanks Blitz 11.21 c
 
 ## Distributed native components
 
-The Windows native package includes Solbreaker's five Rust libraries and a locally built PyBullet 3.2.7 wheel for CPython 3.12 x64.
+The Windows native package includes Solbreaker's four Rust libraries and a locally built PyBullet 3.2.7 wheel for CPython 3.12 x64.
 
-The five Windows DLLs are cross-compiled with GNU tools and statically link
+The four Windows DLLs are cross-compiled with GNU tools and statically link
 their runtime support. Original MinGW-w64 and GCC cross-toolchain copyright
 notices, including runtime exceptions and per-file terms, are preserved under
 `licenses/native-runtime/` and in `licenses/BUNDLED_LICENSES.txt`. The inventory
@@ -15,7 +15,7 @@ installed MinGW runtime DLLs.
 
 | Component | Use | Terms and notices |
 | --- | --- | --- |
-| Rapier 3D f64 0.26.1, Dimforge and contributors | Free rigid-body physics | Apache-2.0. Original text in [Rapier LICENSE](licenses/rust/rapier3d-f64-0.26.1/LICENSE). |
+| Rapier 3D f64 0.26.1, Dimforge and contributors | Historical fixture reader and Linux updater compatibility library | Apache-2.0. Original text in [Rapier LICENSE](licenses/rust/rapier3d-f64-0.26.1/LICENSE). |
 | Rapier's Rust dependencies | Geometry, numerics, containers, serialization and solver support | Exact versions, package checksums, authors, license declarations and text checksums are recorded in [the inventory](licenses/manifest.json). Original texts are under `licenses/rust/`. |
 | Bullet / PyBullet 3.2.7, Erwin Coumans, Yunfei Bai, Jasmine Hsu and contributors | Geometry queries and the Bullet physics backend | The Windows wheel retains its LICENSE.txt and AUTHORS.txt. Copies from the reference installation are under [PyBullet notices](licenses/python/pybullet-3.2.7/licenses/). The upstream license identifies exceptions for Extras and examples/ThirdPartyLibs. |
 

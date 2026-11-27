@@ -36,11 +36,11 @@ class BattleProvisionTests(unittest.TestCase):
         self.assertEqual((tank.gun.yaw_rate, tank.gun.pitch_rate), rates)
         self.assertAlmostEqual(arena.aim_marker(tank, 1.)[2], before*.7)
         tank.last_shot_at = 1.
-        expected = before*.7*(1. + 2.*math.exp(-1. / (2.*1.5*.7)))
+        expected = before*.7*(1. + 2.*math.exp(-1. / (2.*1.5*.7*.5)))
         self.assertAlmostEqual(arena.shot_dispersion(tank, 2.), expected)
         arena._consumables(tank, state.active_until)
         self.assertAlmostEqual(arena.aim_marker(tank, state.active_until)[2],
-                               before*(1. + 2.*math.exp(-20. / (2.*1.5))))
+                               before*(1. + 2.*math.exp(-20. / (2.*1.5*.5))))
 
     def test_ready_and_reconnect_deliver_sparse_provisions_only_to_the_owner(self):
         terrain = SimpleNamespace(height=lambda x, z: 0.)

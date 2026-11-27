@@ -114,6 +114,8 @@ class Vehicle:
     consumable_aiming_time_factor: float = 1.
     consumable_dispersion_factor: float = 1.
     last_shot_at: float | None = None
+    submerged_since: float | None = None
+    hazard_warning: tuple[str, int] | None = None
     interval_factor: float = 1.0
     consumable_clock: float = 0.0
     tracks: dict[str, TrackState] = field(default_factory=dict)
@@ -170,6 +172,7 @@ class MotionSample:
     gun_yaw: float
     marker: tuple | None = None  # (muzzle origin, unspread shell velocity, dispersion tangent).
     engine_mode: tuple[int, int] = (1, 0)
+    aim_remaining: float | None = None
 
 
 @dataclass(frozen=True)

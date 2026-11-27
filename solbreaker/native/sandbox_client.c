@@ -198,6 +198,8 @@ typedef struct {
     uint32_t temporal_started, temporal_merge;
     uint32_t temporal_gain, temporal_release_gain;
     void *temporal_panel, *temporal_label;
+    void *recovery_panel, *recovery_label, *recovery_rings[3];
+    uint32_t recovery_seconds;
     uint32_t peer_started, peer_duration, peer_merge;
     Vector peer_origin;
     void *peer_root, *peer_clock, *peer_hand, *peer_hour, *peer_opacity;
@@ -1102,6 +1104,19 @@ static void temporal_update_hud(uint32_t delta, Sandbox *s, uint32_t now) {
 }
 
 __attribute__((section(".late_sandbox"), noinline))
+static void update_recovery_warning(uint32_t delta, Sandbox *s) {
+    if (!s->recovery_panel || !s->recovery_label) return;
+    if (s->recovery_seconds) {
+        NativeString text = {{'0' + s->recovery_seconds}, 1, 15};
+        typedef void (THISCALL *SetText)(void *, const NativeString *);
+        ((SetText)(0xb8e900u + delta))(s->recovery_label, &text);
+    }
+    for (unsigned i = 0; i < 3; ++i)
+        boss_visible(s->recovery_rings[i], s->recovery_seconds == i + 1, delta);
+    boss_visible(s->recovery_panel, !!s->recovery_seconds, delta);
+}
+
+__attribute__((section(".late_sandbox"), noinline))
 int sandbox_message(uint32_t delta, const uint32_t *first, const uint32_t *end,
                     const uint32_t *second, const uint32_t *second_end) {
     typedef int (*Original)(uint32_t, const uint32_t *, const uint32_t *,
@@ -1185,9 +1200,21 @@ int sandbox_message(uint32_t delta, const uint32_t *first, const uint32_t *end,
     }
     if (first && end == first+4 && first[0] == 0x31534654u && first[1] == 0x454d4954u
             && second && second_end == second+3) {
+        uint32_t status = first[2];
+        if (status == 8) {
+            uint32_t kind = first[3] >> 16, seconds = first[3] & 65535u;
+            if ((kind == 0 && !seconds) || (kind == 2 && seconds && seconds <= 3)) {
+                Sandbox *s = state(delta, 1);
+                if (s && !s->thread) s->thread = thread_id();
+                if (s && s->thread == thread_id()) {
+                    s->recovery_seconds = seconds;
+                    update_recovery_warning(delta, s);
+                }
+            }
+            return 1;
+        }
         Sandbox *s = state(delta, 0);
         if (s && s->thread == thread_id()) {
-            uint32_t status = first[2];
             if (status == 1) {
                 s->temporal_started = clock_ms(delta);
                 s->temporal_end = s->temporal_started+(first[3] & 65535u)*100u;
@@ -1305,6 +1332,9 @@ void sandbox_reset(uint32_t delta, uint32_t *layer) {
         __builtin_memset(s->abilities, 0, sizeof(s->abilities));
         s->aim_time_label = 0;
         s->temporal_panel = s->temporal_label = 0;
+        s->recovery_panel = s->recovery_label = 0;
+        __builtin_memset(s->recovery_rings, 0, sizeof(s->recovery_rings));
+        s->recovery_seconds = 0;
         s->peer_root = s->peer_clock = s->peer_hand = s->peer_hour = s->peer_opacity = 0;
         s->peer_hidden_entity = 0;
         __builtin_memset(s->team_panels, 0, sizeof(s->team_panels));
@@ -2727,6 +2757,14 @@ BOSS_UI static void bind_battle_controls(uint32_t delta, Sandbox *s, void *root)
     s->temporal_label = s->temporal_panel ? find_control(s->temporal_panel, "SolTimeValue", delta) : 0;
     s->temporal_hud = 0;
     boss_visible(s->temporal_panel, 0, delta);
+    s->recovery_panel = find_control(root, "SolAutoRecovery", delta);
+    s->recovery_label = s->recovery_panel ? find_control(s->recovery_panel, "Time", delta) : 0;
+    for (unsigned i = 0; i < 3; ++i) {
+        char name[] = "Ring1";
+        name[4] += i;
+        s->recovery_rings[i] = s->recovery_panel ? find_control(s->recovery_panel, name, delta) : 0;
+    }
+    update_recovery_warning(delta, s);
     s->peer_root = root;
     s->peer_clock = find_control(root, "SolTimeClock", delta);
     s->peer_hand = s->peer_hour = s->peer_opacity = 0;

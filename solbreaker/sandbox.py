@@ -210,8 +210,7 @@ def training_reentry_enabled(arena):
         return False
     if getattr(arena, 'owner_backed', False):
         return getattr(arena, 'owner_training_reentry', False)
-    return ((world := arena.world) is not None
-            and (world._rapier is None or hasattr(world._rapier.library, 'tfs_rapier_replace_vehicle')))
+    return arena.world is not None
 
 
 def receive(endpoint, addr, client, arena, body, now):

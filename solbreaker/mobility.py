@@ -10,7 +10,7 @@ import math
 from dataclasses import dataclass
 
 FIRM, MEDIUM, SOFT = 0, 1, 2
-STEERING_GRIP_FACTOR = .56  # Local calibration for sustained track steering.
+STEERING_GRIP_FACTOR = .75  # Local calibration for sustained track steering.
 
 
 @dataclass(frozen=True)

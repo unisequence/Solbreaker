@@ -574,7 +574,7 @@ class MadGamesTests(TestCase):
         self.assertNotIn(marker, payloads[2])
         self.assertNotIn(marker, payloads[3])
         self.assertNotIn(notice, payloads[3])
-        self.assertIn(health_changed(ally.entity_id, ally.health, shooter.entity_id), payloads[3])
+        self.assertNotIn(health_changed(ally.entity_id, ally.health, shooter.entity_id), payloads[3])
         effect = provision_effect_message(ally.entity_id, mad_games.REGENERATOR_EFFECT,
                                           argument=shooter.entity_id)
         self.assertIn(effect, payloads[1])

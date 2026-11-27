@@ -123,6 +123,13 @@ def launch_client(lab, *, auto_login=None, profile=None, url=None, lighting=None
         from .client_ui import install_server_name
         install_server_name(lab)
         _, manifest = ensure_lab(lab)
+        if manifest.get('client_exe_sha256') == client_sandbox.OUTPUT_SHA256:
+            if standalone:
+                from .client_motion_blur import install_motion_blur
+                install_motion_blur(lab, manifest, copied=True)
+            from .control_preferences import restore_mouse_sensitivity
+            if documents := manifest.get('documents'):
+                restore_mouse_sensitivity(documents)
         if auto_login is not None:
             from .login_preferences import configure_automatic_login
             configure_automatic_login(manifest['documents'], auto_login)

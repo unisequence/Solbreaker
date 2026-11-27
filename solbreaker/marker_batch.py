@@ -40,8 +40,6 @@ def try_markers(arena, vehicles, arena_methods):
            or any(getattr(getattr(v.gun, name), '__func__', None) is not source
                   for name, source in _GUN.items()) for v in vehicles):
         return None
-    if getattr(world, '_rapier', None) is not None and world._rapier_query_backend != 'bullet':
-        return None
     lib = native.load_library()
     if lib is None:
         return None

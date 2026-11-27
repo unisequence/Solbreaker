@@ -1,6 +1,5 @@
 """Finish setup inside the project virtual environment."""
 import argparse
-import ctypes
 import json
 from pathlib import Path
 import shlex
@@ -22,14 +21,9 @@ def verify_native():
     for module in (sim_native, impact_native, armor_native):
         if module.load_library() is None:
             raise ValueError(f'Native library missing or incompatible: {module.__name__}')
-    from solbreaker.rapier_dynamic import library_path
-    path = library_path()
-    library = ctypes.CDLL(str(path))
-    for name in ('create', 'close', 'step', 'activate', 'sync', 'set_mass', 'deactivate', 'destroy'):
-        getattr(library, 'tfs_rapier_'+name)
     from solbreaker.native_physics import load_library
     load_library()
-    print('Five native libraries loaded successfully', flush=True)
+    print('Four native libraries loaded successfully', flush=True)
 
 
 def finish(options):

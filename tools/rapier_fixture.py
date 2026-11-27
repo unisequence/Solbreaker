@@ -1,4 +1,4 @@
-"""Binary and legacy JSON bindings for the optional native Rapier world."""
+"""Diagnostic reader for rigid-body fixtures recorded by legacy Rapier releases."""
 import ctypes as C
 import json
 import math
@@ -13,7 +13,7 @@ import numpy as np
 
 def library_path():
     name = 'tfs_rapier_dynamic.dll' if sys.platform == 'win32' else 'libtfs_rapier_dynamic.so'
-    return Path(__file__).with_name('native')/'rapier_dynamic'/name
+    return Path(__file__).resolve().parents[1]/'solbreaker/native/rapier_dynamic'/name
 
 
 # Counts followed by fixed-width state and contact rows and a JSON metadata table.

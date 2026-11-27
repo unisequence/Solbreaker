@@ -2020,8 +2020,8 @@ class BaseEndpoint(asyncio.DatagramProtocol):
             if kind != 147 or len(body) != 21 or body[4] != 4:
                 raise ValueError('Unsupported module purchase envelope')
             shop_revision, target, inventory_id, paired = struct.unpack_from('<4i',body,5)
-            if shop_revision != self.progression_catalog['rev'] or paired != 0:
-                raise ValueError('Unsupported shop revision or paired module request')
+            if shop_revision != self.progression_catalog['rev']:
+                raise ValueError('Unsupported shop revision')
             state = self.progression.prepare(client.account_id)
             vehicle = next((v for v in state['vehicles'] if v['id']==inventory_id),None)
             if vehicle is None:
@@ -2033,7 +2033,8 @@ class BaseEndpoint(asyncio.DatagramProtocol):
                            if item_cd(m.slot,m.ident,research.nation_id)==target),None)
             if module is None:
                 raise ValueError('Module does not belong to this vehicle')
-            self.progression.research_and_install(client.account_id,inventory_id,module.slot,module.tag)
+            self.progression.research_and_install(client.account_id, inventory_id, module.slot, module.tag,
+                                                  paired_cd=paired)
             self.native_rooms.refresh_vehicle(client.account_id)
             # Publish authoritative inventory/research before the request callback.
             update = self.progression_update(client)

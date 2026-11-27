@@ -103,6 +103,7 @@ class DiscoveryTests(unittest.TestCase):
     def test_supported_vpn_scopes_require_matching_adapters(self):
         for address, name, expected in (
                 ('26.5.1.10/8', 'Radmin VPN', '26.0.0.0/8'),
+                ('26.5.1.10/8', 'radminvpn0', '26.0.0.0/8'),
                 ('26.5.1.10/32', 'Ethernet Famatech Radmin VPN Ethernet Adapter', '26.0.0.0/8'),
                 ('25.5.1.10/32', 'ham0 ham0', '25.0.0.0/8'),
                 ('25.5.1.10/24', 'Hamachi', '25.5.1.0/24'),

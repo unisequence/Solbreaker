@@ -127,7 +127,7 @@ class SandboxTests(TestCase):
 
     def test_aim_hud_reports_remaining_settle_time_with_calibration(self):
         aiming = SimpleNamespace(aiming_time=2., dispersion_radius=.35)
-        for progress, tenths in ((0., 48), (.5, 24), (1., 0)):
+        for progress, tenths in ((0., 24), (.5, 12), (1., 0)):
             message = aim_time_message(aiming, .8, progress)
             self.assertEqual(message[-14:], b'\x03TFS1AIMT'+struct.pack('<I',tenths)+b'\0')
 

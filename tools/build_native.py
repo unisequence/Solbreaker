@@ -14,14 +14,18 @@ def main():
     parser.add_argument('--jobs', type=int, default=2)
     parser.add_argument('--physics-core', action='store_true',
                         help='Compatibility option; the native ground controller is always built')
+    parser.add_argument('--with-legacy-fixture', action='store_true',
+                        help='Build the offline Rapier fixture library required by Linux updaters through 0.3.0')
     args = parser.parse_args()
     if (sys.platform not in ('linux', 'win32') or platform.machine().lower() not in ('amd64', 'x86_64')
             or not 1 <= args.jobs <= 8):
         parser.error('The server build supports Linux/Windows x86-64 and 1..8 build jobs')
     root = Path(__file__).resolve().parents[1]/'solbreaker/native'
     names = dict(sim_core='tfs_sim_core', impact_core='tfs_impact_core',
-                 armor_query='tfs_armor_query', rapier_dynamic='tfs_rapier_dynamic')
+                 armor_query='tfs_armor_query')
     names['physics_core'] = 'solbreaker_physics_core'
+    if args.with_legacy_fixture:
+        names['rapier_dynamic'] = 'tfs_rapier_dynamic'
     for directory, name in names.items():
         crate = root/directory
         subprocess.run(['cargo', 'build', '--locked', '--release', '--jobs', str(args.jobs),
@@ -29,7 +33,7 @@ def main():
         target = Path(os.environ.get('CARGO_TARGET_DIR', crate/'target')).resolve()
         filename = f'{name}.dll' if sys.platform == 'win32' else f'lib{name}.so'
         built = target/'release'/filename
-        destination = crate/(filename if directory in ('rapier_dynamic', 'physics_core') or sys.platform == 'win32'
+        destination = crate/(filename if directory in ('physics_core', 'rapier_dynamic') or sys.platform == 'win32'
                              else f'{name}.so')
         descriptor, temporary = tempfile.mkstemp(prefix='.native-', dir=crate)
         os.close(descriptor)

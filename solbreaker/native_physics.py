@@ -1,5 +1,4 @@
 """Native ground physics owner, with setup and result marshalling."""
-from contextlib import contextmanager
 import ctypes as C
 import json
 import math
@@ -8,9 +7,9 @@ import sys
 from pathlib import Path
 import threading
 
+import numpy as np
 import pybullet as bullet
 
-from .orientation import quaternion
 from .sim_native import NativePose, NativeMotion
 
 
@@ -27,7 +26,7 @@ class StepInput(C.Structure):
         ('was_blocked', C.c_uint32), ('constants', C.c_double*8),
         ('support_count', C.c_uint32), ('has_latch', C.c_uint32),
         ('carrying_supported', C.c_uint32), ('supports', CachedSupport*16),
-        ('latch', C.c_double*4)]
+        ('latch', C.c_double*4), ('turret_yaw', C.c_double)]
 
 
 class StepOutput(C.Structure):
@@ -40,52 +39,40 @@ class StepOutput(C.Structure):
         ('has_latch', C.c_uint32), ('latch', C.c_double*4)]
 
 
-class SensorState(C.Structure):
-    _fields_ = [('entity', C.c_uint32), ('pose', NativePose), ('turret', C.c_double)]
-
-
 STEP_PACKER = struct.Struct('<II32dII8d')
-SENSOR_PACKER = struct.Struct('<I4x7d')
 
 
 def fixture(world):
+    from .collision import _RAY_GROUP, _STATIC_GROUP
     static = []
     for body in sorted(world.map_bodies | world.terrain_bodies):
         key = world.breakable_bodies.get(body)
         static.append(dict(body=body, path=world._mesh_body_paths[body], key=key,
             kind='breakable' if key is not None else 'terrain' if body in world.terrain_bodies else 'map'))
-    entities = [vehicle_fixture(world, entity, pose) for entity, pose in world.poses.items()]
+    entities = [vehicle_fixture(world, entity) for entity in world.poses]
     terrain = world.terrain
-    return dict(static=static, entities=entities, terrain=dict(size=terrain.size,
-        heights=list(terrain.heights), origin=(terrain.MIN, terrain.MIN_Z),
-        dimensions=(terrain.WIDTH, terrain.DEPTH), vertical=(terrain.HEIGHT_MIN, terrain.HEIGHT)))
+    static_mask = _RAY_GROUP  # Restore a breakable filter if a native step fails.
+    zone = dict(zone=tuple(world.collision_zone)) if world.collision_zone else {}
+    return dict(static=static, entities=entities, **zone, static_group=_STATIC_GROUP, static_mask=static_mask,
+        terrain=dict(size=terrain.size, origin=(terrain.MIN, terrain.MIN_Z),
+            dimensions=(terrain.WIDTH, terrain.DEPTH), vertical=(terrain.HEIGHT_MIN, terrain.HEIGHT)))
 
 
-def vehicle_fixture(world, entity, pose):
+def height_grid(terrain):
+    """Expose contiguous native-endian uint16 samples for synchronous attachment."""
+    heights = np.asarray(terrain.heights)
+    if (not 1 <= terrain.size <= 8192 or heights.ndim != 1
+            or heights.size != terrain.size * terrain.size or heights.dtype.kind not in 'iu'):
+        raise ValueError('Invalid terrain grid')
+    if heights.dtype != np.uint16 and (heights.min() < 0 or heights.max() > 65535):
+        raise ValueError('Invalid terrain height')
+    return np.require(heights, dtype=np.uint16, requirements=['C', 'A'])
+
+
+def vehicle_fixture(world, entity):
     if not world._has_suspension(entity):
         raise ValueError(f'Native physics requires separate track colliders for vehicle {entity}')
     assets = world.assets_for(entity)
-    parts = []
-    proxies = getattr(assets, 'contact_proxies', None)
-    if proxies:
-        for part in proxies:
-            row = dict(name=part.name, kind=part.kind,
-                turret=part.name == assets.turret_node,
-                offset=tuple(assets.definition.aiming.turret_position)
-                       if part.name == assets.turret_node else (0., 0., 0.))
-            if part.kind == 'prism':
-                row['path'] = assets.mesh_files.mesh(part.vertices)
-            elif part.kind == 'box':
-                row.update(center=part.center, half_extents=part.half_extents)
-            else:
-                raise ValueError('Unsupported native query proxy')
-            parts.append(row)
-    else:
-        parts = [dict(name=name, kind='prism', path=assets.mesh_files.mesh(vertices),
-            turret=name == assets.turret_node,
-            offset=tuple(assets.definition.aiming.turret_position)
-                   if name == assets.turret_node else (0., 0., 0.))
-            for name, vertices in assets.tank_shapes]
     layout = world._support_layout(entity)
     ground = dict(a=layout.a.tolist(), b=layout.b.tolist(), p=layout.p.tolist(),
         weights=layout.weight.tolist(), patch=layout.patch, clearance=world._hull_clearance(entity),
@@ -94,9 +81,8 @@ def vehicle_fixture(world, entity, pose):
         track_links=list(world.track_links[entity]),
         tracks=[dict(span=(low, high), z=zs.tolist(), y=ys.tolist())
                 for low, high, zs, ys in layout.tracks])
-    return dict(id=entity, body=world.bodies[entity],
-        position=pose.position, orientation=quaternion(pose.yaw, pose.pitch, pose.roll),
-        parts=parts, ground=ground)
+    body = world.bodies[entity]
+    return dict(id=entity, body=body, links=bullet.getNumJoints(body, physicsClientId=world.cid), ground=ground)
 
 
 def library_path():
@@ -109,20 +95,23 @@ def load_library():
     """Load the required ground controller and validate its complete public ABI."""
     path = library_path()
     try:
-        library = C.CDLL(str(path))
+        # PyBullet 3.2.7 holds the GIL for DIRECT commands and disconnect.
+        # Keep that same exclusion while probing real bodies through ctypes.
+        library = C.PyDLL(str(path))
         library.solbreaker_physics_abi_sizes.argtypes = []
         library.solbreaker_physics_abi_sizes.restype = C.c_uint64
-        expected = (C.sizeof(StepInput) << 32) | (C.sizeof(StepOutput) << 16) | C.sizeof(SensorState)
+        expected = (C.sizeof(StepInput) << 32) | C.sizeof(StepOutput)
         if (library.solbreaker_physics_abi_sizes() != expected
                 or STEP_PACKER.size != StepInput.support_count.offset):
             raise RuntimeError('Incompatible native physics ABI')
         signatures = {
-            'create': ([C.c_char_p, C.c_char_p], C.c_void_p),
+            'attach_grid': ([C.c_int32, C.c_char_p, C.c_char_p, C.POINTER(C.c_uint16), C.c_size_t], C.c_void_p),
+            'session_live': ([C.c_int32], C.c_bool),
+            'sensor_enabled': ([C.c_void_p, C.c_uint32, C.c_bool], C.c_int32),
             'query': ([C.c_void_p, C.c_char_p, C.c_void_p, C.c_size_t], C.c_int32),
             'close': ([C.c_void_p], None),
             'error': ([C.c_void_p, C.c_void_p, C.c_size_t], C.c_size_t),
             'step': ([C.c_void_p, C.POINTER(StepInput), C.POINTER(StepOutput)], C.c_int32),
-            'sync': ([C.c_void_p, C.POINTER(SensorState), C.c_size_t], C.c_int32),
         }
         for name, (arguments, result) in signatures.items():
             function = getattr(library, 'solbreaker_physics_'+name)
@@ -137,24 +126,34 @@ def load_library():
 class NativePhysics:
     def __init__(self, world):
         self.library = load_library()
-        self._sensor_enabled = getattr(self.library, 'solbreaker_physics_sensor_enabled', None)
-        if self._sensor_enabled is not None:
-            self._sensor_enabled.argtypes = [C.c_void_p, C.c_uint32, C.c_bool]
-            self._sensor_enabled.restype = C.c_int32
         self._lock = threading.RLock()
         self._output = C.create_string_buffer(4*1024*1024)
-        self.handle = self.library.solbreaker_physics_create(
-            json.dumps(fixture(world), allow_nan=False).encode(), str(Path(bullet.__file__).resolve()).encode())
-        if not self.handle:
-            raise RuntimeError(self.error())
         self.steps = 0
-        self._sensors = (SensorState*len(world.poses))()
-        self._sensor_states = {}
-        self._sensor_batch = None
+        self._inside_zone = ()
+        self._limits = {}
+        self.cid = world.cid
+        self.handle = None
+        grid = height_grid(world.terrain)
+        payload = json.dumps(fixture(world), allow_nan=False).encode()
+        path = library_path().resolve()
+        # LoadLibraryA in PyBullet 3.2.7 accepts the ASCII module name when
+        # ctypes has already loaded that module via its absolute Unicode path.
+        plugin_path = path.name if sys.platform == 'win32' and not str(path).isascii() else str(path)
+        self.plugin = bullet.loadPlugin(plugin_path, physicsClientId=self.cid)
+        if self.plugin < 0:
+            raise RuntimeError('Could not load the native physics plugin into the Bullet arena')
+        self.token = bullet.executePluginCommand(self.plugin, physicsClientId=self.cid)
+        if self.token <= 0:
+            raise RuntimeError('Bullet arena already has a native physics owner')
         try:
-            self.sync(world)
+            self.handle = self.library.solbreaker_physics_attach_grid(
+                self.token, payload, str(Path(bullet.__file__).resolve()).encode(),
+                grid.ctypes.data_as(C.POINTER(C.c_uint16)), grid.size)
+            if not self.handle:
+                raise RuntimeError(self.error())
         except BaseException:
-            self.close()
+            if self.arena_alive():
+                bullet.unloadPlugin(self.plugin, physicsClientId=self.cid)
             raise
 
     def error(self):
@@ -174,63 +173,42 @@ class NativePhysics:
             # ctypes.raw copies the entire 4 MiB buffer even for a small reply.
             return json.loads(C.string_at(self._output, size))
 
-    def replace_vehicle(self, world, entity, pose):
-        self.query(operation='replace_vehicle', vehicle=vehicle_fixture(world, entity, pose))
-        self._sensor_states.pop(entity, None)
+    def replace_vehicle(self, world, entity):
+        self.query(operation='replace_vehicle', vehicle=vehicle_fixture(world, entity))
+        self._limits.pop(entity, None)
 
     def set_sensor_enabled(self, entity, enabled):
         with self._lock:
-            if self._sensor_enabled is not None:
-                status = self._sensor_enabled(self.handle, entity, enabled)
-                if status:
-                    raise RuntimeError(f'Native sensor update failed ({status}): {self.error()}')
-
-    def sync(self, world, entities=None):
-        with self._lock:
             if not self.handle:
                 raise RuntimeError('Native physics world is closed')
-            if len(world.poses) != len(self._sensors):
-                raise RuntimeError('Native physics roster changed')
-            changes = {}
-            for entity in world.poses if entities is None else entities:
-                pose = world.poses[entity]
-                turret = world.gun_angles[entity][0]
-                value = pose, turret
-                if self._sensor_states.get(entity) == value:
-                    continue
-                SENSOR_PACKER.pack_into(self._sensors, len(changes)*SENSOR_PACKER.size, entity,
-                    *pose.position, pose.yaw, pose.pitch, pose.roll, turret)
-                changes[entity] = value
-            if not changes:
-                return
-            status = self.library.solbreaker_physics_sync(self.handle, self._sensors, len(changes))
+            status = self.library.solbreaker_physics_sensor_enabled(self.handle, entity, enabled)
             if status:
-                raise RuntimeError(f'Native physics sync failed ({status}): {self.error()}')
-            self._sensor_states.update(changes)
-
-    @contextmanager
-    def sensor_batch(self, world):
-        """Track per-vehicle updates during the arena's sequential drive pass."""
-        self.sync(world)
-        dirty = set()
-        self._sensor_batch = dirty
-        try:
-            yield dirty
-        finally:
-            self._sensor_batch = None
+                raise RuntimeError(f'Native sensor update failed ({status}): {self.error()}')
 
     def move(self, world, entity, distance, yaw_delta, dt, state, displacement):
         from .collision import Pose
-        dirty = self._sensor_batch
-        if dirty is None:
-            self.sync(world)
-        else:
-            dirty.add(entity)
-            self.sync(world, sorted(dirty))
-            dirty.clear()
+        if world.collision_zone is not None:
+            inside = tuple(world.bodies[e] for e, pose in world.poses.items()
+                           if world.collision_zone(pose.position))
+            if inside != self._inside_zone:
+                self.query(operation='zone_members', bodies=inside)
+                self._inside_zone = inside
+        if world.movement_circle or world.open_map_borders or entity in self._limits:
+            policy = {}
+            if entity in world.open_map_borders:
+                policy['bounds'] = world.sandbox_terrain_bounds()
+            circle = world.movement_circle
+            if circle and circle[0] == entity:
+                policy['circle'] = circle[1:]
+            if policy != self._limits.get(entity, {}):
+                self.query(operation='movement_limits', entity=entity, **policy)
+                if policy:
+                    self._limits[entity] = policy
+                else:
+                    del self._limits[entity]
         command = StepInput()
         current, road = world.poses[entity], world._road_poses[entity]
-        STEP_PACKER.pack_into(command, 0, 2, entity,
+        STEP_PACKER.pack_into(command, 0, 3, entity,
             *current.position, current.yaw, current.pitch, current.roll,
             *road.position, road.yaw, road.pitch, road.roll,
             *state.velocity, *state.suspension_velocity, *state.support_angular_rates,
@@ -240,6 +218,7 @@ class NativePhysics:
             world.SKIN, world.STEP, world.GRAVITY,
             world.SUPPORT_REACH, world.SUSPENSION_TRAVEL, world.SUSPENSION_OMEGA,
             world.SUSPENSION_ANGULAR_OMEGA, world._hull_clearance(entity))
+        command.turret_yaw = world.gun_angles[entity][0]
         supports = [row for row in world._contact_support_cache.get(entity, ())
                     if row[0] in world.map_bodies and row[0] not in world.breakable_bodies]
         if len(supports) > len(command.supports):
@@ -306,11 +285,15 @@ class NativePhysics:
             world.short_flight_spins[entity] = tuple(output.spin)
             world._support_memory.pop(entity, None)
         world.poses[entity] = result
-        world.set_pose(world.bodies[entity], result)
-        self._sensor_states[entity] = result, world.gun_angles[entity][0]
         return result, bool(output.moved), output.rest
 
+    def arena_alive(self):
+        # Unlike PyBullet's small integer CID, this token is never recycled.
+        return self.library.solbreaker_physics_session_live(self.token)
+
     def close(self):
+        # The arena retains its identity plugin until Bullet disconnects.
+        # Dropping an individual controller releases only its own Rust state.
         with self._lock:
             if self.handle:
                 self.library.solbreaker_physics_close(self.handle)

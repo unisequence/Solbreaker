@@ -219,7 +219,7 @@ def interface_scope(interface, name):
     if any(interface.network.subnet_of(network) for network in PRIVATE):
         return str(interface.network)
     adapter_names = set(re.findall(r'[a-z0-9]+', name))
-    if 'radminvpn' in adapter_names:
+    if any(re.fullmatch(r'radminvpn[0-9]*', part) for part in adapter_names):
         adapter_names.add('radmin')
     if 'ham0' in adapter_names:
         adapter_names.add('hamachi')
