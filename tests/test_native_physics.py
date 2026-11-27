@@ -1137,6 +1137,9 @@ class NativePhysicsTests(unittest.TestCase):
 
     def test_blocked_rigid_turret_separates_within_bounds_when_neighbor_moves(self):
         assets = self.assets('wall')
+        # Keep the test contact away from the diagonal between wall triangles.
+        # Bullet builds may choose different normals at that internal edge.
+        assets.vertices = box((-5., 0., 4.), (20., 3., 4.25))
         assets.destructibles[7] = Destructible(7, 'prop', 3, 100,
             box((1.7, 0., 1.7), (1.8, .1, 1.8)), FACES)
         # Near the wall the actual turret clears, but the full-yaw rigid
