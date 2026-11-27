@@ -33,14 +33,21 @@ class WindowsBundleTests(unittest.TestCase):
             runtime = dict(filename='runtime.tar.gz', sha256=hashlib.sha256(archive.getvalue()).hexdigest())
             (directory/runtime['filename']).write_bytes(archive.getvalue())
             wheel = directory/'example-1-py3-none-any.whl'
+            plugin = 'PySide6/qml/Qt/labs/assetdownloader/'
+            intermediate = plugin+'objects-Debug/plugin_init/plugin_init.cpp.obj'
             with zipfile.ZipFile(wheel, 'w') as stream:
                 stream.writestr('example/__init__.py', 'value = 1\n')
+                stream.writestr(intermediate, b'link input')
+                stream.writestr(plugin+'plugin.dll', b'linked plugin')
             record = dict(name='example', version='1', files=[dict(filename=wheel.name,
                           sha256=hashlib.sha256(wheel.read_bytes()).hexdigest())])
             source = {'requirements/lock.json': b'{}', 'pyproject.toml': b'project'}
             with patch.object(bundle, 'RUNTIME', runtime), patch.object(bundle, 'records', return_value=[record]):
                 result = bundle.payloads(directory, source, read_input)
                 self.assertEqual(result['runtime/python/Lib/site-packages/example/__init__.py'], b'value = 1\n')
+                prefix = 'runtime/python/Lib/site-packages/'
+                self.assertNotIn(prefix+intermediate, result)
+                self.assertEqual(result[prefix+plugin+'plugin.dll'], b'linked plugin')
                 self.assertIn(b'..\\..\n', result['runtime/python/python312._pth'])
                 stamp = json.loads(result['runtime/python/solbreaker-bundle.json'])
                 self.assertIn('example', stamp['packages'])

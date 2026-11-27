@@ -99,6 +99,11 @@ def payloads(directory, source, read_input, *, server_only=False):
                     if len(parts) < 3 or parts[1] not in ('purelib', 'platlib'):
                         raise ValueError('Unsupported wheel installation scheme: '+member.filename)
                     parts = parts[2:]
+                # PySide ships Qt build intermediates inside QML plugins.
+                # The linked plugins use their DLLs at runtime.
+                if (parts[:2] == ('PySide6', 'qml') and path.suffix == '.obj'
+                        and any(part.startswith('objects-') for part in parts[2:-1])):
+                    continue
                 add('runtime/python/Lib/site-packages/'+'/'.join(parts), stream.read(member))
     # CPython resolves these paths relative to its DLL, including after moving
     # the distribution. _pth also excludes registry, PYTHONPATH and user-site.

@@ -5,6 +5,8 @@
 - On Windows, a fully copied Solbreaker client can start and provide resources
   for the local server after the original Steam installation is updated or
   removed. The supported Blitz build is still 11.21.0.1235_7376187.
+- Removed Qt build intermediates that could cause Windows updates to fail
+  while extracting files in longer installation paths. See issue #17.
 
 ## 0.3.1
 
