@@ -111,6 +111,9 @@ def prepare(game, destination, profile, *, windows=False, proton=None, steam=Non
         replay_ui.install(stage)
         scene_quality.install(stage)
         install_registration(stage)
+        if windows:
+            from .management_tasks import refresh_client_resources
+            refresh_client_resources(stage, json.loads(manifest_path.read_text()), 'original')
         client_tls.configure_environment({}, stage, json.loads(manifest_path.read_text()))
         if windows and resource_tree_facts(game, **inventory_options) != source_facts:
             raise ValueError('Game resources changed during client preparation')

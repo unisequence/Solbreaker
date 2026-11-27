@@ -45,9 +45,18 @@ def initial_regions(game, origin):
 
 
 def prepare(game, root, *, http_port=18080, login_port=20016, vehicle='usa/M2_lt',
-            username='admin@solbreaker.local'):
-    facts = inspect_game(game)
-    game = Path(facts['game'])
+            username='admin@solbreaker.local', resource_client=None):
+    if resource_client is None:
+        facts = inspect_game(game)
+        game = Path(facts['game'])
+    else:
+        from .connection import ensure_lab
+        from .resource_source import copied_game
+
+        client_lab, client_manifest = ensure_lab(resource_client)
+        game = copied_game(client_lab, client_manifest)
+        facts = dict(game=str(game), version=client_manifest['version'],
+                     exe_sha256=client_manifest['exe_sha256'], resource_client=str(client_lab))
     root = Path(root).expanduser().absolute()
     if root.exists() or root.is_symlink():
         raise ValueError('Choose a new, absent server state directory')
@@ -63,7 +72,8 @@ def prepare(game, root, *, http_port=18080, login_port=20016, vehicle='usa/M2_lt
                     training_vehicle=vehicle, vehicle_progression=True, grant_all_vehicles=True,
                     training_bot=True, account_autocreate=False)
     network = parse_config(defaults(manifest))
-    regions = initial_regions(game, network.advertise_http)
+    regions = (initial_regions(game, network.advertise_http) if resource_client is None
+               else yaml.safe_load((client_lab/'regions.yaml').read_bytes()))
     raw = yaml.safe_dump(regions_config(regions, network), sort_keys=False, allow_unicode=True).encode()
     urls = yaml.safe_dump(dict(Location1=network.advertise_http+'/conf',
                                Location2=network.advertise_http+'/conf')).encode()

@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([string]$Distribution = 'Ubuntu', [string]$State, [switch]$Owned, [switch]$UseWsl, [switch]$Sandbox, [switch]$Version)
+param([string]$Distribution = 'Ubuntu', [string]$State, [switch]$Owned, [switch]$UseWsl, [switch]$Sandbox, [switch]$Version, [string]$ResourceClient)
 $ErrorActionPreference = 'Stop'
 if (-not $State) { $State = Join-Path $PSScriptRoot 'data' }
 if (-not $UseWsl) {
@@ -26,6 +26,7 @@ if (-not $UseWsl) {
     if ($Version) { $arguments += '--version' }
     if ($Owned) { $arguments += '--stop-on-stdin' }
     if ($Sandbox) { $arguments += '--sandbox' }
+    if ($ResourceClient) { $arguments += @('--resource-client', $ResourceClient) }
     & $python @arguments
     exit $LASTEXITCODE
 }

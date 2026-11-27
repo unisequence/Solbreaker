@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog, QFil
     QVBoxLayout, QWidget)
 
 from . import __version__, benchmark_submission, discovery, updates
-from .management import PROJECT, Manager, Settings, friendly_error, log_tail, read_log
+from .management import PROJECT, Manager, Settings, friendly_error, has_prepared_copy, log_tail, read_log
 from .build_info import COMPATIBILITY
 from .connection import atomic_write
 from .replay_inspector import ReplayError, load_replay
@@ -485,7 +485,8 @@ class SetupWizard(QDialog):
                 return
             if index == 0:
                 game = Path(self.fields['game'].text()).expanduser()
-                if not (game/'wotblitz.exe').is_file() or not (game/'Data').is_dir():
+                if (not has_prepared_copy(self.fields['client'].text())
+                        and (not (game/'wotblitz.exe').is_file() or not (game/'Data').is_dir())):
                     raise ValueError(tr('Выбери папку игры, в которой находятся wotblitz.exe и Data.'))
                 if not self.fields['client'].text().strip():
                     raise ValueError(tr('Укажи папку для отдельного клиента Solbreaker.'))
@@ -526,14 +527,16 @@ class SetupWizard(QDialog):
     def prepare(self):
         settings = self.settings()
         client = document(Path(settings.client).expanduser()/'manifest.json')
-        if client and Path(client.get('game', '')).resolve() != Path(settings.game).expanduser().resolve():
+        standalone = has_prepared_copy(settings.client)
+        if (client and not standalone
+                and Path(client.get('game', '')).resolve() != Path(settings.game).expanduser().resolve()):
             raise ValueError(tr('Этот клиент создан из другой папки игры. Выбери новую папку для клиента.'))
         installed = prepared_client(settings)
         if self.first_step and not installed:
             raise ValueError(tr('Сначала подготовь клиент Solbreaker.'))
         self.pending = []
         self.setup_settings = settings
-        self.depot_job = self.prepare_depot(settings, installed)
+        self.depot_job = None if standalone else self.prepare_depot(settings, installed)
         if self.depot_job is not None:
             _, resources = self.depot_job
             if Path(settings.game).expanduser().resolve() != resources:
@@ -1405,7 +1408,8 @@ class Window(QMainWindow):
         game = Path(client.get('game') or settings.game).expanduser()
         server = (prepared_server(settings) if self.own.isChecked() else
                   bool(settings.server_url.strip() or document(remote_profile(settings)).get('server_id')))
-        return (game/'wotblitz.exe').is_file(), prepared_client(settings), server
+        return (has_prepared_copy(settings.client) or (game/'wotblitz.exe').is_file(),
+                prepared_client(settings), server)
 
     def submit_benchmark(self):
         path = self.manager.benchmark_report

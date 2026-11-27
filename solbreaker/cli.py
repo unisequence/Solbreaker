@@ -26,10 +26,13 @@ def main(argv=None):
     serve.add_argument('--stop-on-stdin', action='store_true', help=argparse.SUPPRESS)
     serve.add_argument('--sandbox', action='store_true', help='Allow sandbox controls in every battle')
     serve.add_argument('--state', type=Path, default=Path('data'))
+    serve.add_argument('--resource-client', type=Path, help='prepared full client to use for server resources')
     serve.add_argument('--log-file', type=Path)
     serve.add_argument('--diagnostic-log', nargs='?', const='auto', type=Path)
     benchmark = commands.add_parser('benchmark', help='Measure local server stability under scripted load')
-    benchmark.add_argument('--game', type=Path, required=True, help='path to the compatible Blitz files')
+    benchmark_source = benchmark.add_mutually_exclusive_group(required=True)
+    benchmark_source.add_argument('--game', type=Path, help='path to the compatible Blitz files')
+    benchmark_source.add_argument('--resource-client', type=Path, help='prepared full client to use for resources')
     benchmark.add_argument('--engine', choices=('owner', 'in-process'), default='owner', help='arena runtime (default: launcher owner profile)')
     benchmark.add_argument('--cold', action='store_true', help='start arenas while launcher map metadata is still warming')
     benchmark.add_argument('--diagnostic-dir', type=Path, help='record production timing traces to a new directory')
@@ -223,7 +226,7 @@ def main(argv=None):
                 if path is not None:
                     diagnostics.install(path)
                 asyncio.run(serve_cli(args.state.resolve(), stop_on_stdin=args.stop_on_stdin,
-                                      sandbox=args.sandbox))
+                                      sandbox=args.sandbox, resource_client=args.resource_client))
             finally:
                 diagnostics.close()
             return

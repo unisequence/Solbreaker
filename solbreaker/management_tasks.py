@@ -56,6 +56,38 @@ def _launch_proton(args, lab, manifest, environment):
                                 print(f'Could not open replay folder: {error}', file=sys.stderr)
 
 
+def refresh_client_resources(lab, manifest, lighting):
+    from .client_battle_settings import upgrade_form
+    from .client_ui import install_chat_filter, install_sandbox_bindings, install_training_maps
+    from .client_practice_picker import install as install_target_picker
+    from .client_reticle import install as install_reticle
+    from .client_time_stop import install as install_time_stop
+    from .client_atmosphere import apply_preset, install_weather_maps
+    from .proving_ground_map import install as install_proving_ground
+    from .client_sandbox import OUTPUT_SHA256
+
+    manifest = upgrade_form(lab, manifest)
+    manifest = install_sandbox_bindings(lab, manifest)
+    manifest = install_chat_filter(lab, manifest)
+    install_target_picker(lab)
+    manifest = install_reticle(lab, manifest)
+    install_time_stop(lab)
+    install_training_maps(lab, manifest)
+    manifest = install_weather_maps(lab, manifest)
+    install_proving_ground(lab, manifest)
+    legacy_lighting = os.environ.get('SOLBREAKER_MINES_LIGHTING', 'day') if lighting is None else 'day'
+    if legacy_lighting not in ('day', 'evening'):
+        raise ValueError('SOLBREAKER_MINES_LIGHTING must be day or evening')
+    lighting = lighting or ('evening' if legacy_lighting == 'evening' else 'original')
+    if lighting != 'original' or manifest.get('mines_evening_overlay') or manifest.get('map_lighting_overlays'):
+        _, manifest = ensure_lab(lab)
+        apply_preset(lab, manifest, lighting, mines_only=legacy_lighting == 'evening')
+    if manifest.get('client_exe_sha256') == OUTPUT_SHA256:
+        from .client_motion_blur import install_motion_blur
+        _, manifest = ensure_lab(lab)
+        install_motion_blur(lab, manifest)
+
+
 def launch_client(lab, *, auto_login=None, profile=None, url=None, lighting=None, replay=None, refresh_lan=False):
     if replay is not None:
         replay = Path(replay).expanduser().resolve()
@@ -74,6 +106,10 @@ def launch_client(lab, *, auto_login=None, profile=None, url=None, lighting=None
             manifest = client_atgm_aim.upgrade(lab, manifest, digest)
             digest = manifest['client_exe_sha256']
         manifest = client_sandbox.upgrade(lab, manifest, digest)
+        from .resource_source import copied_game, is_prepared_copy
+        standalone = is_prepared_copy(manifest)
+        if standalone:
+            copied_game(lab, manifest, digest=digest if digest == manifest['client_exe_sha256'] else None)
         if profile is not None and refresh_lan and replay is None:
             selected = read_connection_profile(profile)
             active_profile = refresh_lan_profile(lab, manifest, selected)
@@ -82,35 +118,11 @@ def launch_client(lab, *, auto_login=None, profile=None, url=None, lighting=None
         elif profile is not None or (url and not connection_url_matches(lab, url)):
             _apply_connection(lab, profile, url)
             lab, manifest = ensure_lab(lab)
-        from .client_battle_settings import upgrade_form
-        manifest = upgrade_form(lab, manifest)
-        from .client_ui import install_chat_filter, install_sandbox_bindings, install_server_name, install_training_maps
-        manifest = install_sandbox_bindings(lab, manifest)
-        manifest = install_chat_filter(lab, manifest)
-        from .client_practice_picker import install as install_target_picker
-        install_target_picker(lab)
-        from .client_reticle import install as install_reticle
-        manifest = install_reticle(lab, manifest)
-        from .client_time_stop import install as install_time_stop
-        install_time_stop(lab)
-        install_training_maps(lab, manifest)
-        from .client_atmosphere import apply_preset, install_weather_maps
-        manifest = install_weather_maps(lab, manifest)
-        from .proving_ground_map import install as install_proving_ground
-        install_proving_ground(lab, manifest)
+        if not standalone:
+            refresh_client_resources(lab, manifest, lighting)
+        from .client_ui import install_server_name
         install_server_name(lab)
-        legacy_lighting = os.environ.get('SOLBREAKER_MINES_LIGHTING', 'day') if lighting is None else 'day'
-        if legacy_lighting not in ('day', 'evening'):
-            raise ValueError('SOLBREAKER_MINES_LIGHTING must be day or evening')
-        lighting = lighting or ('evening' if legacy_lighting == 'evening' else 'original')
-        if (lighting != 'original' or manifest.get('mines_evening_overlay')
-                or manifest.get('map_lighting_overlays')):
-            _, manifest = ensure_lab(lab)
-            apply_preset(lab, manifest, lighting, mines_only=legacy_lighting == 'evening')
-        if manifest.get('client_exe_sha256') == client_sandbox.OUTPUT_SHA256:
-            from .client_motion_blur import install_motion_blur
-            _, manifest = ensure_lab(lab)
-            install_motion_blur(lab, manifest)
+        _, manifest = ensure_lab(lab)
         if auto_login is not None:
             from .login_preferences import configure_automatic_login
             configure_automatic_login(manifest['documents'], auto_login)

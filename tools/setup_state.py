@@ -34,8 +34,10 @@ def verify_native():
 
 def finish(options):
     report('Проверяем версию ресурсов сервера…')
-    game, state = Path(options['game']), Path(options['state'])
-    facts = inspect_game(game)
+    state = Path(options['state'])
+    resource_client = options.get('resource_client')
+    game = Path(options['game']) if not resource_client else None
+    facts = inspect_game(game) if game is not None else None
     host = ipv4(options['host'])
     if not options['skip_build']:
         report('Собираем нативные библиотеки физики…')
@@ -44,8 +46,8 @@ def finish(options):
     verify_native()
     if state.exists():
         manifest = json.loads((state/'manifest.json').read_text())
-        if (not options['resume'] or manifest.get('game') != facts['game']
-                or manifest.get('exe_sha256') != facts['exe_sha256']):
+        if (not options['resume'] or (facts is not None and
+                (manifest.get('game'), manifest.get('exe_sha256')) != (facts['game'], facts['exe_sha256']))):
             raise ValueError('Existing state belongs to another game installation')
         from solbreaker.network import load_network
         network = load_network(state)
@@ -54,7 +56,8 @@ def finish(options):
             raise ValueError('Resume requires the existing host and ports. Use configure-network to change them')
     else:
         report('Создаём сервер, ключи и начальный аккаунт…')
-        prepare(game, state, http_port=options['http_port'], login_port=options['login_port'])
+        prepare(game, state, http_port=options['http_port'], login_port=options['login_port'],
+                resource_client=resource_client)
         with account_access(state/'private'):
             manifest = json.loads((state/'manifest.json').read_text())
             document = defaults(manifest)

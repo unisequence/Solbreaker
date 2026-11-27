@@ -37,7 +37,7 @@ LOG = logging.getLogger("solbreaker")
 
 
 class LocalServer:
-    def __init__(self, lab: Path, *, sandbox=False):
+    def __init__(self, lab: Path, *, sandbox=False, resource_client=None):
         if sandbox and os.environ.get('SOLBREAKER_TIME_STOP') == '1':
             from .time_stop import Rules
             Rules.from_environment()
@@ -59,7 +59,18 @@ class LocalServer:
         self.network = load_network(lab,self.manifest)
         from .tls import server_context
         self.http_tls_context = server_context(lab, self.manifest, self.network)
-        validate_snapshot(self.manifest)
+        resource_client = resource_client or self.manifest.get('resource_client')
+        if resource_client is None:
+            validate_snapshot(self.manifest)
+        else:
+            from .connection import ensure_lab
+            from .resource_source import copied_game
+            client_lab, client_manifest = ensure_lab(resource_client)
+            if (client_manifest['version'], client_manifest['exe_sha256']) != (
+                    self.manifest['version'], self.manifest['exe_sha256']):
+                raise ValueError('Server resource build differs from its manifest')
+            game = copied_game(client_lab, client_manifest)
+            self.manifest.update(game=str(game), source_game=str(game))
         from .proving_ground_map import install as install_proving_ground
         install_proving_ground(lab, self.manifest)
         from .sim_native import backend_status
@@ -384,8 +395,8 @@ class LoginEndpoint(asyncio.DatagramProtocol):
             self.transport.sendto(encode_reply(packet, request_id, reply), addr)
 
 
-async def serve(lab: Path, *, sandbox=False):
-    server = LocalServer(lab, sandbox=sandbox)
+async def serve(lab: Path, *, sandbox=False, resource_client=None):
+    server = LocalServer(lab, sandbox=sandbox, resource_client=resource_client)
     transports = []
     listeners = []
     try:
@@ -441,7 +452,7 @@ async def serve(lab: Path, *, sandbox=False):
             server.event('stopped')
 
 
-async def serve_cli(lab: Path, *, stop_on_stdin=False, sandbox=False):
+async def serve_cli(lab: Path, *, stop_on_stdin=False, sandbox=False, resource_client=None):
     """Drain owned server state on SIGTERM or an optional private stdin pipe.
 
     A daemon reader avoids platform-specific asyncio pipe/signal APIs. It is
@@ -513,7 +524,7 @@ async def serve_cli(lab: Path, *, stop_on_stdin=False, sandbox=False):
     try:
         from .storage import account_access
         with account_access(lab / 'private'):
-            await serve(lab, sandbox=sandbox)
+            await serve(lab, sandbox=sandbox, resource_client=resource_client)
     except asyncio.CancelledError:
         if not requested:
             raise

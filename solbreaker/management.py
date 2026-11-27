@@ -60,6 +60,17 @@ DIAGNOSTIC_MESSAGES = (
 )
 
 
+def has_prepared_copy(path):
+    from .resource_source import is_prepared_copy
+    lab = Path(path).expanduser()
+    try:
+        document = json.loads((lab/'manifest.json').read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return False
+    return (isinstance(document, dict) and is_prepared_copy(document)
+            and (lab/'client/wotblitz.exe').is_file() and (lab/'client/Data/maps.yaml.dvpl').is_file())
+
+
 def friendly_error(detail):
     detail = str(detail).casefold()
     for markers, message in DIAGNOSTIC_MESSAGES:
@@ -201,14 +212,18 @@ def command(action, settings, *, windows=None, interface=None, replay=None, depo
     cli = [python, '-u', '-m', 'solbreaker']
     if action == 'benchmark':
         output, options = benchmark
-        game = required(settings.game, 'папку оригинальной игры')
-        if not (Path(game)/'wotblitz.exe').is_file():
-            raise ValueError('Укажи папку совместимой сборки игры в параметрах.')
+        if has_prepared_copy(settings.client):
+            source = ['--resource-client', str(Path(settings.client).expanduser().absolute())]
+        else:
+            game = required(settings.game, 'папку оригинальной игры')
+            if not (Path(game)/'wotblitz.exe').is_file():
+                raise ValueError('Укажи папку совместимой сборки игры в параметрах.')
+            source = ['--game', game]
         output = Path(output).resolve()
         html = html_output(output)
         if (not output.parent.is_dir() or output.exists() or html.exists() or html.is_symlink()):
             raise ValueError('Выбери новое имя для отчётов HTML и JSON.')
-        args = cli + ['benchmark', '--game', game, '--output', str(output), '--stop-on-stdin']
+        args = cli + ['benchmark', *source, '--output', str(output), '--stop-on-stdin']
         for name in ('maps', 'scenarios', 'arenas', 'tanks', 'seconds', 'warmup', 'repeat',
                      'engine', 'input-pattern', 'vehicle', 'seed'):
             if name in options:
@@ -230,10 +245,12 @@ def command(action, settings, *, windows=None, interface=None, replay=None, depo
     if action == 'server-name':
         return cli + ['configure-server', '--state', state, '--name', settings.server_name]
     if action == 'prepare-server':
-        game = required(settings.game, 'папку оригинальной игры')
         if windows:
+            source = (['-ResourceClient', str(Path(settings.client).expanduser().absolute())]
+                      if has_prepared_copy(settings.client)
+                      else ['-Game', required(settings.game, 'папку оригинальной игры')])
             args = ['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
-                    str(PROJECT/'setup.ps1'), '-Game', game, '-State', state,
+                    str(PROJECT/'setup.ps1'), *source, '-State', state,
                     '-Distribution', settings.distribution, '-HttpPort', str(settings.http_port),
                     '-LoginPort', str(settings.login_port), '-BindAddress', settings.host]
             if Path(state).exists():
@@ -241,6 +258,7 @@ def command(action, settings, *, windows=None, interface=None, replay=None, depo
             if settings.reuse_native:
                 args.append('-SkipBuild')
             return args
+        game = required(settings.game, 'папку оригинальной игры')
         args = [python, str(PROJECT/'tools/setup.py'), '--game', game, '--state', state,
                 '--host', settings.host, '--http-port', str(settings.http_port),
                 '--login-port', str(settings.login_port), '--skip-dependencies']
@@ -264,6 +282,8 @@ def command(action, settings, *, windows=None, interface=None, replay=None, depo
             args = ['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
                     str(PROJECT/'start-server.ps1'), '-Distribution', settings.distribution,
                     '-State', state, '-Owned']
+            if has_prepared_copy(settings.client):
+                args += ['-ResourceClient', str(Path(settings.client).expanduser().absolute())]
             return args + (['-Sandbox'] if settings.sandbox else [])
         args = ['bash', str(PROJECT/'start-server.sh'), '--state', state,
                 '--log-file', str(Path(state)/'server.log'), '--stop-on-stdin']

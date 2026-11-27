@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.2
+
+- On Windows, a fully copied Solbreaker client can start and provide resources
+  for the local server after the original Steam installation is updated or
+  removed. The supported Blitz build is still 11.21.0.1235_7376187.
+
 ## 0.3.1
 
 - Fix benchmark startup when the server state is accessed through an alternate

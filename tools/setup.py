@@ -15,7 +15,9 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def parser():
     result = argparse.ArgumentParser(description=__doc__)
-    result.add_argument('--game', type=Path, required=True, help='Owned pinned game directory')
+    source = result.add_mutually_exclusive_group(required=True)
+    source.add_argument('--game', type=Path, help='Owned pinned game directory')
+    source.add_argument('--resource-client', type=Path, help='Use an existing full Solbreaker client')
     result.add_argument('--state', type=Path, default=ROOT/'data')
     result.add_argument('--client', type=Path, help='New independent client directory')
     result.add_argument('--windows-client', action='store_true', help='Copy resources for native Windows')
@@ -40,7 +42,10 @@ def install(args):
         raise ValueError('Run setup.sh on Linux x86-64 or setup.ps1 on Windows x86-64')
     if sys.version_info < (3, 11):
         raise ValueError('Python 3.11 or newer is required')
-    args.game = args.game.expanduser().resolve(strict=True)
+    if args.game is not None:
+        args.game = args.game.expanduser().resolve(strict=True)
+    elif args.client is not None:
+        raise ValueError('A clean game source is needed to prepare another client')
     args.state = args.state.expanduser().absolute()
     if args.client is not None:
         args.client = args.client.expanduser().absolute()

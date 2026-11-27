@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory=$true)][string]$Game,
+    [string]$Game,
+    [string]$ResourceClient,
     [string]$Client,
     [string]$State,
     [switch]$SkipBuild,
@@ -12,6 +13,8 @@ param(
     [switch]$UseWsl
 )
 $ErrorActionPreference = 'Stop'
+if ([bool]$Game -eq [bool]$ResourceClient) { throw 'Choose -Game or -ResourceClient.' }
+if ($UseWsl -and $ResourceClient) { throw 'Use a native Windows server with -ResourceClient.' }
 if (-not $State) { $State = Join-Path $PSScriptRoot 'data' }
 
 if (-not $UseWsl) {
@@ -22,8 +25,10 @@ if (-not $UseWsl) {
     $python = Get-SolbreakerBundledPython
     if ($python) { $SkipBuild = $true }
     else { $python = Join-Path $PSScriptRoot '.venv-gui\Scripts\python.exe' }
-    $arguments = @('tools/setup.py', '--game', $Game, '--state', $State,
+    $arguments = @('tools/setup.py', '--state', $State,
                    '--host', $BindAddress, '--http-port', "$HttpPort", '--login-port', "$LoginPort")
+    if ($ResourceClient) { $arguments += @('--resource-client', $ResourceClient) }
+    else { $arguments += @('--game', $Game) }
     if ($Client) { $arguments += @('--client', $Client, '--windows-client') }
     if ($Resume) { $arguments += '--resume' }
     if ($SkipBuild) { $arguments += '--skip-build' }

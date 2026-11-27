@@ -947,7 +947,8 @@ def run(args):
         checkpoint()
         state = Path(temporary) / 'state'
         if control is None or not control.stop.is_set():
-            prepare(args.game, state, vehicle=args.vehicle)
+            prepare(args.game, state, vehicle=args.vehicle,
+                    resource_client=getattr(args, 'resource_client', None))
         for index, (map_key, scenario, count, requested_tanks, repetition) in enumerate(cases):
             if control is not None:
                 if control.stop.is_set():

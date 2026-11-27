@@ -88,6 +88,33 @@ class ClientRepairs(unittest.TestCase):
         self.manifest.write_text(json.dumps(dict(game=str(self.game), client=str(self.client),
                                                   exe_sha256=BUILD_SHA256, **fields)))
 
+    def test_copied_client_launches_without_the_original(self):
+        from solbreaker.build_info import VERSION
+
+        image = b'private executable'
+        executable = self.client/'wotblitz.exe'
+        executable.write_bytes(image)
+        self.write_manifest(resource_policy='copy', version=VERSION, client_exe_sha256=digest(image))
+        self.game.rmdir()
+        data = self.client/'Data'
+        (data/'version.txt.dvpl').write_bytes(dvpl.encode(VERSION.encode()))
+        (data/'maps.yaml.dvpl').write_bytes(dvpl.encode(b'maps: {}'))
+        catalog = data/'XML/item_defs/vehicles'
+        (catalog/'common').mkdir(parents=True)
+        (catalog/'usa').mkdir()
+        (catalog/'common/nations.xml.dvpl').write_bytes(dvpl.encode(b'<nations><usa/></nations>'))
+        (catalog/'usa/list.xml.dvpl').write_bytes(dvpl.encode(b'<list><tank/></list>'))
+        (catalog/'usa/tank.xml.dvpl').write_bytes(dvpl.encode(b'<tank/>'))
+        with (patch('solbreaker.management_tasks.require_executable_idle'),
+              patch('solbreaker.client_ui.install_server_name'),
+              patch('solbreaker.client_tls.configure_environment'),
+              patch('solbreaker.management_tasks.subprocess.call', return_value=0) as launch):
+            self.assertEqual(launch_client(self.lab), 0)
+            self.assertEqual(launch.call_args.kwargs['cwd'], self.lab)
+            (data/'alias').symlink_to(data, target_is_directory=True)
+            with self.assertRaisesRegex(ValueError, 'refuses links'):
+                launch_client(self.lab)
+
     def test_polygon_menu_serializes_without_yaml_aliases(self):
         from solbreaker.client_practice_picker import patch_menu
 

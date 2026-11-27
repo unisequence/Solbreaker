@@ -107,11 +107,14 @@ def ensure_lab(lab):
             or linked(client) or linked(data)
             or not client.is_dir() or not data.is_dir()):
         raise ValueError('Expected a separate prepared lab client directory')
-    game=Path(manifest['game']).resolve(strict=True)
-    source=Path(manifest.get('source_game',manifest['game'])).resolve(strict=True)
+    from .resource_source import is_prepared_copy
+    copied = is_prepared_copy(manifest)
+    game=Path(manifest['game']).resolve(strict=not copied)
+    source=Path(manifest.get('source_game',manifest['game'])).resolve(strict=not copied)
     if not separate(lab,source):
         raise ValueError('The lab must be separate from game resources')
-    if not game.is_dir() or not separate(client,game) or os.path.samefile(client,game):
+    if (not separate(client,game) or (game.exists() and
+            (not game.is_dir() or os.path.samefile(client,game)))):
         raise ValueError('The game resource view must be separate from the lab client')
     for original in (source,source/'Data',game,game/'Data'):
         if original.exists() and (os.path.samefile(client,original) or os.path.samefile(data,original)):

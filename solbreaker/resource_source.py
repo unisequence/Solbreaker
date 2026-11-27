@@ -65,3 +65,32 @@ def validate_snapshot(manifest):
     facts = inspect_game(manifest['game'])
     if (manifest['version'], manifest['exe_sha256']) != (facts['version'], facts['exe_sha256']):
         raise ValueError('Server resource build differs from its manifest')
+
+
+def is_prepared_copy(manifest):
+    return (manifest.get('resource_policy') == 'copy'
+            and manifest.get('version') == VERSION and manifest.get('exe_sha256') == BUILD_SHA256
+            and bool(manifest.get('client_exe_sha256')))
+
+
+def copied_game(lab, manifest, *, digest=None):
+    """Verify the prepared copy before using it without the original game."""
+    from . import dvpl
+    from .resource_copy import resource_tree_facts
+
+    if not is_prepared_copy(manifest):
+        raise ValueError('Expected a full prepared copy of the compatible game')
+    game = lab / 'client'
+    executable = game / 'wotblitz.exe'
+    resource_tree_facts(game)
+    if digest is None:
+        with executable.open('rb') as stream:
+            digest = hashlib.file_digest(stream, 'sha256').hexdigest()
+    if (executable.stat().st_nlink != 1 or digest == BUILD_SHA256
+            or digest != manifest['client_exe_sha256']
+            or dvpl.read(game / 'Data/version.txt.dvpl').decode().strip() != VERSION):
+        raise ValueError('Клиент отличается от подготовленной копии')
+    validate_vehicle_catalog(game)
+    if not (game / 'Data/maps.yaml.dvpl').is_file():
+        raise ValueError('The prepared client is missing its map catalog')
+    return game
