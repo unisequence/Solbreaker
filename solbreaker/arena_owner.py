@@ -28,7 +28,7 @@ _MAX_MESSAGE = 1024 * 1024
 _TIMED = frozenset(('ready', 'control', 'fire', 'leave', 'disconnect', 'step',
                     'consumable', 'select_shell', 'uprising_select', 'uprising_deselect'))
 INPUT_BATCH_OPERATIONS = frozenset(('control', 'aim', 'fire'))
-INPUT_BATCH_LIMIT = 16
+INPUT_BATCH_LIMIT = 32
 
 
 class OwnerError(RuntimeError):

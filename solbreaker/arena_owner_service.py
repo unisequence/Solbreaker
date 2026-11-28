@@ -165,6 +165,8 @@ class ArenaOwnerService:
                 on_failure=self._spawn_failed)
             job.transport = ArenaOwnerTransport(
                 self.endpoint, job.route,
+                limit=max(64, 4 * len(job.selected)) if arena.large_teams else 64,
+                large_teams=arena.large_teams,
                 on_result=lambda command, result: self._on_result(job, command, result),
                 on_delivered=lambda command, result: self._on_delivered(job, command, result),
                 on_fault=lambda arena_id, error: self._on_fault(job, error),

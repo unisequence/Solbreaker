@@ -41,12 +41,15 @@ class RoomBattleSettings:
     # None uses the mode default; zero has no time limit.
     minutes: int | None = None
     unlimited_ammo: bool = False
+    large_teams: bool = False
 
     def __post_init__(self):
         if type(self.unlimited_lives) is not bool:
             raise ValueError('Unlimited lives must be boolean')
         if type(self.unlimited_ammo) is not bool:
             raise ValueError('Unlimited ammunition must be boolean')
+        if type(self.large_teams) is not bool:
+            raise ValueError('15×15 must be enabled or disabled')
         if self.minutes is not None and (type(self.minutes) is not int
                                          or not 0 <= self.minutes <= MAX_ROOM_MINUTES):
             raise ValueError(f'Choose 1 to {MAX_ROOM_MINUTES} minutes or an endless battle')

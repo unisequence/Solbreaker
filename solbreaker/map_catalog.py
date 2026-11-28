@@ -74,6 +74,28 @@ def map_camouflage_slot(map_id):
     return 1
 
 
+def room_team_capacity(map_id, mode, settings):
+    from .roster import LARGE_ROOM_MAP_ID, LARGE_TEAM_SIZE
+    if settings is not None and settings.large_teams:
+        if map_id != LARGE_ROOM_MAP_ID or mode != 'encounter':
+            raise ValueError('15×15 is available for Encounter on Rudniki')
+        return LARGE_TEAM_SIZE
+    return map_team_capacity(map_id)
+
+
+def room_map_spec(spec, capacity):
+    from .roster import LARGE_TEAM_SIZE
+    if capacity != LARGE_TEAM_SIZE:
+        return spec
+    points = tuple(tuple((center_x + (slot % 5 - 2)*7.5, front_z + side*9.*(slot//5))
+                         for slot in range(capacity))
+                   for center_x, front_z, side in ((103., -146., -1.), (51., 183., 1.)))
+    min_x, min_z, max_x, max_z = spec.bounds
+    if any(not (min_x < x < max_x and min_z < z < max_z) for team in points for x, z in team):
+        raise ValueError('15×15 spawn is outside the map border')
+    return replace(spec, team_spawns=points)
+
+
 def map_team_capacity(map_id):
     return 5 if map_id in (_SUPPORTED["rudniki_01"], _SUPPORTED["rudniki_02"]) else 7
 

@@ -326,14 +326,14 @@ def select_bot_roster(game, player_definition, *, enemies, allies, seed):
     return _balanced_roster(game, {1: (player_definition,), 2: ()}, (allies, enemies), seed)
 
 
-def select_room_bot_roster(game, player_definition, *, teams, bot_counts, seed, human_definitions=None):
+def select_room_bot_roster(game, player_definition, *, teams, bot_counts, seed, human_definitions=None, capacity=TEAM_SIZE):
     """Fill vacancies after the human participants using their real teams and tanks."""
     if (not isinstance(bot_counts, (tuple, list)) or len(bot_counts) != len(TEAMS)
-            or any(type(count) is not int or not 0 <= count <= TEAM_SIZE for count in bot_counts)):
+            or any(type(count) is not int or not 0 <= count <= capacity for count in bot_counts)):
         raise ValueError('Invalid room bot counts')
     if not teams:
         raise ValueError('A room battle requires a human participant')
-    validate_teams([*teams, *([1]*bot_counts[0]), *([2]*bot_counts[1])])
+    validate_teams([*teams, *([1]*bot_counts[0]), *([2]*bot_counts[1])], capacity=capacity)
     if not any(bot_counts):
         return ()
     definitions = (player_definition,) * len(teams) if human_definitions is None else tuple(human_definitions)

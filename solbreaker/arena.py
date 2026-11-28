@@ -126,6 +126,7 @@ class Arena:
         if room_settings is not None and (solo or not isinstance(room_settings, RoomBattleSettings)):
             raise ValueError('Invalid training room settings')
         self.room_settings = room_settings
+        self.large_teams = room_settings is not None and room_settings.large_teams
         settings = training.battle_settings if solo else room_settings or RoomBattleSettings()
         self.endless = settings.minutes == 0 or self.proving_ground is not None
         self.unlimited_lives = settings.unlimited_lives or self.proving_ground is not None
@@ -184,6 +185,7 @@ class Arena:
         self.practice_gunners = {}
         self.practice_next_spawn = 0.
         self.respawn_at = {}
+        self._capacity_respawn_cursor = {}
         self.hangar_players = set()
         self.training_swappers = set()
         self.practice_timer_at = 0.
@@ -315,7 +317,10 @@ class Arena:
             bot_roster = tuple(bot_roster or ())
             if not accounts or any(not isinstance(row, BotVehicle) for row in bot_roster):
                 raise ValueError('Invalid room bot roster')
-            validate_teams(teams + [row.team for row in bot_roster], practice=self.proving_ground is not None)
+            from .map_catalog import room_team_capacity
+            validate_teams(teams + [row.team for row in bot_roster],
+                           practice=self.proving_ground is not None,
+                           capacity=room_team_capacity(self.map_id, room_mode, settings))
         if len({a['id'] for a in accounts}) != len(accounts):
             raise ValueError('Arena participants must have distinct accounts')
         scenes = dict(vehicle_scenes or {})
@@ -2794,7 +2799,7 @@ class Arena:
             self.motion_frame = None
 
     def reenter_training(self, account_id, scene, shells, consumables, *, camouflage=0):
-        from .map_catalog import map_team_capacity
+        from .map_catalog import room_team_capacity
 
         previous = self.vehicle_for(account_id)
         entity = previous.entity_id
@@ -2812,7 +2817,7 @@ class Arena:
             consumables += (None,) * max(0, 3-len(consumables)) + (GRAVITY_JUMP_SPEC,)
         spawns = ((*training_spawn(self.map_spec, previous.team, slot),
                    training_yaw(self.map_spec, previous.team, slot))
-                  for slot in range(map_team_capacity(self.map_id)))
+                  for slot in range(room_team_capacity(self.map_id, self.room_mode, self.room_settings)))
         enemy_positions = [vehicle.pose.position for vehicle in self.vehicles.values()
                            if vehicle.team != previous.team and vehicle.alive
                            and self._player_attached(vehicle)]
@@ -2859,7 +2864,10 @@ class Arena:
     def _advance_respawns(self, now):
         if not self.respawn_at or self.world is None:
             return
-        from .map_catalog import map_team_capacity
+        from .map_catalog import room_team_capacity
+        capacity = room_team_capacity(self.map_id, self.room_mode, self.room_settings)
+        stagger = self.large_teams
+        cursor = self._capacity_respawn_cursor
         for entity, due in tuple(self.respawn_at.items()):
             if now < due:
                 if self.uprising is not None and self.vehicles[entity].account_id is not None:
@@ -2872,8 +2880,12 @@ class Arena:
             previous = self.vehicles[entity]
             if not self._player_attached(previous):
                 self.respawn_at.pop(entity)
+                cursor.pop(entity, None)
                 continue
-            for slot in range(map_team_capacity(self.map_id)):
+            retry_due, slot = cursor.pop(entity, (None, 0))
+            first_slot = slot if retry_due == due else 0
+            slots = range(first_slot, first_slot + 1) if stagger else range(capacity)
+            for slot in slots:
                 if self.proving_ground and entity in self.proving_ground.arena_deaths:
                     x, z, yaw = proving_ground_rules.pvp_spawn(previous.team, slot)
                 else:
@@ -2901,7 +2913,16 @@ class Arena:
                               pitch_rate=vehicle.gun.pitch_rate, respawn=True)
                     break
             else:
-                self.respawn_at[entity] = now+.5
+                if stagger and first_slot + 1 < capacity:
+                    # A crowded spawn may require a full sweep. Requeue this
+                    # entity behind other due respawns with the next slot.
+                    self.respawn_at.pop(entity)
+                    self.respawn_at[entity] = now
+                    cursor[entity] = (now, first_slot + 1)
+                else:
+                    self.respawn_at[entity] = now+.5
+            if stagger:
+                return
 
     @staticmethod
     def _add_uprising_respawn_cloak(vehicle, now):

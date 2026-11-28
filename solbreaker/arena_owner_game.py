@@ -267,12 +267,13 @@ class GameArenaHandler:
             raise ValueError('unsupported arena operation')
         events = self.arena.drain_events()
         outgoing = []
-        for account_id in active:
-            if account_id in self._reconnecting:
-                continue
-            body = event_messages(self.arena, self.arena.players[account_id], events)
-            if body:
-                outgoing.append(AddressedPayload(account_id, body))
+        if events:
+            for account_id in active:
+                if account_id in self._reconnecting:
+                    continue
+                body = event_messages(self.arena, self.arena.players[account_id], events)
+                if body:
+                    outgoing.append(AddressedPayload(account_id, body))
         if command.op in ('leave', 'disconnect'):
             if command.op == 'leave':
                 outgoing.append(AddressedPayload(command.account_id, b'\x04\0'))

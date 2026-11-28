@@ -59,6 +59,30 @@ class TrainingRoomBotsTests(unittest.TestCase):
         self.endpoint.start_shared.assert_called_once_with([1], [1], map_id=6, bot_counts=(6, 2),
                                                          room_settings=RoomBattleSettings())
 
+    def test_large_teams_opt_in_is_scoped_to_rudniki_room(self):
+        room = self.create(b'[room-form] [teams 15] [bots 14:14] [notes] Large room')
+        self.assertTrue(room.battle_settings.large_teams)
+        self.assertEqual(room.team_capacity, 15)
+        self.assertEqual(room.active_bot_counts, (14, 14))
+        self.assertEqual(self.native.settings(room)['limits'][2]['maxCount'], (15, 15, 15))
+        self.assertIn('[teams 15]', self.native.settings(room)['comment'])
+        with self.assertRaisesRegex(ValueError, 'Encounter on Rudniki'):
+            self.endpoint.rooms.set_map(1, 7)
+        self.endpoint.rooms.join(2, room.id, 2)
+        self.endpoint.rooms.ready(1, True)
+        self.endpoint.rooms.ready(2, True)
+        self.endpoint.rooms.start(1)
+        self.endpoint.start_shared.assert_called_once_with(
+            [1, 2], [1, 2], map_id=6, bot_counts=(14, 14),
+            room_settings=RoomBattleSettings(large_teams=True))
+
+    def test_editing_large_room_back_to_standard_clamps_its_bot_counts(self):
+        room = self.create(b'[teams 15] [bots 14:14] Large room')
+        self.edit(b'[room-form] [bots 7:7] [notes] Standard room', map_selector=6)
+        self.assertEqual(room.team_capacity, 7)
+        self.assertEqual(room.active_bot_counts, (6, 7))
+        self.assertNotIn('[teams 15]', self.native.settings(room)['comment'])
+
     def test_room_search_accepts_online_friend_ids(self):
         room = self.create(b'Lobby')
         self.native.reply = Mock()

@@ -37,7 +37,8 @@ class ArenaOwnerTransport:
     """Event-loop-confined bridge for a single registered arena route."""
 
     def __init__(self, endpoint, route: ArenaRoute, *, limit=64, on_result=None,
-                 on_delivered=None, on_fault=None, simulation_debt=None):
+                 on_delivered=None, on_fault=None, simulation_debt=None,
+                 large_teams=False):
         if type(limit) is not int or not 1 <= limit <= 1024:
             raise ValueError('invalid transport queue limit')
         self.endpoint = endpoint
@@ -50,6 +51,8 @@ class ArenaOwnerTransport:
         self._queue = _TransportQueue(maxsize=limit)
         self._batching = (os.environ.get('SOLBREAKER_OWNER_INPUT_BATCH', '1') == '1'
                           and getattr(route, 'supports_input_batch', False))
+        self._input_batch_limit = INPUT_BATCH_LIMIT if large_teams else 16
+        self._keep_tick_phase = large_teams
         self._batch_reserved = 0
         self._fault = None
         # Result is retained on settlement/delivery failure; it must never be
@@ -191,7 +194,7 @@ class ArenaOwnerTransport:
         if not self._batching or not self._eligible_for_batch(first):
             return (first,)
         batch = [first]
-        while (len(batch) < INPUT_BATCH_LIMIT and not self._queue.empty()
+        while (len(batch) < self._input_batch_limit and not self._queue.empty()
                and self._eligible_for_batch(self._queue.oldest())):
             batch.append(self._queue.get_nowait())
         return batch
@@ -337,7 +340,11 @@ class ArenaOwnerTransport:
                                     scheduled_at=next_at, started_at=now, finished_at=finished,
                                     late_ns=max(0., now-next_at)*1e9,
                                     cycle_ns=(finished-now)*1e9, debt_seconds=debt, budget_seconds=budget)
-                next_at = max(next_at+interval, finished)
+                next_at += interval
+                if self._keep_tick_phase and next_at < finished:
+                    next_at += math.floor((finished - next_at) / interval) * interval
+                elif not self._keep_tick_phase:
+                    next_at = max(next_at, finished)
         self._ticker = asyncio.create_task(run())
 
     def _begin_close(self, reason, *, fault=True):

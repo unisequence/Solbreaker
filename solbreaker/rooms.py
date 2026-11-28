@@ -6,7 +6,7 @@ import secrets
 import time
 from .battle_setup import RoomLineup
 from .roster import TEAMS, TEAM_SIZE, ROOM_CAPACITY, WAITING
-from .map_catalog import map_team_capacity
+from .map_catalog import room_team_capacity
 from .training_config import BATTLE_MODES, PROVING_GROUND_ID, RoomBattleSettings
 
 
@@ -47,8 +47,12 @@ class Room:
             self.lineup = RoomLineup()
 
     @property
+    def team_capacity(self):
+        return room_team_capacity(self.map_id, self.battle_mode, self.battle_settings)
+
+    @property
     def active_bot_counts(self):
-        capacity = map_team_capacity(self.map_id)
+        capacity = self.team_capacity
         free = tuple(capacity-sum(m.team == team for m in self.members.values()) for team in TEAMS)
         if self.lineup.custom:
             return tuple(len(self.lineup.team_slots(team, available))
@@ -56,10 +60,10 @@ class Room:
         return tuple(max(0, min(count, available)) for count, available in zip(self.bot_counts, free))
 
 
-def room_bot_counts(values):
+def room_bot_counts(values, capacity=TEAM_SIZE):
     if (not isinstance(values, (tuple, list)) or len(values) != len(TEAMS)
-            or any(type(count) is not int or not 0 <= count <= TEAM_SIZE for count in values)):
-        raise ValueError(f'Choose 0 to {TEAM_SIZE} bots for each team')
+            or any(type(count) is not int or not 0 <= count <= capacity for count in values)):
+        raise ValueError(f'Choose 0 to {capacity} bots for each team')
     return tuple(values)
 
 
@@ -125,8 +129,8 @@ class RoomManager:
         if map_id is None:
             map_id=self.endpoint.map_spec.map_id
         self.validate_map_id(map_id)
-        self.validate_settings(map_id, battle_mode)
-        bot_counts=room_bot_counts(bot_counts)
+        capacity = self.validate_settings(map_id, battle_mode, battle_settings)
+        bot_counts=room_bot_counts(bot_counts, max(TEAM_SIZE, capacity))
         while True:
             ident=secrets.token_hex(3).upper()
             # Native prebattleID 0 means no room.
@@ -147,9 +151,9 @@ class RoomManager:
             raise ValueError('Already in another room')
         room=self.rooms.get(ident)
         if room is None:raise ValueError('Room does not exist')
-        if room.arena_id or len(room.members)>=ROOM_CAPACITY:raise ValueError('Room is busy or full')
+        if room.arena_id or len(room.members)>=max(ROOM_CAPACITY, 2*room.team_capacity):raise ValueError('Room is busy or full')
         counts = {t:sum(m.team==t for m in room.members.values()) for t in TEAMS}
-        capacity = map_team_capacity(room.map_id)
+        capacity = room.team_capacity
         if team is None:
             available = [t for t in TEAMS if counts[t]<capacity]
             team = min(available,key=counts.get) if available else WAITING
@@ -163,7 +167,7 @@ class RoomManager:
 
     def choose_team(self,account,team):
         team=self.team(team);room=self.editable(account)
-        if sum(m.account_id!=account and m.team==team for m in room.members.values())>=map_team_capacity(room.map_id):
+        if sum(m.account_id!=account and m.team==team for m in room.members.values())>=room.team_capacity:
             raise ValueError('Team is full')
         if room.members[account].team!=team:
             room.members[account].team=team;self.reset_ready(room)
@@ -190,28 +194,29 @@ class RoomManager:
     def set_map(self,account,map_id):
         room=self.owned(account)
         map_id=self.validate_map_id(map_id)
-        self.validate_settings(map_id, room.battle_mode, room.members.values())
+        self.validate_settings(map_id, room.battle_mode, room.battle_settings, room.members.values())
         if room.map_id!=map_id:
             room.map_id=map_id
             room.apply_map_rules()
             self.reset_ready(room)
         return room
 
-    def validate_settings(self, map_id, battle_mode, members=()):
+    def validate_settings(self, map_id, battle_mode, settings, members=()):
         if battle_mode not in BATTLE_MODES:
             raise ValueError('Choose a supported room battle mode')
-        capacity = map_team_capacity(map_id)
+        capacity = room_team_capacity(map_id, battle_mode, settings)
         if any(sum(member.team == team for member in members) > capacity for team in TEAMS):
             raise ValueError(f'This map supports up to {capacity} participants per team')
         if map_id != PROVING_GROUND_ID and battle_mode == 'supremacy' and not self.endpoint.resolve_map_spec(map_id).strategic_points:
             raise ValueError('This map has no Supremacy capture points')
+        return capacity
 
     def move(self,account,target,roster):
         """Native roster 17 is the waiting queue; it never enters an arena."""
         room=self.owned(account)
         if target not in room.members:raise ValueError('Player is not in this room')
         if type(roster) is not int or roster not in (1,2,17):raise ValueError('Unsupported roster')
-        if roster in TEAMS and sum(m.account_id!=target and m.team==roster for m in room.members.values())>=map_team_capacity(room.map_id):
+        if roster in TEAMS and sum(m.account_id!=target and m.team==roster for m in room.members.values())>=room.team_capacity:
             raise ValueError('Team is full; move a player to the queue first')
         if room.members[target].team!=roster:
             room.members[target].team=roster;self.reset_ready(room)
@@ -232,10 +237,13 @@ class RoomManager:
         room=self.owned(account)
         if map_id is not None:
             map_id=self.validate_map_id(map_id)
+        settings = room.battle_settings if battle_settings is None else battle_settings
+        capacity = self.validate_settings(map_id or room.map_id,
+            room.battle_mode if battle_mode is None else battle_mode, settings, room.members.values())
         if bot_counts is not None:
-            bot_counts=room_bot_counts(bot_counts)
-        self.validate_settings(map_id or room.map_id, room.battle_mode if battle_mode is None else battle_mode,
-                               room.members.values())
+            bot_counts=room_bot_counts(bot_counts, max(TEAM_SIZE, capacity))
+        elif capacity < room.team_capacity:
+            bot_counts=tuple(min(count, capacity) for count in room.bot_counts)
         if map_id is not None:
             room.map_id=map_id
         if bot_counts is not None:
@@ -253,7 +261,7 @@ class RoomManager:
 
     def set_bots(self,account,counts):
         room=self.owned(account)
-        counts=room_bot_counts(counts)
+        counts=room_bot_counts(counts, max(TEAM_SIZE, room.team_capacity))
         if room.map_id == PROVING_GROUND_ID and any(counts):
             raise ValueError('Place targets from the proving ground menu during the session')
         if room.bot_counts!=counts or room.lineup.custom:
@@ -272,7 +280,7 @@ class RoomManager:
         if not members:
             raise ValueError('At least one player must join a team')
         validate_teams(teams + [team for team, count in zip(TEAMS, bot_counts) for _ in range(count)],
-                       practice=room.map_id == PROVING_GROUND_ID)
+                       practice=room.map_id == PROVING_GROUND_ID, capacity=room.team_capacity)
         if not all(m.ready for m in members):
             raise ValueError('Every participant on both teams must be ready')
         # Endpoint validates both sessions before creating or attaching anything.
@@ -308,7 +316,7 @@ class RoomManager:
         if room is None:return None
         return {'id':room.id,'owner':room.owner,'arena_id':room.arena_id,
                 'map_id':room.map_id,'map_key':self.endpoint.map_catalog[room.map_id],
-                'battle_mode':room.battle_mode,
+                'battle_mode':room.battle_mode,'large_teams':room.battle_settings.large_teams,
                 'unlimited_lives':room.battle_settings.unlimited_lives,
                 'unlimited_ammo':room.battle_settings.unlimited_ammo,
                 'battle_minutes':room.battle_settings.minutes,
@@ -338,7 +346,7 @@ class RoomManager:
             if path=='/rooms/create':room=self.create(account,data.get('team',1),data.get('map_id'),
                 bot_counts=data.get('bot_counts',(0,0)), battle_mode=data.get('battle_mode','encounter'),
                 battle_settings=RoomBattleSettings(data.get('unlimited_lives',False),
-                    data.get('battle_minutes'),data.get('unlimited_ammo',False)))
+                    data.get('battle_minutes'),data.get('unlimited_ammo',False),data.get('large_teams',False)))
             elif path=='/rooms/join':room=self.join(account,data.get('id'),data.get('team'))
             elif path=='/rooms/map':room=self.set_map(account,data.get('map_id'))
             elif path=='/rooms/bots':room=self.set_bots(account,data.get('bot_counts'))

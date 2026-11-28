@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.4.0-rc.1
+## 0.4.0
 
 - Each arena runs on one Bullet world. The Rust track controller uses the
   same terrain and contacts as airborne tanks. Improved traction, landings
@@ -12,6 +12,28 @@
 - Control settings persist across restarts. Spend Free XP to research and
   install a gun and its required turret together.
 - Fixed discovery on Linux adapters named `radminvpn0` and similar.
+
+- Training rooms on Rudniki can use teams of up to 15 in Encounter mode.
+  The room owner selects 15×15 in the room settings. The battle HUD was
+  checked at 1920×1080. At 1280×800, the right roster can overlap the shell panel.
+- Other players now see the new tank after a training-room vehicle swap.
+
+### Русский
+
+- На каждой арене танки используют общий мир Bullet. Обновлены сцепление,
+  приземление и автоматический переворот.
+- Исправлены засвет в «Большом боссе» и обратная связь при попадании по
+  незасвеченному танку. Кусты и деревья дают маскировку. Параметры сведения
+  и разброса синхронизированы с сервером.
+- Когда вода покрывает корпус, начинается десятисекундный отсчёт утопления.
+  Перед автоматическим переворотом появляется предупреждение.
+- Настройки управления сохраняются после перезапуска. Пушку и необходимую
+  башню можно исследовать и установить вместе за свободный опыт.
+- Исправлен поиск серверов через интерфейсы вроде `radminvpn0` на Linux.
+- Во встречном бою на «Рудниках» владелец комнаты может выбрать 15×15.
+  Боевой HUD проверен на 1920×1080. На 1280×800 правый список может
+  перекрывать панель снарядов.
+- После смены танка в тренировочном бою остальные игроки видят новую машину.
 
 ## 0.3.2
 

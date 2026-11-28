@@ -3,18 +3,20 @@ import math
 
 TEAMS = (1, 2)
 TEAM_SIZE = 7
+LARGE_TEAM_SIZE = 15
+LARGE_ROOM_MAP_ID = 6
 ROOM_CAPACITY = 20
 WAITING = 17
 
 
-def validate_teams(teams, *, practice=False):
+def validate_teams(teams, *, practice=False, capacity=TEAM_SIZE):
     minimum = 0 if practice else 1
-    if (not teams or len(teams) > 2*TEAM_SIZE
+    if (not teams or len(teams) > 2*capacity
             or any(type(t) is not int or t not in TEAMS for t in teams)
-            or any(not minimum <= teams.count(t) <= TEAM_SIZE for t in TEAMS)):
+            or any(not minimum <= teams.count(t) <= capacity for t in TEAMS)):
         if practice:
             raise ValueError('The proving ground requires a player and allows up to 7 per team')
-        raise ValueError('A shared battle requires 1 to 7 participants on each team')
+        raise ValueError(f'A shared battle requires 1 to {capacity} participants on each team')
 
 
 def mines_spawn(team, slot):

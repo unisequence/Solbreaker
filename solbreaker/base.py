@@ -38,7 +38,7 @@ from .terrain import MapTerrain
 from .map_catalog import WEATHER_MAPS, load_map_spec, training_map_catalog
 from .dev_map import dev_map_specs_for_lab
 from .training_config import PROVING_GROUND_ID, PROVING_GROUND_KEY, PROVING_GROUND_MODE, TrainingConfig
-from .motion import UPDATE_HZ, SIMULATION_INTERVAL, game_tick, tick_sync
+from .motion import UPDATE_HZ, SIMULATION_INTERVAL, game_tick, motion_packet_bodies, tick_sync
 
 
 class BattleRefused(ValueError):
@@ -1420,6 +1420,10 @@ class BaseEndpoint(asyncio.DatagramProtocol):
             reliable = False
         if len(body) > 900 * 128:
             raise ValueError("Outgoing bundle exceeds size limit")
+        if not reliable and len(body) > 900 and body[:1] == b"\x0d":
+            for index, packet in enumerate(motion_packet_bodies(body)):
+                self.send_packet(addr, client, packet, acks if index == 0 else (), reliable=False)
+            return
         chunks = _account_chunks(body)
         if chunks is None:
             chunks = [body[n:n+900] for n in range(0, len(body), 900)] or [b""]
@@ -1650,17 +1654,20 @@ class BaseEndpoint(asyncio.DatagramProtocol):
         self.require_arena_capacity()
         from .roster import validate_teams
         from .rooms import room_bot_counts
-        from .map_catalog import map_team_capacity
+        from .map_catalog import room_map_spec, room_team_capacity
         from .training_config import BATTLE_MODES
         if room_mode not in BATTLE_MODES:
             raise ValueError('Choose a supported room battle mode')
-        bot_counts = room_bot_counts(bot_counts)
         spec = self.selected_map(map_id)
         practice = spec.key == PROVING_GROUND_KEY
         if practice:
             room_mode = 'encounter'
             bot_counts = (0, 0)
-        validate_teams([*teams, *([1]*bot_counts[0]), *([2]*bot_counts[1])], practice=practice)
+        capacity = room_team_capacity(spec.map_id, room_mode, room_settings)
+        bot_counts = room_bot_counts(bot_counts, capacity)
+        validate_teams([*teams, *([1]*bot_counts[0]), *([2]*bot_counts[1])],
+                       practice=practice, capacity=capacity)
+        spec = room_map_spec(spec, capacity)
         if not account_ids or len(account_ids)!=len(teams) or len(set(account_ids))!=len(account_ids):
             raise ValueError('Every battle participant must have a distinct account and a team')
         selected = []
@@ -1675,7 +1682,6 @@ class BaseEndpoint(asyncio.DatagramProtocol):
                 raise ValueError('Participant channel is stalled')
             selected.append((addr,client))
         accounts = [dict(self.server.accounts.get(a).identity(), team=t) for a,t in zip(account_ids,teams)]
-        capacity = map_team_capacity(spec.map_id)
         if any(teams.count(team) + bots > capacity for team, bots in enumerate(bot_counts, 1)):
             raise ValueError(f'This map supports up to {capacity} participants per team')
         if room_mode == 'supremacy' and not getattr(spec, 'strategic_points', ()):
@@ -1732,7 +1738,7 @@ class BaseEndpoint(asyncio.DatagramProtocol):
                                                 capacity=capacity, seed=identity)
             else:
                 roster = select_room_bot_roster(self.game, definition, teams=teams, bot_counts=bot_counts,
-                                               seed=identity, human_definitions=human_definitions)
+                                               seed=identity, human_definitions=human_definitions, capacity=capacity)
             options.update(result_id=identity, bot_roster=roster, bot_game=self.game,
                            bot_scene_settings=self.bot_scene_settings(roster, scenes[account_ids[0]]))
         if owners:

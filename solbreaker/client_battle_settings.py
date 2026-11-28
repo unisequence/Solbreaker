@@ -193,9 +193,11 @@ RULES_CAPTION = ('when localRules == 6 -> localize("Local/BattleSettings/Uprisin
 ROOM_MODE_VALUE = '(when roomModeOverride >= 0 -> roomModeOverride, (when roomInitialMode >= 0 -> roomInitialMode, 1))'
 ROOM_LIVES_VALUE = '(when roomLivesOverride >= 0 -> roomLivesOverride, roomInitialLives)'
 ROOM_AMMO_VALUE = '(when roomAmmoOverride >= 0 -> roomAmmoOverride, roomInitialAmmo)'
+ROOM_TEAM_VALUE = '(when roomTeamOverride >= 0 -> roomTeamOverride, roomInitialLargeTeams)'
+ROOM_BOT_LIMIT = f'(when {ROOM_TEAM_VALUE} == 1 -> 15, {TEAM_SIZE})'
 ROOM_MINUTES_VALUE = '(when roomMinutesOverride >= -1 -> roomMinutesOverride, roomInitialMinutes)'
 ROOM_BOT_VALUES = {
-    team: f'(when roomBots{team}Override >= 0 -> roomBots{team}Override, roomInitialBots{team})'
+    team: f'min({ROOM_BOT_LIMIT}, (when roomBots{team}Override >= 0 -> roomBots{team}Override, roomInitialBots{team}))'
     for team in (1, 2)
 }
 ROOM_RULES_CAPTION = (RULES_CAPTION.replace('localRules', ROOM_MODE_VALUE)
@@ -233,15 +235,16 @@ def _room_duration_settings(root):
     rows = container['children']
     rows[:] = [row for row in rows if row.get('name') not in
                ('LocalRoomLives', 'LocalRoomAmmo', 'LocalRoomDuration', 'LocalRoomOptions',
-                'LocalRoomBots1', 'LocalRoomBots2', 'LocalSoloBotHeading')]
+                'LocalRoomBots1', 'LocalRoomBots2', 'LocalRoomTeams', 'LocalSoloBotHeading')]
     room_rules, = [row for row in rows if row.get('name') == 'LocalRoomRules']
     components = root['components']
     local_vars = components['UIDataLocalVarsComponent']['data']
     local_vars[:] = [row for row in local_vars if not row[1].startswith('localRoom') and row[1] not in
                      ('roomModeOverride', 'roomLivesOverride', 'roomAmmoOverride', 'roomMinutesOverride',
-                      'roomBots1Override', 'roomBots2Override')]
+                      'roomBots1Override', 'roomBots2Override', 'roomTeamOverride')]
     room_params = (('roomInitialMode', -1), ('roomInitialLives', 0), ('roomInitialMinutes', -1),
-                   ('roomInitialBots1', 0), ('roomInitialBots2', 0), ('roomInitialAmmo', 0))
+                   ('roomInitialBots1', 0), ('roomInitialBots2', 0), ('roomInitialAmmo', 0),
+                   ('roomInitialLargeTeams', 0))
     params = components['UIDataParamsComponent']['params']
     params[:] = [row for row in params if row[1] not in {name for name, _ in room_params}]
     params.extend([['int', name, str(value), str(value)] for name, value in room_params])
@@ -253,6 +256,7 @@ def _room_duration_settings(root):
             local_vars.append(['int', name, '0'])
     local_vars.extend([
         ['int', 'roomModeOverride', '-1'],
+        ['int', 'roomTeamOverride', '-1'],
         ['int', 'roomLivesOverride', '-1'],
         ['int', 'roomAmmoOverride', '-1'],
         ['int', 'roomMinutesOverride', '-2'],
@@ -287,6 +291,10 @@ def _room_duration_settings(root):
         _button('Value', ROOM_TIME_CAPTION, 'LocalRoomTimeDefault', 144),
         _button('More', '"+"', 'LocalRoomTimeMore', 54),
         _button('Endless', '"∞"', 'LocalRoomTimeEndless', 84)], conditional=False)
+    teams = _row('LocalRoomTeams', 'Local/BattleSettings/TeamSize', [
+        _button('Toggle', f'when {ROOM_TEAM_VALUE} == 1 -> "15×15", {label("StandardTeams")}',
+                'LocalRoomToggleTeams', 190)], conditional=False)
+    teams['bindings'] = [['visible', 'not localBotSetup']]
     bots = [
         _row(f'LocalRoomBots{team}', f'Local/BattleSettings/RoomBots{team}', [
             _button('Less', '"-"', f'LocalRoomBots{team}Less', 54),
@@ -318,12 +326,13 @@ def _room_duration_settings(root):
                 'localRoomMinutes == 0 -> "[time endless] ", "[time " + str(localRoomMinutes) + "] ")')
     bots_tag = (f'"[bots " + str({ROOM_BOT_VALUES[1]}) + ":" + str({ROOM_BOT_VALUES[2]})'
                 ' + "] [notes] "')
-    tags = (' + '.join((mode_tag, lives_tag, ammo_tag, time_tag, bots_tag)).replace('localRoomRules', ROOM_MODE_VALUE)
+    teams_tag = f'(when {ROOM_TEAM_VALUE} == 1 -> "[teams 15] ", "")'
+    tags = (' + '.join((mode_tag, lives_tag, ammo_tag, time_tag, teams_tag, bots_tag)).replace('localRoomRules', ROOM_MODE_VALUE)
             .replace('localRoomLives', ROOM_LIVES_VALUE).replace('localRoomMinutes', ROOM_MINUTES_VALUE))
     options = dict(name='LocalRoomOptions', visible=False, input=False, bindings=[['text', tags]])
     options['class'] = 'UITextField'
     index = rows.index(room_rules) + 1
-    rows[index:index] = [lives, *bots, ammo, options]
+    rows[index:index] = [teams, lives, *bots, ammo, options]
     bot_names = ('LocalAllies', 'LocalEnemies', 'LocalDifficulty', 'LocalRules')
     bot_controls = [row for row in rows if row.get('name') in bot_names]
     rows[:] = [row for row in rows if row.get('name') not in bot_names]
@@ -613,10 +622,11 @@ action LocalRoomTimeEndless() { ChangeData(roomMinutesOverride, 0); DirectEvent(
     actions = actions.replace('@ROOM_AMMO@', ROOM_AMMO_VALUE).replace('@ROOM_LIVES@', ROOM_LIVES_VALUE)
     actions = actions.replace('@LAST_MODE@', str(len(MODE_KEYS)-1)).replace('@MODE_COUNT@', str(len(MODE_KEYS)))
     actions = actions.replace('@RULES_BASE@', str(1 << RULES_SHIFT))
+    actions += f'action LocalRoomToggleTeams() {{ ChangeData(roomTeamOverride, 1 - {ROOM_TEAM_VALUE}); }}\n'
     for team, value in ROOM_BOT_VALUES.items():
         actions += f"""
 action LocalRoomBots{team}Less() {{ ChangeData(roomBots{team}Override, max(0, {value} - 1)); }}
-action LocalRoomBots{team}More() {{ ChangeData(roomBots{team}Override, min({TEAM_SIZE}, {value} + 1)); }}
+action LocalRoomBots{team}More() {{ ChangeData(roomBots{team}Override, min({ROOM_BOT_LIMIT}, {value} + 1)); }}
 """
     actions += ''.join(f'action LocalPreviewMode{i}() {{ ChangeData(modePreview, {i}); }}\n'
                        for i in range(len(MODE_KEYS)))
@@ -641,6 +651,7 @@ STRINGS = {
            'Lives': 'Lives per tank', 'Duration': 'Battle duration', 'Minutes': 'min', 'ModeDefault': 'Mode default',
            'SingleLife': 'One life', 'Endless': 'Unlimited', 'NoTimer': 'No limit',
            'UnlimitedAmmo': 'Unlimited ammo', 'AmmoOn': 'On', 'AmmoOff': 'Off',
+           'TeamSize': 'Team size (Rudniki)', 'StandardTeams': 'Standard',
            'RoomBotsCaption': 'Description',
            'RoomBotsHint': 'Optional', 'RoomBots1': 'Team 1 bots', 'RoomBots2': 'Team 2 bots',
            'RoomHeaderBots': 'Bots', 'RoomHeaderTime': 'Time'},
@@ -654,6 +665,7 @@ STRINGS = {
            'Lives': 'Жизни на танк', 'Duration': 'Время боя', 'Minutes': 'мин', 'ModeDefault': 'По режиму',
            'SingleLife': 'Одна жизнь', 'Endless': 'Без ограничений', 'NoTimer': 'Без лимита',
            'UnlimitedAmmo': 'Бесконечные снаряды', 'AmmoOn': 'Вкл.', 'AmmoOff': 'Выкл.',
+           'TeamSize': 'Размер команд (Рудники)', 'StandardTeams': 'Обычный',
            'RoomBotsCaption': 'Описание',
            'RoomBotsHint': 'Необязательно', 'RoomBots1': 'Боты команды 1', 'RoomBots2': 'Боты команды 2',
            'RoomHeaderBots': 'Боты', 'RoomHeaderTime': 'Время'}}
@@ -919,7 +931,7 @@ def patch_room(document):
     }
     header['children'].append(summary)
 
-BATTLE_SETTINGS_UI_VERSION = 60
+BATTLE_SETTINGS_UI_VERSION = 61
 
 
 def upgrade_form(lab, manifest):

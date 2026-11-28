@@ -1998,13 +1998,13 @@ static void room_parameter(void *view, const char *name, int value) {
         : "memory", "cc");
 }
 
-typedef struct { int mode, lives, minutes, bots1, bots2, ammo; } RoomOptions;
+typedef struct { int mode, lives, minutes, bots1, bots2, ammo, large_teams; } RoomOptions;
 
 static const char *room_parse_options(const NativeString *value, RoomOptions *settings) {
     const char *text = setup_read_room_tag(room_text(value), 0);
-    int mode = *text ? 1 : -1, lives = 0, minutes = -1, ammo = 0;
+    int mode = *text ? 1 : -1, lives = 0, minutes = -1, ammo = 0, large_teams = 0;
     while (room_prefix(text, "[mode ") || room_prefix(text, "[lives ") ||
-           room_prefix(text, "[time ") || room_prefix(text, "[ammo ")) {
+           room_prefix(text, "[time ") || room_prefix(text, "[ammo ") || room_prefix(text, "[teams ")) {
         if (room_prefix(text, "[mode ")) {
             if (room_prefix(text + 6, "elimination]")) mode = 0;
             if (room_prefix(text + 6, "supremacy]")) mode = 2;
@@ -2016,6 +2016,8 @@ static const char *room_parse_options(const NativeString *value, RoomOptions *se
             lives = room_prefix(text + 7, "unlimited]");
         } else if (room_prefix(text, "[ammo ")) {
             ammo = room_prefix(text + 6, "unlimited]");
+        } else if (room_prefix(text, "[teams ")) {
+            large_teams = room_prefix(text + 7, "15]");
         } else {
             const char *digits = text + 6;
             minutes = room_prefix(digits, "default]") ? -1 : 0;
@@ -2026,12 +2028,21 @@ static const char *room_parse_options(const NativeString *value, RoomOptions *se
         if (*text) ++text;
         while (*text == ' ') ++text;
     }
-    *settings = (RoomOptions){mode, lives, minutes, 0, 0, ammo};
-    if (room_prefix(text, "[bots ") && text[6] >= '0' && text[6] <= '7' &&
-        text[7] == ':' && text[8] >= '0' && text[8] <= '7' && text[9] == ']') {
-        settings->bots1 = text[6] - '0';
-        settings->bots2 = text[8] - '0';
-        text += 10;
+    *settings = (RoomOptions){mode, lives, minutes, 0, 0, ammo, large_teams};
+    if (room_prefix(text, "[bots ")) {
+        const char *digits = text + 6;
+        int counts[2] = {0, 0};
+        for (unsigned team = 0; team < 2; ++team) {
+            if (*digits < '0' || *digits > '9') return text;
+            counts[team] = *digits++ - '0';
+            if (*digits >= '0' && *digits <= '9')
+                counts[team] = 10 * counts[team] + *digits++ - '0';
+            if (counts[team] > 15 || *digits != (team ? ']' : ':')) return text;
+            ++digits;
+        }
+        settings->bots1 = counts[0];
+        settings->bots2 = counts[1];
+        text = digits;
         while (*text == ' ') ++text;
     }
     if (room_prefix(text, "[notes]")) {
@@ -2051,6 +2062,7 @@ void THISCALL room_load_description(void *view, const NativeString *value) {
     room_parameter(view, "roomInitialMode", options.mode);
     room_parameter(view, "roomInitialLives", options.lives);
     room_parameter(view, "roomInitialAmmo", options.ammo);
+    room_parameter(view, "roomInitialLargeTeams", options.large_teams);
     room_parameter(view, "roomInitialMinutes", options.minutes);
     room_parameter(view, "roomInitialBots1", options.bots1);
     room_parameter(view, "roomInitialBots2", options.bots2);
