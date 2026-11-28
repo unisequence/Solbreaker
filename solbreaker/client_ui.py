@@ -67,7 +67,7 @@ UI_RESOURCES = (BASE_HEADER, BASE_LOBBY, BASE_LOBBY_ACTIONS, STATS_ITEM, INVENTO
                 client_battle_settings.BATTLE_MENU, *client_recon.MARKER_OPACITY)
 STRINGS_EN = "Strings/en.yaml.dvpl"
 STRINGS_RU = "Strings/ru.yaml.dvpl"
-SANDBOX_BINDINGS_VERSION = 44
+SANDBOX_BINDINGS_VERSION = 45
 COMMUNITY_STRINGS = {
     STRINGS_EN: {'#community:Viber/OpenPage/Notification': 'Open Solbreaker on GitHub?'},
     STRINGS_RU: {'#community:Viber/OpenPage/Notification': 'Открыть Solbreaker на GitHub?'},
@@ -879,6 +879,9 @@ def install_ui_guards(lab):
         patches[GRAVITY_ABILITIES] = patched_resource(gravity_source, GRAVITY_ABILITIES)
     patches.update(client_branding.patches())
     patches.update(client_battle_settings.extra_resources())
+    training_screen = source / client_battle_settings.TRAINING_SCREEN
+    if training_screen.is_file():
+        patches[client_battle_settings.SOLO_SCREEN] = client_battle_settings.standalone_screen(training_screen)
     # Custom-vehicle game views can expose client/Data/3d as their source.
     # Branding must always rebuild from the immutable pinned installation,
     # otherwise the second launch consumes its own already-patched scenes.

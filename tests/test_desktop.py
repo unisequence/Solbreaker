@@ -225,6 +225,23 @@ class DesktopTests(unittest.TestCase):
                 self.assertEqual(saved.play_mode, mode)
                 self.assertEqual(saved.connection, str(remote))
 
+    def test_home_server_picker_switches_mode_and_opens_the_matching_setup(self):
+        from solbreaker.management import Settings
+
+        local = self.window.server_choice.findData('local')
+        remote = self.window.server_choice.findData('remote')
+        self.assertGreaterEqual(local, 0)
+        self.assertGreaterEqual(remote, 0)
+        self.assertIn('Solbreaker', self.window.server_choice.itemText(local))
+        self.window.server_choice.setCurrentIndex(remote)
+        self.app.processEvents()
+        self.assertTrue(self.window.remote.isChecked())
+        self.assertEqual(Settings.load(self.config).play_mode, 'remote')
+        self.window.server_setup_button.click()
+        self.app.processEvents()
+        self.assertFalse(self.window.wizard.local)
+        self.window.wizard.reject()
+
     def test_replay_actions_use_the_prepared_client_and_native_folder_opener(self):
         from unittest.mock import patch
 
@@ -301,7 +318,7 @@ class DesktopTests(unittest.TestCase):
             dock = self.window.play_button.parentWidget()
             self.assertFalse(home.findChildren(QScrollArea))
             self.assertEqual([item for item in home.findChildren(QPushButton) if item.isVisible()],
-                             [self.window.play_button])
+                             [self.window.server_setup_button, self.window.play_button])
             self.assertEqual(banner.geometry().left(), dock.geometry().left())
             self.assertEqual(banner.geometry().right(), dock.geometry().right())
             self.assertTrue(home.rect().contains(dock.geometry()),
@@ -346,7 +363,7 @@ class DesktopTests(unittest.TestCase):
             with self.subTest(width=width, height=height):
                 self.window.resize(width, height)
                 self.app.processEvents()
-                self.assertLess(banner.geometry().bottom(), self.window.own.geometry().top())
+                self.assertLess(banner.geometry().bottom(), self.window.server_choice.geometry().top())
                 self.assertTrue(home.rect().contains(self.window.play_button.parentWidget().geometry()))
                 self.assertEqual(banner.version.isVisible(), height == 700)
 

@@ -4,10 +4,12 @@ import struct
 
 from . import big_boss, client_battle_setup, client_practice_picker, dvpl
 from .battle_settings_wire import PREFIX, RULES_SHIFT
-from .roster import TEAM_SIZE
+from .roster import LARGE_TEAM_SIZE, TEAM_SIZE
 from .training_config import MAX_ROOM_MINUTES
 
 FORM = 'UI/Screens/Lobby/Training/CreateRoom.yaml.dvpl'
+TRAINING_SCREEN = 'UI/Screens/Lobby/Training/Training.yaml.dvpl'
+SOLO_SCREEN = 'UI/Screens/Lobby/Training/SolbreakerBattleSettings.yaml.dvpl'
 ROOM = 'UI/Screens/Lobby/Training/Room.yaml.dvpl'
 ACTIONS = 'UI/Screens/Lobby/Training/LocalBattleSettings.actions.dvpl'
 BATTLE_MENU = 'UI/Screens/Battle/GameMenuDialog.yaml.dvpl'
@@ -111,6 +113,8 @@ NAVIGATION_AFTER = bytes.fromhex(
     "cce8526cc4fe89f9e82b030c035f5b5e89ec5dc3"
 )
 NAVIGATION_RELOCATIONS = ((0x43A4C68, 0x3A56), (0x43A4C6A, 0x3A66), (0x43A4C6C, 0x3A8F))
+STANDALONE_NAVIGATION = _relative_jump(NAVIGATION_VA, 0x4b1e00e).ljust(
+    len(NAVIGATION_BEFORE), b'\x90')
 
 
 def patch_navigation(data):
@@ -182,6 +186,23 @@ def _row(name, caption, buttons, *, conditional=True):
     return row
 
 
+def _counter_row(name, caption, value, less_event, more_event, *, conditional=True):
+    """Use one visual control for bot counts in solo and room battles."""
+    return _row(name, caption, [
+        _button('Less', '"-"', less_event),
+        _button('Value', f'str({value})', 'LocalNoop', 176),
+        _button('More', '"+"', more_event),
+    ], conditional=conditional)
+
+
+def _difficulty_row(name, value, event, *, conditional=True):
+    return _row(name, 'Local/BattleSettings/Difficulty', [
+        _button('Choice', f'when {value} == 0 -> localize("Local/BattleSettings/Easy"), '
+            f'{value} == 1 -> localize("Local/BattleSettings/Normal"), '
+            'localize("Local/BattleSettings/Hard")', event, 360)
+    ], conditional=conditional)
+
+
 RULES_CAPTION = ('when localRules == 6 -> localize("Local/BattleSettings/Uprising"), '
                  'localRules == 5 -> localize("Local/BattleSettings/MadGames"), '
                  'localRules == 4 -> localize("Local/BattleSettings/BigBoss"), '
@@ -194,7 +215,9 @@ ROOM_MODE_VALUE = '(when roomModeOverride >= 0 -> roomModeOverride, (when roomIn
 ROOM_LIVES_VALUE = '(when roomLivesOverride >= 0 -> roomLivesOverride, roomInitialLives)'
 ROOM_AMMO_VALUE = '(when roomAmmoOverride >= 0 -> roomAmmoOverride, roomInitialAmmo)'
 ROOM_TEAM_VALUE = '(when roomTeamOverride >= 0 -> roomTeamOverride, roomInitialLargeTeams)'
-ROOM_BOT_LIMIT = f'(when {ROOM_TEAM_VALUE} == 1 -> 15, {TEAM_SIZE})'
+TEAM_VALUE = f'(when localBotSetup -> localLargeTeams, {ROOM_TEAM_VALUE})'
+ROOM_DIFFICULTY_VALUE = '(when roomDifficultyOverride >= 0 -> roomDifficultyOverride, roomInitialDifficulty)'
+ROOM_BOT_LIMIT = f'(when {ROOM_TEAM_VALUE} == 1 -> 29, {TEAM_SIZE})'
 ROOM_MINUTES_VALUE = '(when roomMinutesOverride >= -1 -> roomMinutesOverride, roomInitialMinutes)'
 ROOM_BOT_VALUES = {
     team: f'min({ROOM_BOT_LIMIT}, (when roomBots{team}Override >= 0 -> roomBots{team}Override, roomInitialBots{team}))'
@@ -235,16 +258,20 @@ def _room_duration_settings(root):
     rows = container['children']
     rows[:] = [row for row in rows if row.get('name') not in
                ('LocalRoomLives', 'LocalRoomAmmo', 'LocalRoomDuration', 'LocalRoomOptions',
-                'LocalRoomBots1', 'LocalRoomBots2', 'LocalRoomTeams', 'LocalSoloBotHeading')]
+                'LocalRoomBots1', 'LocalRoomBots2', 'LocalRoomTeams', 'LocalRoomDifficulty',
+                'LocalSoloBotHeading')]
     room_rules, = [row for row in rows if row.get('name') == 'LocalRoomRules']
     components = root['components']
     local_vars = components['UIDataLocalVarsComponent']['data']
     local_vars[:] = [row for row in local_vars if not row[1].startswith('localRoom') and row[1] not in
                      ('roomModeOverride', 'roomLivesOverride', 'roomAmmoOverride', 'roomMinutesOverride',
-                      'roomBots1Override', 'roomBots2Override', 'roomTeamOverride')]
+                      'roomBots1Override', 'roomBots2Override', 'roomTeamOverride',
+                      'roomDifficultyOverride')]
     room_params = (('roomInitialMode', -1), ('roomInitialLives', 0), ('roomInitialMinutes', -1),
-                   ('roomInitialBots1', 0), ('roomInitialBots2', 0), ('roomInitialAmmo', 0),
-                   ('roomInitialLargeTeams', 0))
+                   # A newly created training room starts from the same bot
+                   # roster shown by the regular bot-battle form.
+                   ('roomInitialBots1', 6), ('roomInitialBots2', 7), ('roomInitialAmmo', 0),
+                   ('roomInitialLargeTeams', 0), ('roomInitialDifficulty', 1))
     params = components['UIDataParamsComponent']['params']
     params[:] = [row for row in params if row[1] not in {name for name, _ in room_params}]
     params.extend([['int', name, str(value), str(value)] for name, value in room_params])
@@ -254,17 +281,25 @@ def _room_duration_settings(root):
     for name in ('localFlags', 'localValue'):
         if not any(row[1] == name for row in local_vars):
             local_vars.append(['int', name, '0'])
+    # Upgrades start from an existing form, not patch_form(). Declare the
+    # new solo state there too or the action script cannot resolve it.
+    if not any(row[1] == 'localLargeTeams' for row in local_vars):
+        local_vars.append(['int', 'localLargeTeams', '0'])
     local_vars.extend([
         ['int', 'roomModeOverride', '-1'],
         ['int', 'roomTeamOverride', '-1'],
         ['int', 'roomLivesOverride', '-1'],
         ['int', 'roomAmmoOverride', '-1'],
+        ['int', 'roomDifficultyOverride', '-1'],
         ['int', 'roomMinutesOverride', '-2'],
         ['int', 'roomBots1Override', '-1'], ['int', 'roomBots2Override', '-1'],
     ])
     footer, = [node for node in _walk(root) if node.get('name') == 'CreateRoomButton']
     caption, = [node for node in footer['children'] if node.get('path') == 'Caption']
     caption['bindings'] = [['UITextComponent.text', ROOM_SAVE_CAPTION]]
+    bindings = footer.setdefault('bindings', [])
+    bindings[:] = [binding for binding in bindings if binding[0] != 'Sound.touchUpInside']
+    bindings.append(['Sound.touchUpInside', 'when localBotSetup -> "", "GUI/buttons/open"'])
     description, = [row for row in rows if row.get('name') == 'Description']
     for node in description['children']:
         if node.get('path') == DESCRIPTION_FIELD:
@@ -292,18 +327,17 @@ def _room_duration_settings(root):
         _button('More', '"+"', 'LocalRoomTimeMore', 54),
         _button('Endless', '"∞"', 'LocalRoomTimeEndless', 84)], conditional=False)
     teams = _row('LocalRoomTeams', 'Local/BattleSettings/TeamSize', [
-        _button('Toggle', f'when {ROOM_TEAM_VALUE} == 1 -> "15×15", {label("StandardTeams")}',
+        _button('Toggle', f'when {TEAM_VALUE} == 1 -> {label("ThirtyTanks")}, {label("StandardTeams")}',
                 'LocalRoomToggleTeams', 190)], conditional=False)
-    teams['bindings'] = [['visible', 'not localBotSetup']]
-    bots = [
-        _row(f'LocalRoomBots{team}', f'Local/BattleSettings/RoomBots{team}', [
-            _button('Less', '"-"', f'LocalRoomBots{team}Less', 54),
-            _button('Value', f'str({value})', 'LocalNoop', 236),
-            _button('More', '"+"', f'LocalRoomBots{team}More', 54)], conditional=False)
-        for team, value in ROOM_BOT_VALUES.items()
-    ]
+    bots = [_counter_row(f'LocalRoomBots{team}',
+                         f'Local/BattleSettings/{"Allies" if team == 1 else "Enemies"}', value,
+                         f'LocalRoomBots{team}Less', f'LocalRoomBots{team}More', conditional=False)
+            for team, value in ROOM_BOT_VALUES.items()]
     for row in bots:
         row['bindings'] = [['visible', 'not localBotSetup']]
+    difficulty = _difficulty_row('LocalRoomDifficulty', ROOM_DIFFICULTY_VALUE,
+                                 'LocalRoomDifficultyNext', conditional=False)
+    difficulty['bindings'] = [['visible', 'not localBotSetup']]
     duration_buttons = duration['children'][1]['children'][0]['children']
     duration_buttons[-1]['bindings'] = [['classes',
         f'when {ROOM_MINUTES_VALUE} == 0 -> "button button-color-orange", "button button-color-gray"']]
@@ -327,15 +361,23 @@ def _room_duration_settings(root):
     bots_tag = (f'"[bots " + str({ROOM_BOT_VALUES[1]}) + ":" + str({ROOM_BOT_VALUES[2]})'
                 ' + "] [notes] "')
     teams_tag = f'(when {ROOM_TEAM_VALUE} == 1 -> "[teams 15] ", "")'
-    tags = (' + '.join((mode_tag, lives_tag, ammo_tag, time_tag, teams_tag, bots_tag)).replace('localRoomRules', ROOM_MODE_VALUE)
+    difficulty_tag = (f'(when {ROOM_DIFFICULTY_VALUE} == 0 -> "[difficulty easy] ", '
+                      f'{ROOM_DIFFICULTY_VALUE} == 2 -> "[difficulty hard] ", '
+                      '"[difficulty normal] ")')
+    tags = (' + '.join((mode_tag, lives_tag, ammo_tag, time_tag, teams_tag,
+                        difficulty_tag, bots_tag)).replace('localRoomRules', ROOM_MODE_VALUE)
             .replace('localRoomLives', ROOM_LIVES_VALUE).replace('localRoomMinutes', ROOM_MINUTES_VALUE))
     options = dict(name='LocalRoomOptions', visible=False, input=False, bindings=[['text', tags]])
     options['class'] = 'UITextField'
-    index = rows.index(room_rules) + 1
-    rows[index:index] = [teams, lives, *bots, ammo, options]
     bot_names = ('LocalAllies', 'LocalEnemies', 'LocalDifficulty', 'LocalRules')
     bot_controls = [row for row in rows if row.get('name') in bot_names]
-    rows[:] = [row for row in rows if row.get('name') not in bot_names]
+    for row in bot_controls:
+        if row['name'] in ('LocalAllies', 'LocalEnemies'):
+            for button in row['children'][1]['children'][0]['children']:
+                if button['name'] in ('Less', 'More'):
+                    bindings = button.setdefault('bindings', [])
+                    bindings[:] = [binding for binding in bindings if binding[0] != 'input']
+    rows[:] = [row for row in rows if row.get('name') not in (*bot_names, 'LocalRoomRules')]
     heading = {'class': 'UIStaticText', 'name': 'LocalSoloBotHeading', 'input': False,
                'classes': 'header4 text-color-white',
                'bindings': [['visible', 'localBotSetup']],
@@ -346,8 +388,30 @@ def _room_duration_settings(root):
                }}
     map_row, = [row for row in rows if row.get('name') == 'Map']
     index = rows.index(map_row) + 1
-    rows[index:index] = [duration, heading, *bot_controls]
+    # Both paths expose the common controls in the same order.
+    rows[index:index] = [heading, *bot_controls, *bots, difficulty, room_rules,
+                         duration, lives, ammo, teams, options]
     return True
+
+
+def _order_settings_rows(root):
+    """Keep every shared tile in the same place in solo and room forms."""
+    container, = [node for node in _walk(root) if node.get('name') == 'scrollContainerControl']
+    rows = container['children']
+    names = (
+        # Room-only metadata stays above the shared settings block and remains
+        # hidden in the ordinary bot-battle form.
+        'Title', 'DescriptionSelect', 'Description',
+        'SolSetupPresetRow', 'SolSetupLineupRow', 'SolRoomLineupRow', 'Map',
+        'LocalSoloBotHeading', 'LocalAllies', 'LocalRoomBots1', 'LocalEnemies',
+        'LocalRoomBots2', 'LocalDifficulty', 'LocalRoomDifficulty', 'LocalRules',
+        'LocalRoomRules', 'LocalRoomDuration', 'LocalRoomLives', 'LocalRoomAmmo',
+        'LocalRoomTeams', 'LocalRoomOptions',
+    )
+    by_name = {row.get('name'): row for row in rows}
+    ordered = [by_name[name] for name in names if name in by_name]
+    claimed = {id(row) for row in ordered}
+    rows[:] = [*ordered, *(row for row in rows if id(row) not in claimed)]
 
 
 def _room_bot_hint(description):
@@ -394,7 +458,7 @@ def patch_form(document):
     components['UIDataLocalVarsComponent'] = {'data': [
         ['bool', 'localBotSetup', 'false'], ['int', 'localAllies', '6'],
         ['int', 'localEnemies', '7'], ['int', 'localDifficulty', '1'],
-        ['int', 'localRules', '1']]}
+        ['int', 'localRules', '1'], ['int', 'localLargeTeams', '0']]}
     footer, = [n for n in _walk(root) if n.get('name') == 'CreateRoomButton']
     footer['bindings'] = [['input', 'not localBotSetup or (localRecipe >= 0 and not localSaved)']]
     for name in ('Title', 'DescriptionSelect', 'Description', 'Mode', 'Password', 'TeamKill',
@@ -405,18 +469,11 @@ def patch_form(document):
             bindings.append(['visible', 'not localBotSetup'])
         else:
             visible[1] = '(' + visible[1] + ') and not localBotSetup'
-    allies = _row('LocalAllies', 'Local/BattleSettings/Allies', [
-        _button('Less', '"-"', 'LocalAllyLess'),
-        _button('Value', 'str(localAllies)', 'LocalNoop', 176),
-        _button('More', '"+"', 'LocalAllyMore')])
-    enemies = _row('LocalEnemies', 'Local/BattleSettings/Enemies', [
-        _button('Less', '"-"', 'LocalEnemyLess'),
-        _button('Value', 'str(localEnemies)', 'LocalNoop', 176),
-        _button('More', '"+"', 'LocalEnemyMore')])
-    difficulty = _row('LocalDifficulty', 'Local/BattleSettings/Difficulty', [
-        _button('Choice', 'when localDifficulty == 0 -> localize("Local/BattleSettings/Easy"), '
-            'localDifficulty == 1 -> localize("Local/BattleSettings/Normal"), '
-            'localize("Local/BattleSettings/Hard")', 'LocalDifficultyNext', 360)])
+    allies = _counter_row('LocalAllies', 'Local/BattleSettings/Allies', 'localAllies',
+                          'LocalAllyLess', 'LocalAllyMore')
+    enemies = _counter_row('LocalEnemies', 'Local/BattleSettings/Enemies', 'localEnemies',
+                           'LocalEnemyLess', 'LocalEnemyMore')
+    difficulty = _difficulty_row('LocalDifficulty', 'localDifficulty', 'LocalDifficultyNext')
     rules = _row('LocalRules', 'Local/BattleSettings/Rules', [
         _button('Choice', RULES_CAPTION, 'LocalOpenModePicker', 360)])
     container['children'] = [allies, enemies, difficulty, rules, *container['children']]
@@ -424,6 +481,7 @@ def patch_form(document):
     _room_duration_settings(root)
     _mode_picker(root)
     client_battle_setup.patch_form(document, root)
+    _order_settings_rows(root)
 
 
 MODE_KEYS = ('Elimination', 'Encounter', 'Supremacy', 'Gravity', 'BigBoss', 'MadGames', 'Uprising')
@@ -547,6 +605,19 @@ def _mode_picker(root):
     })
 
 
+def standalone_screen(source):
+    import yaml
+
+    document = yaml.safe_load(dvpl.read(source))
+    screen, = (control for control in document['Controls'] if control['name'] == 'Screen')
+    screen['children'].append({
+        'path': 'Header/menuButton',
+        'input': True,
+        'components': {'UIInputEventComponent': {'onTouchUpInside': 'BACK_EVENT'}},
+    })
+    return dvpl.encode(yaml.safe_dump(document, sort_keys=False).encode())
+
+
 def extra_resources():
     actions = '''action LocalLoad()
 {
@@ -557,9 +628,15 @@ def extra_resources():
     ChangeData(localEnemies, int(localValue / 10) % 10);
     ChangeData(localDifficulty, int(localValue / 100) % 10);
     ChangeData(localRules, int(localValue / 1000) % 10);
+    ChangeData(localLargeTeams, int(localFlags / 256) % 2);
+    if (int(localFlags / 256) % 2 == 1)
+    {
+        ChangeData(localAllies, when localValue % 100 == 76 -> 14, localValue % 100);
+        ChangeData(localEnemies, @LARGE_BOT_TOTAL@ - localAllies);
+    }
     ChangeData(roomLivesOverride, localFlags % 2);
     ChangeData(roomAmmoOverride, int(localFlags / 2) % 2);
-    ChangeData(roomMinutesOverride, int(localFlags / 4) - 1);
+    ChangeData(roomMinutesOverride, int((localFlags % 256) / 4) - 1);
     DirectEvent("LocalSync", ".");
 }
 action LocalSaved()
@@ -573,13 +650,10 @@ action LocalSync()
         ChangeProperty("**/Title/Container/TextFieldContainer/VerticalBox/Background/TextField", "", "text", "@TITLE@");
         ChangeProperty("**/Description/Container/TextFieldContainer/VerticalBox/Background/TextField", "", "text", "@PREFIX@" + str(localAllies)
             + "/" + str(localEnemies) + "/" + str(localDifficulty) + "/" + str(localRules)
-            + "/" + str(@ROOM_LIVES@) + "/" + str(@ROOM_MINUTES@) + "/" + str(@ROOM_AMMO@));
+            + "/" + str(@ROOM_LIVES@) + "/" + str(@ROOM_MINUTES@) + "/" + str(@ROOM_AMMO@)
+            + "/" + str(localLargeTeams));
     }
 }
-action LocalAllyLess() { ChangeData(localAllies, max(0, localAllies - 1)); DirectEvent("LocalSync", "."); }
-action LocalAllyMore() { ChangeData(localAllies, min(6, localAllies + 1)); DirectEvent("LocalSync", "."); }
-action LocalEnemyLess() { ChangeData(localEnemies, max(1, localEnemies - 1)); DirectEvent("LocalSync", "."); }
-action LocalEnemyMore() { ChangeData(localEnemies, min(7, localEnemies + 1)); DirectEvent("LocalSync", "."); }
 action LocalDifficultyNext()
 {
     if (localDifficulty == 2) { ChangeData(localDifficulty, 0); }
@@ -604,6 +678,10 @@ action LocalNoop() {}
 action LocalRoomSingleLife() { ChangeData(roomLivesOverride, 0); DirectEvent("LocalSync", "."); }
 action LocalRoomUnlimitedLives() { ChangeData(roomLivesOverride, 1); DirectEvent("LocalSync", "."); }
 action LocalRoomToggleAmmo() { ChangeData(roomAmmoOverride, 1 - @ROOM_AMMO@); DirectEvent("LocalSync", "."); }
+action LocalRoomDifficultyNext()
+{
+    ChangeData(roomDifficultyOverride, when @ROOM_DIFFICULTY@ == 2 -> 0, @ROOM_DIFFICULTY@ + 1);
+}
 action LocalRoomTimeLess()
 {
     ChangeData(roomMinutesOverride, when @ROOM_MINUTES@ <= 0 -> 6, max(1, @ROOM_MINUTES@ - 1));
@@ -616,13 +694,53 @@ action LocalRoomTimeMore()
 }
 action LocalRoomTimeDefault() { ChangeData(roomMinutesOverride, -1); DirectEvent("LocalSync", "."); }
 action LocalRoomTimeEndless() { ChangeData(roomMinutesOverride, 0); DirectEvent("LocalSync", "."); }
+action LocalRoomToggleTeams()
+{
+    if (localBotSetup)
+    {
+        if (localLargeTeams == 1)
+        {
+            ChangeData(localLargeTeams, 0);
+            ChangeData(localAllies, 6);
+            ChangeData(localEnemies, 7);
+        }
+        else
+        {
+            ChangeData(localLargeTeams, 1);
+            ChangeData(localAllies, 14);
+            ChangeData(localEnemies, 15);
+        }
+        DirectEvent("LocalSync", ".");
+    }
+    else { ChangeData(roomTeamOverride, 1 - @ROOM_TEAM@); }
+}
 '''
     actions = actions.replace('@TITLE@', TITLE).replace('@PREFIX@', PREFIX)
     actions = actions.replace('@ROOM_MODE@', ROOM_MODE_VALUE).replace('@ROOM_MINUTES@', ROOM_MINUTES_VALUE)
     actions = actions.replace('@ROOM_AMMO@', ROOM_AMMO_VALUE).replace('@ROOM_LIVES@', ROOM_LIVES_VALUE)
+    actions = actions.replace('@ROOM_DIFFICULTY@', ROOM_DIFFICULTY_VALUE)
+    actions = actions.replace('@ROOM_TEAM@', ROOM_TEAM_VALUE)
     actions = actions.replace('@LAST_MODE@', str(len(MODE_KEYS)-1)).replace('@MODE_COUNT@', str(len(MODE_KEYS)))
     actions = actions.replace('@RULES_BASE@', str(1 << RULES_SHIFT))
-    actions += f'action LocalRoomToggleTeams() {{ ChangeData(roomTeamOverride, 1 - {ROOM_TEAM_VALUE}); }}\n'
+    actions = actions.replace('@LARGE_BOT_TOTAL@', str(LARGE_TEAM_SIZE))
+    for name, delta, standard in (
+        ('AllyLess', -1, 'ChangeData(localAllies, max(0, localAllies - 1));'),
+        ('AllyMore', 1, 'ChangeData(localAllies, min(6, localAllies + 1));'),
+        ('EnemyLess', 1, 'ChangeData(localEnemies, max(1, localEnemies - 1));'),
+        ('EnemyMore', -1, 'ChangeData(localEnemies, min(7, localEnemies + 1));'),
+    ):
+        actions += f"""
+action Local{name}()
+{{
+    if (localLargeTeams == 1)
+    {{
+        ChangeData(localAllies, min({LARGE_TEAM_SIZE - 1}, max(0, localAllies + ({delta}))));
+        ChangeData(localEnemies, {LARGE_TEAM_SIZE} - localAllies);
+    }}
+    else {{ {standard} }}
+    DirectEvent("LocalSync", ".");
+}}
+"""
     for team, value in ROOM_BOT_VALUES.items():
         actions += f"""
 action LocalRoomBots{team}Less() {{ ChangeData(roomBots{team}Override, max(0, {value} - 1)); }}
@@ -651,10 +769,10 @@ STRINGS = {
            'Lives': 'Lives per tank', 'Duration': 'Battle duration', 'Minutes': 'min', 'ModeDefault': 'Mode default',
            'SingleLife': 'One life', 'Endless': 'Unlimited', 'NoTimer': 'No limit',
            'UnlimitedAmmo': 'Unlimited ammo', 'AmmoOn': 'On', 'AmmoOff': 'Off',
-           'TeamSize': 'Team size (Rudniki)', 'StandardTeams': 'Standard',
+           'TeamSize': 'Battle size', 'StandardTeams': 'Standard', 'ThirtyTanks': '30 tanks',
            'RoomBotsCaption': 'Description',
            'RoomBotsHint': 'Optional', 'RoomBots1': 'Team 1 bots', 'RoomBots2': 'Team 2 bots',
-           'RoomHeaderBots': 'Bots', 'RoomHeaderTime': 'Time'},
+           'RoomHeaderBots': 'Bots', 'RoomHeaderTime': 'Time', 'RoomHeaderDifficulty': 'Difficulty'},
     'ru': {'Settings': 'Настройки боя', 'Kind': 'Тип боя', 'Room': 'Тренировочная комната', 'Allies': 'Союзные боты',
            'Enemies': 'Боты противника', 'Difficulty': 'Сложность ботов', 'Rules': 'Правила боя',
            'Easy': 'Лёгкая', 'Normal': 'Обычная', 'Hard': 'Сложная', 'Capture': 'Захват базы',
@@ -665,10 +783,10 @@ STRINGS = {
            'Lives': 'Жизни на танк', 'Duration': 'Время боя', 'Minutes': 'мин', 'ModeDefault': 'По режиму',
            'SingleLife': 'Одна жизнь', 'Endless': 'Без ограничений', 'NoTimer': 'Без лимита',
            'UnlimitedAmmo': 'Бесконечные снаряды', 'AmmoOn': 'Вкл.', 'AmmoOff': 'Выкл.',
-           'TeamSize': 'Размер команд (Рудники)', 'StandardTeams': 'Обычный',
+           'TeamSize': 'Размер боя', 'StandardTeams': 'Обычный', 'ThirtyTanks': '30 танков',
            'RoomBotsCaption': 'Описание',
            'RoomBotsHint': 'Необязательно', 'RoomBots1': 'Боты команды 1', 'RoomBots2': 'Боты команды 2',
-           'RoomHeaderBots': 'Боты', 'RoomHeaderTime': 'Время'}}
+           'RoomHeaderBots': 'Боты', 'RoomHeaderTime': 'Время', 'RoomHeaderDifficulty': 'Сложность'}}
 
 
 STRINGS['en'].update(PolygonSettings='Polygon settings', ModeCancel='Cancel', ModeSelect='Select', ModeTabMadGames='Mad Games',
@@ -912,8 +1030,14 @@ def patch_room(document):
     """Keep room metadata in the native map and mode row, outside the notes."""
     root, header = _room_header(document)
     params = root['components']['UIDataParamsComponent']['params']
-    params.extend(['int', f'roomHeader{name}', str(default), str(default)] for name, default in
-                  (('Mode', -1), ('Minutes', -1), ('Bots1', 0), ('Bots2', 0)))
+    room_params = tuple((f'roomHeader{name}', default) for name, default in
+                        (('Mode', -1), ('Minutes', -1), ('Bots1', 0), ('Bots2', 0),
+                         ('Difficulty', 1)))
+    names = {name for name, _ in room_params}
+    params[:] = [row for row in params if row[1] not in names]
+    params.extend(['int', name, str(default), str(default)] for name, default in room_params)
+    header['children'][:] = [child for child in header['children']
+                             if child.get('name') != 'RoomOptionsSummary']
     summary = {
         'class': 'UIStaticText', 'name': 'RoomOptionsSummary',
         'classes': 'text2 text-color-blue', 'input': False,
@@ -927,11 +1051,15 @@ def patch_room(document):
                       'roomHeaderMinutes == 0 -> localize("Local/BattleSettings/NoTimer"), '
                       'str(roomHeaderMinutes) + " " + localize("Local/BattleSettings/Minutes")) + '
                       '"  •  " + localize("Local/BattleSettings/RoomHeaderBots") + " " + '
-                      'str(roomHeaderBots1) + ":" + str(roomHeaderBots2)']]
+                      'str(roomHeaderBots1) + ":" + str(roomHeaderBots2) + "  •  " + '
+                      'localize("Local/BattleSettings/RoomHeaderDifficulty") + " " + '
+                      '(when roomHeaderDifficulty == 0 -> localize("Local/BattleSettings/Easy"), '
+                      'roomHeaderDifficulty == 2 -> localize("Local/BattleSettings/Hard"), '
+                      'localize("Local/BattleSettings/Normal"))']]
     }
     header['children'].append(summary)
 
-BATTLE_SETTINGS_UI_VERSION = 61
+BATTLE_SETTINGS_UI_VERSION = 73
 
 
 def upgrade_form(lab, manifest):
@@ -941,7 +1069,7 @@ def upgrade_form(lab, manifest):
     from hashlib import sha256
     import json
     import yaml
-    from .client_ui import (BATTLE_BUTTON, GAME_TYPES, HANGAR, HANGAR_ACTIONS, STRINGS_EN,
+    from .client_ui import (BASE_LOBBY, BASE_LOBBY_ACTIONS, BATTLE_BUTTON, GAME_TYPES, HANGAR, HANGAR_ACTIONS, STRINGS_EN,
                             STRINGS_RU, _StringsLoader, patched_resource)
     from .connection import atomic_write
     from . import client_practice_picker
@@ -989,6 +1117,7 @@ def upgrade_form(lab, manifest):
                     changed = True
                 _mode_picker(root)
                 client_battle_setup.patch_form(document, root)
+                _order_settings_rows(root)
                 changed = True
         else:
             document = yaml.load(raw, Loader=_StringsLoader)
@@ -1016,7 +1145,7 @@ def upgrade_form(lab, manifest):
             if room.resolve(strict=True) != room or not room.is_file():
                 raise ValueError('Room header requires a private UI overlay')
             document = yaml.safe_load(dvpl.read(room))
-            _room_header(document)
+            patch_room(document)
         else:
             game = Path(manifest.get('source_game') or manifest['game'])
             document = yaml.safe_load(dvpl.read(game/'Data'/ROOM))
@@ -1036,7 +1165,12 @@ def upgrade_form(lab, manifest):
     if source:
         from .client_ui import local_directory
         game = Path(source).resolve(strict=True)
-        for relative in (HANGAR, HANGAR_ACTIONS, BATTLE_BUTTON):
+        screen_source = game/'Data'/TRAINING_SCREEN
+        if has_room_form and screen_source.is_file():
+            target = data/SOLO_SCREEN
+            staged[target] = standalone_screen(screen_source)
+            overrides[SOLO_SCREEN] = sha256(staged[target]).hexdigest()
+        for relative in (BASE_LOBBY, BASE_LOBBY_ACTIONS, HANGAR, HANGAR_ACTIONS, BATTLE_BUTTON):
             if relative in overrides:
                 target = data/relative
                 if target.resolve(strict=True) != target or not target.is_file():
@@ -1050,7 +1184,8 @@ def upgrade_form(lab, manifest):
                 with executable.open('rb') as handle:
                     handle.seek(NAVIGATION_OFFSET)
                     navigation = handle.read(len(NAVIGATION_BEFORE))
-                if navigation == NAVIGATION_AFTER.ljust(len(NAVIGATION_BEFORE), b'\x90'):
+                if navigation in (NAVIGATION_AFTER.ljust(len(NAVIGATION_BEFORE), b'\x90'),
+                                  STANDALONE_NAVIGATION):
                     if target.resolve(strict=True) != target or not target.is_file():
                         raise ValueError('Battle settings require a private game type picker')
                     staged[target] = patched_resource(game/'Data'/GAME_TYPES, GAME_TYPES)
@@ -1139,6 +1274,38 @@ SHARED_RULES_EXTENSION = bytes.fromhex(
     "4508508d4dd4e8c492bffb578d4de8e83bc8b7fb8d45d4508d45e85089f1e82c67c1fb8d4de8e874c7b7fb8d4dd8e86c67b8fb5f5ec9c2"
     "0400536f6c627265616b6572426f7456322100006c6f63616c526563697065006c6f63616c52657475726e4c6576656c73006c6f63616c"
     "536176656400"
+)
+# Native battle_settings_client.S with direct_hangar=1. Only the solo save
+# branch changes. Keep the load and room paths at their original addresses.
+DIRECT_HANGAR_EXTENSION = (
+    SHARED_RULES_EXTENSION[:0x114]
+    + bytes.fromhex("e8dc00000090909090909090909090")
+    + SHARED_RULES_EXTENSION[0x123:]
+    + bytes.fromhex("89f1e8d409e2fb8d8e48010000e8896a37fd89f1e9b204e2fb")
+)
+# The native form is hosted directly on the lobby stack. Rebuild with
+# direct_hangar=1 and standalone_settings=1.
+STANDALONE_SETTINGS_EXTENSION = DIRECT_HANGAR_EXTENSION + bytes.fromhex(
+    "5589e583ec20535657e8000000005b81eb1ce0710489cee8a609e2fb31c08945fc8945f88945f48945f08945ec8945e88b86"
+    "1001000085c00f84c40100008d9366e371045250e85802000085c00f84af0100008b403885c00f84a40100008945e08d8350"
+    "e3710450683d0000008d837de371045056e8580200008945fc85c00f847d0100008d8357e3710450ff75fce80f02000085c0"
+    "0f84660100008b962001000052508d45f450e83562dffc83c40c837df4000f84480100008d835ee3710450ff75fce8da0100"
+    "0085c00f84310100008945e48d45e4508d45f850e8e16075fc83c408837df8000f84140100008d83bbe3710450682d000000"
+    "8d83c7e371045056e8cb0100008945f085c00f84f00000008b862001000083c014508d45ec50e86dff34fd83c408837dec00"
+    "0f84d0000000682c020000e83485abfd83c40485c00f84bb00000089c16a008d45f0508d45f4508d862001000050ff75f8ff"
+    "75ecc745ec00000000e8b68435fd8945e88b55f88990b80100008b55fc8990bc0100008b55e08990c0010000c745f8000000"
+    "00c745fc00000000568b3083ee048db8c4010000b91a000000f3a55e8d9360e271048990c80100008d90c801000089108b4d"
+    "e0e8fa07e2fb8b4de06a00e8406e1efc8b45e8ffb0bc0100008b8e100100008b11ff522c8b45e889c1e8d207e2fbff75e889"
+    "f18b06ff50448b4de8e8f0fbffff8b4de8e8340000008b4dece8350000008b4df0e8240000008b4df4e81c0000008b4df8e8"
+    "1d0000008b4dfce80c00000089f1e87902e2fb5f5e5bc9c385c90f856c02e2fbc385c974068b016a01ff10c35356578bb1b8"
+    "0100008bb9bc0100008b99c0010000ff742410e8f2ff35fd5089f1e8cfffffff8b4f3885c97406578b01ff503089f9e82602"
+    "e2fb89d96a01e87d6d1efc89d9e81602e2fb585f5e5bc204005589e583ec1857ff750c8d4de8e80dc5b7fb8d45e8508b4d08"
+    "e8b1011cfc89c78d4de8e847c4b7fb89f85fc9c208005589e583ec3857ff7510ff750c8d4dc8e86bcce7fb8d45c8508d45fc"
+    "508b4d08e80bb2c3fb8d4dc8e8a3ccb8fb31ff837dfc007434ff75148d4de4e8b0c4b7fb8d45e4508b4dfce864511cfc89c7"
+    "85ff740789f9e89706e2fb8d4de4e8dfc3b7fb8b4dfce87701e2fb89f85fc9c2100053637265656e0048656164657200436f"
+    "6e74656e74002a2a2f47616d6554797065735363726f6c6c56696577007e7265733a2f55492f53637265656e732f4c6f6262"
+    "792f547261696e696e672f536f6c627265616b6572426174746c6553657474696e67732e79616d6c00486561646572526967"
+    "6874007e7265733a2f55492f53637265656e732f4c6f6262792f547261696e696e672f526f6f6d4c6973742e79616d6c00"
 )
 SHARED_RULES_MAPS = bytes.fromhex(
     "01000000481b720402000000761b720403000000b31b720404000000e71b720405000000151c7204060000004f1c7204070000007d1c72"

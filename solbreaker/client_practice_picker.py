@@ -21,7 +21,7 @@ NATIONS = ('ussr', 'germany', 'usa', 'china', 'france', 'uk', 'japan', 'other', 
 AMBER = [1., .67, .17, 1.]
 
 STRINGS = {
-    'Picker': ('Polygon targets', 'Мишени Полигона'),
+    'Picker': ('Free battle targets', 'Мишени свободного боя'),
     'TargetChoose': ('Choose tank and modules', 'Выбрать танк и модули'),
     'TargetSpawn': ('Place target at reticle', 'Поставить мишень в точке прицеливания'),
     'TargetAim': ('Target under the reticle', 'Мишень под прицелом'),

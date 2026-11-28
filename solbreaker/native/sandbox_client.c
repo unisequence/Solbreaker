@@ -414,8 +414,11 @@ __attribute__((section(".late_sandbox"), noinline))
 void THISCALL sandbox_controls_version(void *controls, uint32_t version) {
     typedef void (THISCALL *SetVersion)(void *, uint32_t);
     uint32_t delta = sandbox_delta();
-    /* Disconnect supplies zero. It is a session sentinel, not a new schema. */
-    if (!version && FIELD(controls, 0x18) == 1) return;
+    /* Login transitions and disconnects both supply zero. It is a session
+       sentinel, never a new keyboard schema; applying it can reset the
+       already restored user layout before the next account snapshot. The
+       explicit Reset button has its own sandbox_reset_bindings hook. */
+    if (!version) return;
     ((SetVersion)(0x0123dd70u + delta))(controls, version);
     void *layout = version ? keyboard_layout(delta) : 0;
     if (layout) {
@@ -1998,13 +2001,14 @@ static void room_parameter(void *view, const char *name, int value) {
         : "memory", "cc");
 }
 
-typedef struct { int mode, lives, minutes, bots1, bots2, ammo, large_teams; } RoomOptions;
+typedef struct { int mode, lives, minutes, bots1, bots2, ammo, large_teams, difficulty; } RoomOptions;
 
 static const char *room_parse_options(const NativeString *value, RoomOptions *settings) {
     const char *text = setup_read_room_tag(room_text(value), 0);
-    int mode = *text ? 1 : -1, lives = 0, minutes = -1, ammo = 0, large_teams = 0;
+    int mode = *text ? 1 : -1, lives = 0, minutes = -1, ammo = 0, large_teams = 0, difficulty = 1;
     while (room_prefix(text, "[mode ") || room_prefix(text, "[lives ") ||
-           room_prefix(text, "[time ") || room_prefix(text, "[ammo ") || room_prefix(text, "[teams ")) {
+           room_prefix(text, "[time ") || room_prefix(text, "[ammo ") || room_prefix(text, "[teams ") ||
+           room_prefix(text, "[difficulty ")) {
         if (room_prefix(text, "[mode ")) {
             if (room_prefix(text + 6, "elimination]")) mode = 0;
             if (room_prefix(text + 6, "supremacy]")) mode = 2;
@@ -2018,6 +2022,9 @@ static const char *room_parse_options(const NativeString *value, RoomOptions *se
             ammo = room_prefix(text + 6, "unlimited]");
         } else if (room_prefix(text, "[teams ")) {
             large_teams = room_prefix(text + 7, "15]");
+        } else if (room_prefix(text, "[difficulty ")) {
+            difficulty = room_prefix(text + 12, "easy]") ? 0 :
+                         room_prefix(text + 12, "hard]") ? 2 : 1;
         } else {
             const char *digits = text + 6;
             minutes = room_prefix(digits, "default]") ? -1 : 0;
@@ -2028,7 +2035,7 @@ static const char *room_parse_options(const NativeString *value, RoomOptions *se
         if (*text) ++text;
         while (*text == ' ') ++text;
     }
-    *settings = (RoomOptions){mode, lives, minutes, 0, 0, ammo, large_teams};
+    *settings = (RoomOptions){mode, lives, minutes, 0, 0, ammo, large_teams, difficulty};
     if (room_prefix(text, "[bots ")) {
         const char *digits = text + 6;
         int counts[2] = {0, 0};
@@ -2037,7 +2044,7 @@ static const char *room_parse_options(const NativeString *value, RoomOptions *se
             counts[team] = *digits++ - '0';
             if (*digits >= '0' && *digits <= '9')
                 counts[team] = 10 * counts[team] + *digits++ - '0';
-            if (counts[team] > 15 || *digits != (team ? ']' : ':')) return text;
+            if (counts[team] > 29 || *digits != (team ? ']' : ':')) return text;
             ++digits;
         }
         settings->bots1 = counts[0];
@@ -2063,6 +2070,7 @@ void THISCALL room_load_description(void *view, const NativeString *value) {
     room_parameter(view, "roomInitialLives", options.lives);
     room_parameter(view, "roomInitialAmmo", options.ammo);
     room_parameter(view, "roomInitialLargeTeams", options.large_teams);
+    room_parameter(view, "roomInitialDifficulty", options.difficulty);
     room_parameter(view, "roomInitialMinutes", options.minutes);
     room_parameter(view, "roomInitialBots1", options.bots1);
     room_parameter(view, "roomInitialBots2", options.bots2);
@@ -2085,6 +2093,7 @@ void THISCALL room_header_description(void *view, const NativeString *value) {
     const char *text = room_parse_options(value, &options);
     room_parameter(view, "roomHeaderMode", options.mode);
     room_parameter(view, "roomHeaderMinutes", options.minutes);
+    room_parameter(view, "roomHeaderDifficulty", options.difficulty);
     RoomLineup lineup;
     const char *encoded = room_text(value);
     if (setup_read_room_tag(encoded, &lineup) != encoded && lineup.custom) {

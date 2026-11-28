@@ -1,6 +1,8 @@
 from collections import Counter
+from dataclasses import dataclass
 import hashlib
 import json
+import math
 from pathlib import Path
 import struct
 import tempfile
@@ -13,12 +15,15 @@ import yaml
 from solbreaker import dvpl
 from solbreaker import battle_setup, bot_roster
 from solbreaker.bot_roster import select_room_bot_roster
-from solbreaker.client_battle_settings import ACTIONS, FORM, upgrade_form
+from solbreaker.client_battle_setup import settings_rows
+from solbreaker.client_battle_settings import (ACTIONS, FORM, _counter_row, _difficulty_row,
+                                               _order_settings_rows, extra_resources, upgrade_form)
 from solbreaker.client_ui import STRINGS_EN, STRINGS_RU
 from solbreaker.mercury import packed_blob
-from solbreaker.native_rooms import NativeRooms
+from solbreaker.map_catalog import room_map_spec, room_team_capacity
+from solbreaker.native_rooms import NativeRooms, room_options
 from solbreaker.rooms import RoomManager
-from solbreaker.training_config import RoomBattleSettings
+from solbreaker.training_config import BATTLE_MODES, RoomBattleSettings
 
 
 class TrainingRoomBotsTests(unittest.TestCase):
@@ -29,6 +34,7 @@ class TrainingRoomBotsTests(unittest.TestCase):
         self.endpoint = SimpleNamespace(
             clients=clients, send=Mock(), server=SimpleNamespace(accounts=accounts, event=Mock()),
             definition=SimpleNamespace(descriptor=b'vehicle'), map_catalog={6:'rudniki', 7:'fort'},
+            resolve_map_spec=lambda _ident: SimpleNamespace(strategic_points=(object(),)),
             map_spec=SimpleNamespace(map_id=6), arenas={}, start_shared=Mock(
                 return_value=SimpleNamespace(result_id='battle')))
         self.endpoint.rooms = RoomManager(self.endpoint)
@@ -45,6 +51,60 @@ class TrainingRoomBotsTests(unittest.TestCase):
                    + packed_blob(b'Training') + packed_blob(description))
         self.assertTrue(self.native.command(self.endpoint.clients[client], 149, payload, 300, 406))
 
+    def test_room_and_solo_bot_controls_share_the_same_visual_shape(self):
+        solo = _counter_row('LocalAllies', 'Local/BattleSettings/Allies', 'localAllies',
+                            'LocalAllyLess', 'LocalAllyMore')
+        room = _counter_row('LocalRoomBots1', 'Local/BattleSettings/Allies', 'roomBots1',
+                            'LocalRoomBots1Less', 'LocalRoomBots1More', conditional=False)
+        self.assertEqual(solo['children'][0], room['children'][0])
+        solo_buttons = solo['children'][1]['children'][0]['children']
+        room_buttons = room['children'][1]['children'][0]['children']
+        self.assertEqual([button['size'] for button in solo_buttons],
+                         [button['size'] for button in room_buttons])
+        solo_difficulty = _difficulty_row('LocalDifficulty', 'localDifficulty', 'Solo')
+        room_difficulty = _difficulty_row('LocalRoomDifficulty', 'roomDifficulty', 'Room',
+                                          conditional=False)
+        self.assertEqual(solo_difficulty['children'][0], room_difficulty['children'][0])
+        self.assertEqual(solo_difficulty['children'][1]['children'][0]['children'][0]['size'],
+                         room_difficulty['children'][1]['children'][0]['children'][0]['size'])
+
+    def test_room_and_solo_forms_share_presets_and_lineup_position(self):
+        presets, solo_lineup, room_lineup = settings_rows()
+        self.assertEqual([row['children'][0]['components']['UITextComponent']['text']
+                          for row in (presets, solo_lineup, room_lineup)],
+                         ['Local/SbSetupPresets', 'Local/SbSetupLineup', 'Local/SbSetupLineup'])
+        self.assertEqual(presets['bindings'], [['visible', 'true']])
+        self.assertEqual(solo_lineup['bindings'], [['visible', 'localBotSetup']])
+        self.assertEqual(room_lineup['bindings'], [['visible', 'not localBotSetup']])
+
+    def test_room_and_solo_common_tiles_have_one_order(self):
+        names = ['Password', 'LocalRoomTeams', 'Map', 'LocalRoomAmmo', 'LocalRules',
+                 'SolRoomLineupRow', 'Description', 'LocalEnemies', 'SolSetupPresetRow',
+                 'LocalRoomDuration', 'Title', 'LocalRoomLives', 'LocalDifficulty',
+                 'SolSetupLineupRow', 'LocalAllies']
+        container = {'name': 'scrollContainerControl',
+                     'children': [{'name': name} for name in names]}
+        _order_settings_rows({'children': [container]})
+        ordered = [row['name'] for row in container['children']]
+        self.assertEqual(ordered[:14], [
+            'Title', 'Description', 'SolSetupPresetRow', 'SolSetupLineupRow',
+            'SolRoomLineupRow', 'Map', 'LocalAllies', 'LocalEnemies',
+            'LocalDifficulty', 'LocalRules', 'LocalRoomDuration', 'LocalRoomLives',
+            'LocalRoomAmmo', 'LocalRoomTeams'])
+        self.assertEqual(ordered[-1], 'Password')
+
+    def test_solo_team_size_action_serializes_the_15v15_counts(self):
+        actions = dvpl.decode(extra_resources()[ACTIONS]).decode()
+        self.assertIn('ChangeData(localAllies, 14)', actions)
+        self.assertIn('ChangeData(localEnemies, 15)', actions)
+        self.assertIn('/" + str(localLargeTeams)', actions)
+        self.assertIn('int((localFlags % 256) / 4) - 1', actions)
+
+    def test_big_boss_room_advertises_the_default_round_length(self):
+        room = self.create(b'[mode big_boss] [notes] Boss')
+        self.assertEqual(self.native.settings(room)['roundLength'], 1200)
+        self.assertEqual(self.native.listing(room)[1][12], 1200)
+
     def test_room_creation_accepts_bot_counts_and_only_needs_ready_humans(self):
         room = self.create(b'[bots 7:2] Friends')
         self.assertEqual(room.bot_counts, (7, 2))
@@ -59,22 +119,78 @@ class TrainingRoomBotsTests(unittest.TestCase):
         self.endpoint.start_shared.assert_called_once_with([1], [1], map_id=6, bot_counts=(6, 2),
                                                          room_settings=RoomBattleSettings())
 
-    def test_large_teams_opt_in_is_scoped_to_rudniki_room(self):
+    def test_large_teams_work_on_full_maps_and_every_room_mode(self):
         room = self.create(b'[room-form] [teams 15] [bots 14:14] [notes] Large room')
         self.assertTrue(room.battle_settings.large_teams)
-        self.assertEqual(room.team_capacity, 15)
+        self.assertEqual((room.team_capacity, room.battle_capacity), (29, 30))
         self.assertEqual(room.active_bot_counts, (14, 14))
-        self.assertEqual(self.native.settings(room)['limits'][2]['maxCount'], (15, 15, 15))
+        self.assertEqual(self.native.settings(room)['limits'][2]['maxCount'], (29, 29, 29))
         self.assertIn('[teams 15]', self.native.settings(room)['comment'])
-        with self.assertRaisesRegex(ValueError, 'Encounter on Rudniki'):
-            self.endpoint.rooms.set_map(1, 7)
+        self.endpoint.rooms.set_map(1, 7)
+        for mode in BATTLE_MODES:
+            self.assertEqual(room_team_capacity(7, mode, room.battle_settings), 29)
+            self.endpoint.rooms.rename(1, room.title, room.description, battle_mode=mode)
+            self.assertEqual(room.team_capacity, 29)
+        self.endpoint.rooms.rename(1, room.title, room.description, battle_mode='encounter')
         self.endpoint.rooms.join(2, room.id, 2)
         self.endpoint.rooms.ready(1, True)
         self.endpoint.rooms.ready(2, True)
         self.endpoint.rooms.start(1)
         self.endpoint.start_shared.assert_called_once_with(
-            [1, 2], [1, 2], map_id=6, bot_counts=(14, 14),
+            [1, 2], [1, 2], map_id=7, bot_counts=(14, 14),
             room_settings=RoomBattleSettings(large_teams=True))
+
+    def test_large_battle_accepts_an_asymmetric_2v28_roster(self):
+        room = self.create(b'[room-form] [teams 15] [bots 1:28] [notes] Asymmetric')
+        self.assertEqual(room.active_bot_counts, (1, 28))
+        self.endpoint.rooms.ready(1, True)
+        self.endpoint.rooms.start(1)
+        self.endpoint.start_shared.assert_called_once_with(
+            [1], [1], map_id=6, bot_counts=(1, 28),
+            room_settings=RoomBattleSettings(large_teams=True))
+
+    def test_large_battle_requires_exactly_30_tanks(self):
+        room = self.create(b'[room-form] [teams 15] [bots 1:27] [notes] Too small')
+        self.endpoint.rooms.ready(1, True)
+        with self.assertRaisesRegex(ValueError, 'exactly 30 participants'):
+            self.endpoint.rooms.start(1)
+
+    def test_large_battle_clamps_excess_bots_to_30_total(self):
+        room = self.create(b'[room-form] [teams 15] [bots 29:29] [notes] Full')
+        self.assertEqual(room.active_bot_counts, (14, 15))
+        self.assertEqual(1 + sum(room.active_bot_counts), 30)
+
+    def test_small_5v5_map_rejects_large_team_toggle(self):
+        self.endpoint.map_catalog[60] = 'rudniki_01'
+        with self.assertRaisesRegex(ValueError, 'unavailable on 5×5 maps'):
+            self.endpoint.rooms.create(1, map_id=60,
+                battle_settings=RoomBattleSettings(large_teams=True))
+
+    def test_large_spawn_formation_is_wide_and_uses_the_dense_native_base(self):
+        @dataclass(frozen=True)
+        class Spec:
+            bounds: tuple
+            team_spawns: tuple
+
+        spec = Spec((-240., -240., 235., 248.), (
+            ((99., -140.), (98., -190.), (89., -195.), (103., -124.),
+             (114., -123.), (122., -133.), (110., -138.)),
+            ((50., 186.), (58., 202.), (43., 208.), (51., 216.), (35., 204.),
+             (-144., 189.), (-136., 196.), (-124., 210.), (-130., 202.)),
+        ))
+        large = room_map_spec(spec, 29)
+        self.assertEqual(tuple(map(len, large.team_spawns)), (29, 29))
+        for points in large.team_spawns:
+            minimum = min(math.dist(point, other) for index, point in enumerate(points)
+                          for other in points[index+1:])
+            self.assertGreaterEqual(minimum, 14.-1e-9)
+            self.assertTrue(all(spec.bounds[0]+10 <= x <= spec.bounds[2]-10
+                                and spec.bounds[1]+10 <= z <= spec.bounds[3]-10
+                                for x, z in points))
+        # The second native team is split into groups of five and four. The
+        # 30-tank formation stays around the larger east group instead of
+        # being averaged into the empty middle of the map.
+        self.assertGreater(sum(x for x, _ in large.team_spawns[1]) / 29, 20.)
 
     def test_editing_large_room_back_to_standard_clamps_its_bot_counts(self):
         room = self.create(b'[teams 15] [bots 14:14] Large room')
@@ -162,6 +278,27 @@ class TrainingRoomBotsTests(unittest.TestCase):
         self.endpoint.rooms.start(1)
         self.endpoint.start_shared.assert_called_once_with(
             [1], [1], map_id=7, bot_counts=(0, 1), room_settings=RoomBattleSettings(True, 0))
+
+    def test_room_bot_difficulty_survives_edits_and_reaches_the_arena(self):
+        room = self.create(b'[difficulty hard] [bots 0:1] Practice')
+        self.assertEqual(room.battle_settings.bot_difficulty, 'hard')
+        self.assertEqual(self.native.settings(room)['comment'],
+                         '[difficulty hard] [bots 0:1] [notes] Practice')
+        self.edit(b'[room-options] [time 12]')
+        self.assertEqual(room.battle_settings.bot_difficulty, 'hard')
+        self.edit(b'[room-form] [difficulty easy] [bots 0:1] [notes] Practice')
+        self.assertEqual(room.battle_settings.bot_difficulty, 'easy')
+        self.endpoint.rooms.ready(1, True)
+        self.endpoint.rooms.start(1)
+        self.endpoint.start_shared.assert_called_once_with(
+            [1], [1], map_id=7, bot_counts=(0, 1),
+            room_settings=RoomBattleSettings(bot_difficulty='easy'))
+
+    def test_room_bot_difficulty_validation_and_http_description(self):
+        with self.assertRaisesRegex(ValueError, 'easy, normal or hard'):
+            room_options('[difficulty impossible] [bots 0:1] Practice')
+        room = self.endpoint.rooms.create(1, battle_settings=RoomBattleSettings(bot_difficulty='hard'))
+        self.assertEqual(self.endpoint.rooms.describe(room)['bot_difficulty'], 'hard')
 
     def test_full_room_form_can_clear_notes_without_resetting_rules(self):
         room = self.create(b'[mode gravity] [lives unlimited] [time 12] [bots 0:1] Practice')

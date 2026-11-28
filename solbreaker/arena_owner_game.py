@@ -67,7 +67,7 @@ def snapshot(arena: Arena, events=(), *, account_id=None, training_error=None) -
         state['training_reentry'] = training_reentry_enabled(arena)
         if training_error is not None:
             state['training_error'] = training_error
-        if getattr(arena, 'practice', False):
+        if getattr(arena, 'scenario_editor', False):
             state['practice_spawned'] = tuple(sorted(arena.practice_spawned))
             state['practice_client_ids'] = dict(arena.practice_client_ids)
             if getattr(arena, 'proving_ground', None):
@@ -373,6 +373,7 @@ class GameArenaFactory:
     prebattle_seconds: float = 0.
     map_cache: MapCache | None = None
     sandbox_enabled: bool = False
+    scenario_editor_accounts: tuple[int, ...] | None = None
     room_mode: str = 'encounter'
     room_settings: RoomBattleSettings | None = None
 
@@ -433,7 +434,8 @@ class GameArenaFactory:
                           bot_scene_settings=self.bot_scene_settings, custom_bot_slots=self.custom_bot_slots,
                           prebattle_seconds=self.prebattle_seconds,
                           sandbox_enabled=self.sandbox_enabled, room_mode=self.room_mode,
-                          room_settings=self.room_settings)
+                          room_settings=self.room_settings,
+                          scenario_editor_accounts=self.scenario_editor_accounts)
             roster_ms = (time.monotonic()-roster_started)*1000
             while arena.building:
                 arena.advance_build()

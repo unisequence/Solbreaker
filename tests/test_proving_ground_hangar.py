@@ -40,6 +40,29 @@ class ProvingGroundHangarTests(unittest.TestCase):
                 self.assertEqual(modes[PROVING_GROUND_MODE]['name'], 'arcade')
                 self.assertEqual(modes[PROVING_GROUND_MODE]['titleString'], PROVING_GROUND_TITLE)
 
+    def test_snapshot_uses_native_vehicle_lock_and_delta_tombstone(self):
+        state = {'revision': 1, 'credits': 0}
+        inventory = {'descriptor': '01', 'shells': []}
+        locked = account_snapshot(None, None, state, inventory,
+                                  vehicle_locks=(42,))['cache']['vehsLock']
+        cleared = account_snapshot(1, None, state, inventory,
+                                   cleared_vehicle_locks=(42,))['cache']['vehsLock']
+        self.assertEqual(locked, {42: (1, 0)})
+        self.assertEqual(cleared, {42: None})
+
+    def test_arena_vehicle_is_locked_until_its_result_is_recorded(self):
+        base = self.endpoint()
+        player = SimpleNamespace(inventory_id=42)
+        arena = SimpleNamespace(players={1: player}, finished_at=None, started=True,
+                                recorded_accounts=set())
+        base.arenas = SimpleNamespace(arenas={'battle': arena})
+        self.assertEqual(base.locked_vehicle_ids(1), {42})
+        with self.assertRaisesRegex(ValueError, 'still in a battle'):
+            base.require_vehicle_available(1, 42)
+        arena.finished_at = 10.
+        arena.recorded_accounts.add(1)
+        self.assertEqual(base.locked_vehicle_ids(1), set())
+
     def test_card_overrides_previous_map_and_rules(self):
         base = self.endpoint()
         base.start_battle(1, base.clients[1], map_id=6, game_mode=PROVING_GROUND_MODE)

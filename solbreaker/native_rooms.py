@@ -10,21 +10,23 @@ import sqlite3
 import struct
 import time
 
+from . import big_boss
 from .account import account_method, command_response, pickle_document, resource_response
 from .battle_settings_wire import GET_TITLE, GET_TITLE_V2, GET_TITLE_V3, SETUP_RESPONSE, ROOM_FORM_PREFIX, ROOM_OPTIONS_PREFIX
 from .battle_setup import ROOM_MARKER, ROOM_HEADER, RoomLineup, split_room_lineup
 from .mercury import packed_blob
 from .training_config import PROVING_GROUND_ID
 from .roster import TEAMS
+from .bot_ai import DEFAULT_DIFFICULTY, DIFFICULTIES
 from .training_config import BATTLE_MODES, RoomBattleSettings
 
 # ClientPrebattle::IsTrainingCreator (0x171cd40) checks the entire mask.
 OWNER_ROLE = 0x27e7f
 NO_RESPONSE = 202
 COMMANDS = {400,401,402,403,404,406,411,414,415,523,524}
-BOT_PREFIX = re.compile(r'^\[bots\s+([0-9]|1[0-5])\s*:\s*([0-9]|1[0-5])\]', re.IGNORECASE)
-SETTING_PREFIX = re.compile(r'^\[(mode|lives|time|ammo|teams)\b', re.IGNORECASE)
-SETTING_VALUE = re.compile(r'^\[(?:mode|lives|time|ammo|teams)\s+([a-z_]+|[0-9]{1,2})\]', re.IGNORECASE)
+BOT_PREFIX = re.compile(r'^\[bots\s+([0-9]|1[0-9]|2[0-9])\s*:\s*([0-9]|1[0-9]|2[0-9])\]', re.IGNORECASE)
+SETTING_PREFIX = re.compile(r'^\[(mode|lives|time|ammo|teams|difficulty)\b', re.IGNORECASE)
+SETTING_VALUE = re.compile(r'^\[(?:mode|lives|time|ammo|teams|difficulty)\s+([a-z_]+|[0-9]{1,2})\]', re.IGNORECASE)
 
 
 def varint(value):
@@ -74,7 +76,7 @@ def room_bot_options(description):
         return description, (0, 0)
     match = BOT_PREFIX.match(text)
     if match is None:
-        raise ValueError('Use [bots 2:3] for Team 1 and Team 2, with at most 15 per team')
+        raise ValueError('Use [bots 2:3] for Team 1 and Team 2, with at most 29 per team')
     return text[match.end():].lstrip(), tuple(map(int, match.groups()))
 
 
@@ -87,6 +89,8 @@ def room_comment(room, *, include_rules=True):
         options.append('[lives unlimited]')
     if include_rules and room.battle_settings.unlimited_ammo:
         options.append('[ammo unlimited]')
+    if include_rules and room.battle_settings.bot_difficulty != DEFAULT_DIFFICULTY:
+        options.append(f'[difficulty {room.battle_settings.bot_difficulty}]')
     minutes = room.battle_settings.minutes
     if include_rules and minutes is not None:
         options.append(f'[time {minutes or "endless"}]')
@@ -144,8 +148,14 @@ def room_options(description, previous=None):
     preserve_teams = previous is not None and not full_form and previous.battle_settings.large_teams
     teams = values.get('teams', '15' if preserve_teams else '7')
     if teams not in ('7', '15'):
-        raise ValueError('Choose standard teams or 15×15')
-    settings = RoomBattleSettings(lives == 'unlimited', minutes, ammo == 'unlimited', teams == '15')
+        raise ValueError('Choose standard teams or the 30-tank format')
+    difficulty = values.get('difficulty', existing.battle_settings.bot_difficulty
+                            if existing else DEFAULT_DIFFICULTY)
+    if difficulty not in DIFFICULTIES:
+        raise ValueError('Choose easy, normal or hard bot difficulty')
+    settings = RoomBattleSettings(unlimited_lives=lives == 'unlimited', minutes=minutes,
+                                  unlimited_ammo=ammo == 'unlimited', large_teams=teams == '15',
+                                  bot_difficulty=difficulty)
     bot_prefix = BOT_PREFIX.match(text)
     if full_form and bot_prefix and text[bot_prefix.end():].lstrip().startswith('[notes]'):
         description = text[bot_prefix.end():].lstrip().removeprefix('[notes]').removeprefix(' ')
@@ -244,6 +254,13 @@ class NativeRooms:
     @property
     def manager(self):return self.endpoint.rooms
 
+    @staticmethod
+    def round_length(room):
+        minutes = room.battle_settings.minutes
+        if minutes is not None:
+            return minutes * 60
+        return big_boss.DEFAULT_BATTLE_SECONDS if room.battle_mode == big_boss.MODE else 600
+
     def settings(self,room):
         owner=self.endpoint.server.accounts.get(room.owner)
         map_id=room.map_id
@@ -253,11 +270,9 @@ class NativeRooms:
         limits = {team: dict(minCount=0 if map_id == PROVING_GROUND_ID or (bots and team not in occupied) else 1,
                              maxCount=(room.team_capacity,)*3, level=(1,10))
                   for team, bots in zip(TEAMS, room.active_bot_counts)}
-        minutes = room.battle_settings.minutes
-        seconds = 600 if minutes is None else minutes * 60
         return dict(type=2,startType=1,defaultRoster=0,comment=room_comment(room),
             creator=owner.nickname,creatorDBID=owner.id,creatorClanDBID=0,creatorClanTag='',
-            isOpened=True,arenaTypeID=map_id,roundLength=seconds,lifeTime=3600,gameModeID=2,
+            isOpened=True,arenaTypeID=map_id,roundLength=self.round_length(room),lifeTime=3600,gameModeID=2,
             title=room.title,isTeamKill=False,password='',startTime=0,matchID='',
             teamRoles={1:0,2:0},limits=limits,
             roles=roles,spectatorsMaxScope=0,extraData=None,extraDataQuick=None)
@@ -397,7 +412,9 @@ class NativeRooms:
                     fallback = getattr(self.endpoint.server, 'training_config', None) or config
                     previous = self.endpoint.server.accounts.store.training_config(account, fallback)
                     config = replace(config, unlimited_lives=previous.unlimited_lives,
-                                     minutes=previous.minutes, unlimited_ammo=previous.unlimited_ammo)
+                                     minutes=previous.minutes, unlimited_ammo=previous.unlimited_ammo,
+                                     large_teams=previous.large_teams,
+                                     allies=previous.allies, enemies=previous.enemies)
                 if (map_id != 0 and config.battle_mode == 'supremacy'
                         and not self.endpoint.resolve_map_spec(map_id).strategic_points):
                     raise ValueError('This map has no Supremacy capture points')
@@ -445,11 +462,9 @@ class NativeRooms:
     def listing(self,room):
         # PrebattleInfo integer-key dictionary, parsed at 0x17284c0.
         map_id=room.map_id
-        minutes = room.battle_settings.minutes
-        seconds = 600 if minutes is None else minutes * 60
         return (int(room.id,16),{1:2,2:bool(room.arena_id),3:0,4:True,5:len(room.members),
             6:self.endpoint.server.accounts.get(room.owner).nickname,7:room.owner,8:0,
-            9:room_comment(room, include_rules=False),11:map_id,12:seconds,14:2,15:'',16:room.title,
+            9:room_comment(room, include_rules=False),11:map_id,12:self.round_length(room),14:2,15:'',16:room.title,
             17:(0,0,0),18:0x3ff,21:False,22:False,24:0})
 
     def command(self,client,kind,body,request,command):

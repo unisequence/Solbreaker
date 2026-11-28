@@ -1329,7 +1329,7 @@ def event_messages(arena, player, events):
                 result += arena_update(20, pb_blob(6, pb_int(1, entity)))
                 result += state_modifiers_message(entity, arena.state_modifiers(actor))
             if d.get('placed_by') == player.vehicle_id:
-                result += sandbox_advertisement(arena, notice=TARGET_PLACED)
+                result += sandbox_advertisement(arena, account_id=player.account_id, notice=TARGET_PLACED)
         elif event.kind == 'practice_clear':
             entity = client_actor
             result += b'\x14'+struct.pack('<III6f', entity, arena.space_id, 0, *d['position'], 0., 0., 0.)
@@ -1341,20 +1341,24 @@ def event_messages(arena, player, events):
             result += vehicle_property(event.actor, 3, struct.pack('<h', d['health']))
             result += health_changed(event.actor, d['health'], 0)
             if own:
-                result += sandbox_advertisement(arena, notice=HP_RESTORED)
+                result += sandbox_advertisement(arena, account_id=player.account_id, notice=HP_RESTORED)
         elif event.kind == 'practice_notice' and own:
-            result += sandbox_advertisement(arena, notice=PRACTICE_NOTICE | (d['notice'] << 11))
+            result += sandbox_advertisement(
+                arena, account_id=player.account_id, notice=PRACTICE_NOTICE | (d['notice'] << 11))
         elif event.kind == 'practice_feedback' and own:
             from .sandbox import PRACTICE_FEEDBACK
-            result += sandbox_advertisement(arena, notice=PRACTICE_FEEDBACK | (d['notice'] << 11))
+            result += sandbox_advertisement(
+                arena, account_id=player.account_id, notice=PRACTICE_FEEDBACK | (d['notice'] << 11))
         elif event.kind == 'practice_catalog_status' and own:
-            result += sandbox_advertisement(arena,
+            result += sandbox_advertisement(arena, account_id=player.account_id,
                 notice=TARGET_SELECTED if d['selected'] else TARGET_UNAVAILABLE)
         elif event.kind == 'sandbox_ai' and own:
             from .sandbox import TARGET_AI_CHANGED, TARGET_AI_MISSING
-            result += sandbox_advertisement(arena, notice=TARGET_AI_CHANGED if d['count'] else TARGET_AI_MISSING)
+            result += sandbox_advertisement(
+                arena, account_id=player.account_id,
+                notice=TARGET_AI_CHANGED if d['count'] else TARGET_AI_MISSING)
         elif event.kind == 'sandbox_map_border' and own:
-            result += sandbox_advertisement(arena, notice=d['notice'])
+            result += sandbox_advertisement(arena, account_id=player.account_id, notice=d['notice'])
         elif event.kind == 'boss_score':
             result += b''.join(team_points_message(team, score) for team, score in enumerate(d['tickets'], 1))
         elif event.kind == 'boss_picker' and own:
@@ -1378,7 +1382,7 @@ def event_messages(arena, player, events):
             boss = getattr(arena, 'big_boss', None)
             if boss is not None or getattr(arena, 'mad_games_mode', False):
                 ability = boss is not None or mad_games.irradiator_state(actor) is not None
-                result += sandbox_advertisement(arena, ability=ability)
+                result += sandbox_advertisement(arena, account_id=player.account_id, ability=ability)
             if boss is not None and not d.get('respawn'):
                 result += b''.join(boss_role_messages(arena))
             allied_reload.update(v.entity_id for v in arena.vehicles.values()
@@ -1451,7 +1455,7 @@ def event_messages(arena, player, events):
             result += b'\x14'+struct.pack('<III6f',client_actor,arena.space_id,0,
                 *d['position'],d['roll'],d['pitch'],d['yaw'])
             if own and event.kind == 'sandbox_teleport':
-                result += sandbox_advertisement(arena, notice=TELEPORTED)
+                result += sandbox_advertisement(arena, account_id=player.account_id, notice=TELEPORTED)
         elif event.kind=='period':
             if d['period'] == 4 and getattr(arena, 'boss_role_picker', False):
                 result += boss_picker_message(arena, 0)

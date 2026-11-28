@@ -15,7 +15,7 @@ import re
 import xml.etree.ElementTree as ET
 
 from .dvpl import read
-from .roster import TEAMS, TEAM_SIZE, validate_teams
+from .roster import LARGE_TEAM_SIZE, TEAMS, TEAM_SIZE, validate_teams
 from .vehicle_data import VehicleConfiguration, VehicleDefinition, load_vehicle
 
 
@@ -317,10 +317,11 @@ def _balanced_roster(game, humans, bot_counts, seed):
     return tuple(roster[2]+roster[1])
 
 
-def select_bot_roster(game, player_definition, *, enemies, allies, seed):
+def select_bot_roster(game, player_definition, *, enemies, allies, seed, capacity=TEAM_SIZE):
     """Keep the configured counts and balance independently selected bot models."""
-    if (type(enemies) is not int or not 1 <= enemies <= TEAM_SIZE
-            or type(allies) is not int or not 0 <= allies < TEAM_SIZE
+    if (type(capacity) is not int or not TEAM_SIZE <= capacity <= LARGE_TEAM_SIZE
+            or type(enemies) is not int or not 1 <= enemies <= capacity
+            or type(allies) is not int or not 0 <= allies < capacity
             or type(seed) not in (int, str, bytes)):
         raise ValueError('Invalid bot roster request')
     return _balanced_roster(game, {1: (player_definition,), 2: ()}, (allies, enemies), seed)

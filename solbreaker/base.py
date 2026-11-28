@@ -96,6 +96,7 @@ class ClientSession:
     training_reentry_at: float = 0.
     training_swap_pending: bool = False
     training_swap_inventory: int | None = None
+    vehicle_locks: set[int] = field(default_factory=set)
     sandbox_input: tuple | None = None
     battle_chat_after: float = 0.
     _packet_cipher: PacketCipher | None = field(default=None, init=False, repr=False, compare=False)
@@ -1437,20 +1438,29 @@ class BaseEndpoint(asyncio.DatagramProtocol):
             self.send_packet(addr, client, chunk, acks if index == 0 else (),
                              (first, last) if len(chunks) > 1 else None,reliable=reliable)
 
-    def require_vehicle_available(self, account_id, inventory_id, *, excluding=None):
-        if inventory_id is not None and any(client.account_id == account_id
-                and getattr(client, 'training_swap_inventory', None) == inventory_id
-                for client in self.clients.values()):
-            raise ValueError('This vehicle is entering a training battle')
+    def locked_vehicle_ids(self, account_id, *, excluding=None):
+        locked = {client.training_swap_inventory for client in self.clients.values()
+                  if client.account_id == account_id
+                  and getattr(client, 'training_swap_inventory', None) is not None}
         # Leaving a running arena detaches the session, not its vehicle or ammo.
         for arena in self.arenas.arenas.values():
             if arena is excluding:
                 continue
             player = arena.players.get(account_id)
-            if (player is not None and player.inventory_id == inventory_id
+            if (player is not None and player.inventory_id is not None
                     and (not arena.finished_at or (arena.started
                          and account_id not in arena.recorded_accounts))):
-                raise ValueError("This vehicle is still in a battle or awaiting its result")
+                locked.add(player.inventory_id)
+        return locked
+
+    def require_vehicle_available(self, account_id, inventory_id, *, excluding=None):
+        if inventory_id not in self.locked_vehicle_ids(account_id, excluding=excluding):
+            return
+        if any(client.account_id == account_id
+                and getattr(client, 'training_swap_inventory', None) == inventory_id
+                for client in self.clients.values()):
+            raise ValueError('This vehicle is entering a training battle')
+        raise ValueError("This vehicle is still in a battle or awaiting its result")
 
     def require_arena_capacity(self):
         limit = getattr(self, 'max_arenas', 0)
@@ -1535,8 +1545,10 @@ class BaseEndpoint(asyncio.DatagramProtocol):
             if training is not None and map_id in (None, -1, 0):
                 if training.bots_enabled and training.map is None:
                     from secrets import choice
+                    from .map_catalog import map_team_capacity
                     available = tuple(ident for ident, key in self.map_catalog.items()
                         if key != PROVING_GROUND_KEY and key not in WEATHER_MAPS
+                        and (not training.large_teams or map_team_capacity(ident) >= 7)
                         and (training.battle_mode != 'supremacy' or self.resolve_map_spec(ident).strategic_points))
                     if not available:
                         raise ValueError('No available maps support this battle mode')
@@ -1546,6 +1558,13 @@ class BaseEndpoint(asyncio.DatagramProtocol):
             spec = self.selected_map(map_id)
             if spec.key == PROVING_GROUND_KEY:
                 training = TrainingConfig().for_game_mode(PROVING_GROUND_MODE)
+            elif training is not None and training.bots_enabled and training.large_teams:
+                from .map_catalog import map_team_capacity, room_map_spec
+                from .roster import LARGE_TEAM_SIZE
+                if map_team_capacity(spec.map_id) < 7:
+                    raise ValueError('A 30-tank battle is unavailable on 5×5 maps')
+                if max(training.allies + 1, training.enemies) > min(map(len, spec.team_spawns)):
+                    spec = room_map_spec(spec, LARGE_TEAM_SIZE)
             if (training is not None and training.bots_enabled and training.battle_mode == 'supremacy'
                     and not getattr(spec, 'strategic_points', ())):
                 raise ValueError('This map has no Supremacy capture points')
@@ -1599,16 +1618,15 @@ class BaseEndpoint(asyncio.DatagramProtocol):
                 config = training or TrainingConfig(mode='bots')
                 training = config
                 identity = uuid.uuid4().hex
-                from .map_catalog import map_team_capacity
-                capacity = map_team_capacity(spec.map_id)
+                capacity = min(map(len, spec.team_spawns))
                 game = Path(self.server.manifest['game'])
-                if setup and setup.custom:
+                if setup and setup.custom and not config.large_teams:
                     recipe = custom_bot_roster(game, definition, setup, capacity=capacity, seed=identity)
                     options['custom_bot_slots'] = True
                 else:
                     recipe = select_bot_roster(game, definition,
                         enemies=min(capacity, config.enemies), allies=min(capacity-1, config.active_allies),
-                        seed=identity)
+                        seed=identity, capacity=capacity)
                 if setup and setup.active and setup.preset.bots:
                     key = definition.nation, definition.name
                     recipe = tuple(replace(row, sandbox_preset=setup.preset.values)
@@ -1654,7 +1672,7 @@ class BaseEndpoint(asyncio.DatagramProtocol):
         self.require_arena_capacity()
         from .roster import validate_teams
         from .rooms import room_bot_counts
-        from .map_catalog import room_map_spec, room_team_capacity
+        from .map_catalog import room_battle_capacity, room_map_spec, room_team_capacity
         from .training_config import BATTLE_MODES
         if room_mode not in BATTLE_MODES:
             raise ValueError('Choose a supported room battle mode')
@@ -1664,9 +1682,12 @@ class BaseEndpoint(asyncio.DatagramProtocol):
             room_mode = 'encounter'
             bot_counts = (0, 0)
         capacity = room_team_capacity(spec.map_id, room_mode, room_settings)
+        battle_capacity = room_battle_capacity(spec.map_id, room_mode, room_settings)
         bot_counts = room_bot_counts(bot_counts, capacity)
         validate_teams([*teams, *([1]*bot_counts[0]), *([2]*bot_counts[1])],
-                       practice=practice, capacity=capacity)
+                       practice=practice, capacity=capacity,
+                       total_capacity=battle_capacity,
+                       exact_total=bool(room_settings and room_settings.large_teams))
         spec = room_map_spec(spec, capacity)
         if not account_ids or len(account_ids)!=len(teams) or len(set(account_ids))!=len(account_ids):
             raise ValueError('Every battle participant must have a distinct account and a team')
@@ -1684,16 +1705,23 @@ class BaseEndpoint(asyncio.DatagramProtocol):
         accounts = [dict(self.server.accounts.get(a).identity(), team=t) for a,t in zip(account_ids,teams)]
         if any(teams.count(team) + bots > capacity for team, bots in enumerate(bot_counts, 1)):
             raise ValueError(f'This map supports up to {capacity} participants per team')
+        if len(teams) + sum(bot_counts) > battle_capacity:
+            raise ValueError(f'This room supports up to {battle_capacity} battle participants')
         if room_mode == 'supremacy' and not getattr(spec, 'strategic_points', ()):
             raise ValueError('This map has no Supremacy capture points')
         if (prewarm := getattr(self, 'map_prewarm', None)) is not None:
             prewarm.selected(spec.map_id)
         runtime = self.map_runtime(spec.map_id)
+        room = self.rooms.current(account_ids[0])
+        editor_owner = (room.owner if room is not None and room.owner in account_ids
+                        else account_ids[0])
         options = dict(terrain=runtime['terrain'], map_spec=spec,
                        collision_scene=runtime['collision_scene'],
                        prebattle_seconds=big_boss.COUNTDOWN_SECONDS if room_mode == big_boss.MODE else 7.,
                        room_mode=room_mode, room_settings=room_settings,
-                       bot_game=self.game if room_mode in ('gravity', big_boss.MODE, mad_games.MODE, uprising.MODE) else None)
+                       scenario_editor_accounts=(editor_owner,),
+                       bot_game=self.game if (self.arenas.sandbox_enabled or
+                           room_mode in ('gravity', big_boss.MODE, mad_games.MODE, uprising.MODE)) else None)
         if practice:
             options.update(bot_game=self.game, bot_roster=())
         owners = getattr(self, 'arena_owners_enabled', False)
@@ -1771,11 +1799,15 @@ class BaseEndpoint(asyncio.DatagramProtocol):
     def progression_update(self, client, *, inventory=True, removed=(), removed_types=()):
         state = self.progression.prepare(client.account_id)
         progress = self.server.accounts.get(client.account_id).progress
+        locks = self.locked_vehicle_ids(client.account_id)
         update = account_snapshot(client.account_revision,self.server.manifest['game'],
                                   progress, garage=state,
                                   training_return=self.choosing_training_tank(client.account_id),
                                   bot_rules=self.garage_bot_rules(client.account_id),
-                                  proving_ground=self.proving_ground_available)
+                                  proving_ground=self.proving_ground_available,
+                                  vehicle_locks=locks,
+                                  cleared_vehicle_locks=(client.vehicle_locks-locks
+                                                         if client.account_revision is not None else ()))
         # AccountData's recursive delta merge (146eab0) removes a key for None
         # (146edb8 -> 1481230); omission alone leaves old inventory entries intact.
         # A full snapshot already excludes removed vehicles; tombstones are
@@ -1789,6 +1821,8 @@ class BaseEndpoint(asyncio.DatagramProtocol):
         # Even an early stats-only action needs to initialize the whole cache.
         if not inventory and client.account_revision is not None:
             update = {key:update[key] for key in ('prevRev','rev','stats')}
+        else:
+            client.vehicle_locks = locks
         encoded = account_update(update)
         client.account_revision = progress['revision']
         return encoded
@@ -2543,7 +2577,10 @@ class BaseEndpoint(asyncio.DatagramProtocol):
                                 self.server.manifest["game"], progress, inventory, garage=garage,
                                 training_return=self.choosing_training_tank(client.account_id),
                                 bot_rules=self.garage_bot_rules(client.account_id),
-                                proving_ground=self.proving_ground_available)
+                                proving_ground=self.proving_ground_available,
+                                vehicle_locks=(locks := self.locked_vehicle_ids(client.account_id)),
+                                cleared_vehicle_locks=(client.vehicle_locks-locks
+                                                       if not full_sync else ()))
                             if garage is not None:
                                 from .camouflage import unlocked_paints
                                 snapshot['unlocks'] = {
@@ -2551,6 +2588,7 @@ class BaseEndpoint(asyncio.DatagramProtocol):
                                     'vehUnlocks': {},
                                 }
                             response = account_sync_response(request_id, snapshot)
+                            client.vehicle_locks = locks
                             client.account_revision = progress['revision']
                             client.training_hangar_sync = False
                             client.report_scan_at = time.monotonic()+1

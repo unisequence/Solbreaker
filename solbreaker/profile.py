@@ -31,7 +31,8 @@ def vehicle_descriptor(game):
 
 
 def account_snapshot(previous_revision, game, progress, inventory=None, *, garage=None,
-                     training_return=False, bot_rules=None, proving_ground=False):
+                     training_return=False, bot_rules=None, proving_ground=False,
+                     vehicle_locks=(), cleared_vehicle_locks=()):
     """Full bootstrap when previous_revision is None; otherwise a cache delta."""
     if garage is not None:
         inventory = next((v for v in garage['vehicles'] if v['id'] == garage['selected_id']), None)
@@ -57,7 +58,12 @@ def account_snapshot(previous_revision, game, progress, inventory=None, *, garag
     snapshot = {"prevRev": previous_revision, "rev": progress["revision"],
             "stats": {"credits": progress["credits"], "gold": progress.get("gold", 0), "freeXP": 0, "slots": 5,
                       "diary": bytes.fromhex(progress.get('diary', ''))},
-            "cache": {"gameModes": modes},
+            "cache": {"gameModes": modes,
+                      # Blitz stores a pair (reason, timestamp) for each locked
+                      # inventory vehicle. ON_ARENA=1 is the stock in-battle
+                      # lock that drives the hangar card and its padlock icon.
+                      "vehsLock": {**{vehicle_id: (1, 0) for vehicle_id in vehicle_locks},
+                                   **{vehicle_id: None for vehicle_id in cleared_vehicle_locks}}},
             "garageTutorial": {"tutorialsCompleted": (1 << 63) - 1, "lastStep": 0, "completeStatus": 1},
             "inventory": {1: {"serialized": {1: bytes.fromhex(inventory['descriptor']) if inventory else vehicle_descriptor(game)},
                                "shells": {1: inventory['shells'] if inventory else stock_ammo(Path(game))}}}}

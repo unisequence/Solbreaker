@@ -3,19 +3,25 @@ import math
 
 TEAMS = (1, 2)
 TEAM_SIZE = 7
-LARGE_TEAM_SIZE = 15
-LARGE_ROOM_MAP_ID = 6
-ROOM_CAPACITY = 20
+LARGE_BATTLE_SIZE = 30
+# A 30-tank battle keeps both teams non-empty, so either side may hold 29.
+LARGE_TEAM_SIZE = LARGE_BATTLE_SIZE - 1
+ROOM_CAPACITY = 32
 WAITING = 17
 
 
-def validate_teams(teams, *, practice=False, capacity=TEAM_SIZE):
+def validate_teams(teams, *, practice=False, capacity=TEAM_SIZE,
+                   total_capacity=None, exact_total=False):
     minimum = 0 if practice else 1
-    if (not teams or len(teams) > 2*capacity
+    total_capacity = 2*capacity if total_capacity is None else total_capacity
+    if (not teams or len(teams) > total_capacity or exact_total and len(teams) != total_capacity
             or any(type(t) is not int or t not in TEAMS for t in teams)
             or any(not minimum <= teams.count(t) <= capacity for t in TEAMS)):
         if practice:
             raise ValueError('The proving ground requires a player and allows up to 7 per team')
+        if exact_total:
+            raise ValueError(f'A large battle requires exactly {total_capacity} participants '
+                             f'with 1 to {capacity} on each team')
         raise ValueError(f'A shared battle requires 1 to {capacity} participants on each team')
 
 

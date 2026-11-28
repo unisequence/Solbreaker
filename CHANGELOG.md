@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.4.1
+
+- In Bot Battle, **Battle Settings** opens directly from the mode selector.
+  Saving returns to the hangar. The form shares the map picker, tank presets,
+  team lineup, and battle rules with training rooms.
+- The **30 tanks** format supports uneven teams in Bot Battle and in training
+  rooms on full-size maps. In Bot Battle, the count buttons move a bot from
+  one team to the other. Added wider spawn formations for large teams.
+- Big Boss now defaults to 20 minutes. The battle time setting can still
+  override the limit. In the 30-tank format each team can have up to three bosses.
+- When Free Battle is enabled on the server, players can place auxiliary
+  targets outside the Proving Ground.
+- Added a server selector to the launcher's home page and fixed launching
+  on Linux when the Python virtual environment is a symbolic link.
+
+### Русский
+
+- В «Бою с ботами» настройки открываются прямо из выбора режима. После
+  сохранения игра возвращает в ангар. Выбор карты, пресеты, состав команд
+  и правила боя общие с тренировочными комнатами.
+- Формат «30 танков» поддерживает неравные команды в боях с ботами и
+  тренировочных комнатах на полноразмерных картах. В бою с ботами кнопки
+  количества переносят бота между командами. Стартовые позиции больших
+  команд расставлены шире.
+- В «Большом боссе» по умолчанию 20 минут. Время можно изменить в настройках
+  боя. В формате на 30 танков в каждой команде может быть до трёх боссов.
+- При включённом «Свободном бое» вспомогательные мишени можно ставить
+  и за пределами испытательного полигона.
+- На главном экране лаунчера появился список серверов. Исправлен запуск
+  на Linux, когда виртуальное окружение Python подключено через симлинк.
+
 ## 0.4.0
 
 - Each arena runs on one Bullet world. The Rust track controller uses the

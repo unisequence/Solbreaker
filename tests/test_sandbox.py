@@ -180,6 +180,59 @@ class SandboxTests(TestCase):
         self.assertTrue(arena.unlimited_ammo)
         self.assertFalse(arena._combat_can_finish())
 
+    def test_large_solo_recipe_round_trips_and_builds_15v15(self):
+        config = decode(TITLE, 'SolbreakerBots/2/14/15/2/1/1/10/1/1', 0, {})
+        self.assertEqual(config, TrainingConfig(mode='bots', allies=14, enemies=15,
+            difficulty='hard', battle_mode='encounter', unlimited_lives=True,
+            minutes=10, unlimited_ammo=True, large_teams=True))
+        flags = packed_recipe(config, {}) >> RULES_SHIFT
+        self.assertEqual(flags, 256 + 11*4 + 1 + 2)
+        self.assertEqual((packed_recipe(config, {}) % (1 << RULES_SHIFT)) % 100, 14)
+        self.assertEqual(packed_recipe(config, {}, include_rules=False) >> RULES_SHIFT, 256)
+        with self.assertRaisesRegex(ValueError, 'exactly 29 bots'):
+            TrainingConfig(mode='bots', allies=13, enemies=15, large_teams=True)
+
+        uneven = decode(TITLE, 'SolbreakerBots/2/1/28/2/4/0/-1/0/1', 0, {})
+        self.assertEqual((uneven.allies, uneven.enemies), (1, 28))
+        self.assertEqual((packed_recipe(uneven, {}) % (1 << RULES_SHIFT)) % 100, 1)
+        self.assertEqual(TrainingConfig.from_dict(uneven.to_dict()), uneven)
+
+        class Spec:
+            key, map_id = 'rudniki', 6
+            capture_point, strategic_points = None, ()
+            team_spawns = (
+                tuple((float(i*14), -100.) for i in range(29)),
+                tuple((float(i*14), 100.) for i in range(29)),
+            )
+
+            def spawn(self, team, slot):
+                return self.team_spawns[team-1][slot]
+
+            def yaw(self, team, slot):
+                return 0. if team == 1 else math.pi
+
+        terrain = SimpleNamespace(height=lambda x, z: 0.)
+        for settings, expected in ((config, (15, 15)), (uneven, (2, 28))):
+            with self.subTest(teams=expected):
+                arena = Arena([dict(id=1, nickname='Pilot')], b'', terrain, now=1.,
+                              training=settings, map_spec=Spec())
+                self.addCleanup(arena.close)
+                self.assertTrue(arena.large_teams)
+                self.assertEqual(len(arena.vehicles), 30)
+                self.assertEqual(tuple(sum(v.team == team for v in arena.vehicles.values())
+                                       for team in (1, 2)), expected)
+
+    def test_shared_room_applies_selected_bot_difficulty(self):
+        from solbreaker.bot_roster import BotVehicle
+
+        terrain = SimpleNamespace(height=lambda x, z: 0.)
+        roster = (BotVehicle(2, 0, None, 'heavyTank'),)
+        arena = Arena([dict(id=1, nickname='Pilot', team=1)], b'', terrain,
+                      now=1., solo=False, bot_roster=roster, build_world=False,
+                      room_settings=RoomBattleSettings(bot_difficulty='hard'))
+        self.addCleanup(arena.close)
+        self.assertEqual({bot.difficulty for bot in arena.training_bots.values()}, {'hard'})
+
     def test_solo_bot_skirmish_finishes_after_the_last_enemy(self):
         terrain = SimpleNamespace(height=lambda x, z: 0.)
         for minutes in (None, 0):
@@ -254,13 +307,71 @@ class SandboxTests(TestCase):
         self.assertEqual(arena.practice_reuse_slot, first)
         menu(sandbox.MENU_DESTROY, player.entity_id, 4)
         self.assertTrue(player.alive)
-        arena.practice = False
+        arena.scenario_editor = False
         menu(sandbox.MENU_DESTROY, second, 5)
         self.assertEqual(other.health, 50)
         self.assertEqual([event.data['notice'] for event in arena.drain_events()
                           if event.kind == 'practice_feedback'],
                          [sandbox.MENU_HEALED, sandbox.MENU_DESTROYED,
                           sandbox.MENU_REMOVED, sandbox.MENU_MISS])
+
+    def test_shared_scenario_editor_is_owner_only_and_separate_from_practice(self):
+        terrain = SimpleNamespace(height=lambda x, z: 0.)
+        arena = Arena([dict(id=1, nickname='Guest', team=1),
+                       dict(id=2, nickname='Owner', team=2)], b'', terrain,
+                      now=1., solo=False, sandbox_enabled=True,
+                      scenario_editor_accounts=(2,), room_settings=RoomBattleSettings())
+        self.addCleanup(arena.close)
+        self.assertFalse(arena.practice)
+        self.assertTrue(arena.scenario_editor)
+        self.assertEqual(len(arena.practice_slots), arena.SCENARIO_TARGET_SLOTS)
+        self.assertFalse(arena.scenario_editor_allowed(1))
+        self.assertTrue(arena.scenario_editor_allowed(2))
+        self.assertFalse(sandbox.target_ai_available(arena, 1))
+        self.assertTrue(sandbox.target_ai_available(arena, 2))
+        arena.ready(1, 1.)
+        arena.ready(2, 1.)
+        control = sandbox.Control(sandbox.token(arena), 1, sandbox.SPAWN_TARGET,
+                                  0, 0., 0., 0.)
+        with patch.object(arena, '_spawn_practice_target') as spawn:
+            arena.sandbox_control(1, control)
+            spawn.assert_not_called()
+            arena.sandbox_control(2, control)
+            spawn.assert_called_once_with(arena.vehicle_for(2))
+
+    def test_scenario_targets_do_not_hold_elimination_or_award_mode_score(self):
+        terrain = SimpleNamespace(height=lambda x, z: 0.)
+        arena = Arena([dict(id=1, nickname='One', team=1),
+                       dict(id=2, nickname='Two', team=2)], b'', terrain,
+                      now=1., solo=False, sandbox_enabled=True,
+                      scenario_editor_accounts=(1,), room_settings=RoomBattleSettings())
+        self.addCleanup(arena.close)
+        arena.ready(1, 1.)
+        arena.ready(2, 1.)
+        owner = arena.vehicle_for(1)
+        opponent = arena.vehicle_for(2)
+        target = arena.vehicles[min(arena.practice_slots)]
+        target.health = target.max_health = 100
+        target.team = opponent.team
+        arena.practice_active.add(target.entity_id)
+        arena._damage_health(target, target.health, owner.entity_id, 2., shell_hit=False)
+        self.assertEqual((owner.damage, owner.kills), (0, 0))
+        target.health = 100
+        arena._damage_health(opponent, opponent.health, owner.entity_id, 2., shell_hit=False)
+        arena._fixed_step(2.)
+        self.assertEqual((arena.winner, arena.finish_reason), (1, 'elimination'))
+
+    def test_scenario_return_fire_cannot_deliver_lethal_damage(self):
+        terrain = SimpleNamespace(height=lambda x, z: 0.)
+        arena = Arena([dict(id=1, nickname='Pilot')], b'', terrain,
+                      now=1., sandbox_enabled=True)
+        self.addCleanup(arena.close)
+        player = arena.vehicle_for(1)
+        target = arena.vehicles[min(arena.practice_slots)]
+        target.health = target.max_health = 100
+        player.health = 10
+        applied = arena._damage_health(player, 50, target.entity_id, 2., shell_hit=False)
+        self.assertEqual((applied, player.health), (9, 1))
 
     def test_remove_only_the_aimed_practice_target_and_reuse_its_slot(self):
         terrain = SimpleNamespace(height=lambda x, z: 0.)
@@ -918,6 +1029,76 @@ class SandboxTests(TestCase):
         self.assertEqual(packed_recipe(config, {}), 4171)
         _, _, mode, _ = room_options('[mode big_boss] [bots 1:2] [notes] Test')
         self.assertEqual(mode, 'big_boss')
+
+    def test_big_boss_clock_defaults_to_twenty_minutes_and_respects_overrides(self):
+        terrain = SimpleNamespace(height=lambda x, z: 0.)
+        for solo in (True, False):
+            for minutes, seconds in ((None, 1200), (15, 900), (0, 0)):
+                with self.subTest(solo=solo, minutes=minutes):
+                    accounts = [dict(id=1, nickname='One')]
+                    if solo:
+                        options = {'training': TrainingConfig(mode='bots', battle_mode='big_boss',
+                                                              minutes=minutes)}
+                    else:
+                        accounts.append(dict(id=2, nickname='Two'))
+                        options = {'room_mode': 'big_boss', 'room_settings': RoomBattleSettings(minutes=minutes)}
+                    arena = Arena(accounts, b'', terrain, now=1., solo=solo, **options)
+                    self.addCleanup(arena.close)
+                    for account in accounts:
+                        arena.ready(account['id'], 1.)
+                    self.assertEqual(next(event.data['seconds'] for event in arena.events
+                                          if event.kind == 'period'), seconds)
+                    arena._fixed_step(arena.started + (seconds - 1 if seconds else 1200))
+                    self.assertFalse(arena.finished_at)
+                    if seconds:
+                        arena._fixed_step(arena.started + seconds)
+                        self.assertEqual(arena.finish_reason, 'timeout')
+
+    def test_large_big_boss_selects_up_to_three_bosses_per_team(self):
+        from solbreaker import big_boss
+
+        vehicles = {
+            entity: SimpleNamespace(entity_id=entity, team=1 if entity <= 15 else 2,
+                                    account_id=entity if entity % 2 else None)
+            for entity in range(1, 31)
+        }
+        battle = big_boss.BigBoss(vehicles, 'large-room', bosses_per_team=3)
+        counts = tuple(sum(entity in battle.bosses for entity in range(first, last))
+                       for first, last in ((1, 16), (16, 31)))
+        self.assertEqual(counts, (3, 3))
+        self.assertEqual(battle.tickets, [90, 90])
+        self.assertEqual(len(battle.roles), 24)
+        self.assertTrue(all(vehicles[entity].account_id is not None for entity in battle.bosses))
+
+        uneven = {entity: SimpleNamespace(entity_id=entity, team=1 if entity <= 2 else 2,
+                                          account_id=entity)
+                  for entity in range(1, 31)}
+        battle = big_boss.BigBoss(uneven, '2v28', bosses_per_team=3)
+        self.assertEqual(sum(entity in battle.bosses for entity in (1, 2)), 2)
+        self.assertEqual(sum(entity in battle.bosses for entity in range(3, 31)), 3)
+
+        class LargeSpec:
+            key, map_id = 'synthetic', 7
+            capture_point, strategic_points, native_strategic_points = None, (), ()
+            team_spawns = (tuple((float(slot * 12), -100.) for slot in range(29)),
+                           tuple((float(slot * 12), 100.) for slot in range(29)))
+
+            def spawn(self, team, slot):
+                return self.team_spawns[team-1][slot]
+
+            def yaw(self, team, slot):
+                return 0.
+
+        accounts = [dict(id=entity, nickname=str(entity), team=1 if entity <= 15 else 2)
+                    for entity in range(1, 31)]
+        arena = Arena(accounts, b'', SimpleNamespace(height=lambda x, z: 0.), now=1., solo=False,
+                      room_mode='big_boss', room_settings=RoomBattleSettings(large_teams=True),
+                      map_spec=LargeSpec(), build_world=False)
+        self.addCleanup(arena.close)
+        self.assertEqual(tuple(sum(arena.vehicles[entity].team == team
+                                   for entity in arena.big_boss.bosses)
+                               for team in (1, 2)), (3, 3))
+        self.assertEqual(arena.big_boss.tickets, [90, 90])
 
     def test_big_boss_wave_passes_through_cover_and_respects_mass_and_cooldown(self):
         from solbreaker.big_boss import BLAST_WAVE, GRAVITON, blast_impulse

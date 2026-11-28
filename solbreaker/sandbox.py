@@ -125,14 +125,16 @@ def vehicle_arena_id(arena, entity):
     return entity
 
 
-def advertisement(arena, *, notice=0, ability=False):
+def advertisement(arena, *, account_id=None, notice=0, ability=False):
     # Avatar method 37 carries two vectors. The patched client consumes this
     # sentinel before the native method sees it.
     capabilities = (SANDBOX_KEYS | FAST_RELOAD_KEY if arena.sandbox_enabled else 0) | (
         GRAVITY_KEY if getattr(arena, 'gravity_mode', False) is True or ability else 0)
     if arena.sandbox_enabled:
         capabilities |= TELEPORT_KEY | RESTORE_HP_KEY | GOD_MODE_KEY | TOGGLE_MAP_BORDER | TANK_STATS
-    if getattr(arena, 'practice', False):
+    editor = (arena.scenario_editor_allowed(account_id)
+              if hasattr(arena, 'scenario_editor_allowed') else getattr(arena, 'practice', False))
+    if editor:
         capabilities |= PRACTICE_KEYS | REMOVE_TARGET_KEY
         if arena.sandbox_enabled:
             capabilities |= PRACTICE_MENU
@@ -142,7 +144,7 @@ def advertisement(arena, *, notice=0, ability=False):
         capabilities &= ~0x08
     if getattr(arena, 'time_stop_enabled', False):
         capabilities |= TIME_STOP_KEY
-    if target_ai_available(arena):
+    if target_ai_available(arena, account_id):
         capabilities |= TARGET_AI
     capabilities |= notice
     second = b'\1' + struct.pack('<I', capabilities) if capabilities else b'\0'
@@ -181,8 +183,11 @@ def ability_slot_snapshot(arena, vehicle):
     return bytes(result)
 
 
-def target_ai_available(arena):
-    return arena.sandbox_enabled and (getattr(arena, 'practice', False) or bool(getattr(arena, 'training_bots', ())))
+def target_ai_available(arena, account_id=None):
+    if hasattr(arena, 'scenario_editor_allowed'):
+        return arena.sandbox_enabled and arena.scenario_editor_allowed(account_id)
+    return arena.sandbox_enabled and (
+        getattr(arena, 'practice', False) or bool(getattr(arena, 'training_bots', ())))
 
 
 def decode_boss_pick(number):
@@ -250,7 +255,7 @@ def receive(endpoint, addr, client, arena, body, now):
     if control.token == 0:
         if not control.flags and not control.shot and client.reliable_window_used < 200:
             client.sandbox_input = (current, None, now, 0)
-            endpoint.send(addr, client, advertisement(arena, ability=ability)
+            endpoint.send(addr, client, advertisement(arena, account_id=client.account_id, ability=ability)
                           + preset_advertisement(arena, client.account_id))
         return True
     if control.token != current:

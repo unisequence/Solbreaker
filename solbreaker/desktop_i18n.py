@@ -164,6 +164,11 @@ ENGLISH = {
     'Только на этом компьютере': 'This computer only',
     'Через какую сеть открыть сервер?': 'Choose a network for this server',
     'Подключение': 'Connection',
+    'Сервер игры': 'Game server',
+    'Этот компьютер': 'This computer',
+    'Другой сервер': 'Another server',
+    'Подключить другой сервер…': 'Connect another server…',
+    'Настроить…': 'Configure…',
     'Режим, карта и настройки ботов выбираются в игре.': 'Choose the mode, map and bot settings in the game.',
     'Входить автоматически в последний аккаунт': 'Automatically sign in to the last account',
     'Использовать сохранённый аккаунт при следующем запуске игры.': 'Use the saved account the next time you start the game.',
@@ -174,11 +179,12 @@ ENGLISH = {
     'Кнопка «Играть» сама запускает свой сервер. Здесь можно управлять им вручную.': 'Play starts your server automatically. You can also control it here.',
     'Запустить сервер': 'Start server',
     'Песочница во всех боях': 'Sandbox in all battles',
+    'Свободный бой во всех режимах': 'Free battle in every mode',
     'Num 1 — форсаж, Num 2 — полёт, Num 3 — камера ПТУР. '
     'В полёте используй WASD, пробел для подъёма и Ctrl для снижения. '
-    'На Полигоне Num 4 ставит мишень в точке прицеливания.':
+    'В одиночном бою и владельцу комнаты доступен редактор мишеней.':
         'Num 1: boost, Num 2: flight, Num 3: missile camera. In flight, steer with WASD, rise with Space and descend with Ctrl. '
-        'On the Training Ground, Num 4 places a target where you aim.',
+        'The target editor is available in solo battles and to the room owner.',
     'Остановить сервер': 'Stop server',
     'Обслуживание': 'Maintenance',
     'Резервная копия содержит аккаунты, прогресс и ключ сервера. Перед копированием останови сервер.': 'Backups contain accounts, progress and the server key. Stop the server before backing up.',

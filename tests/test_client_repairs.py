@@ -3,6 +3,7 @@ import hashlib
 import json
 from pathlib import Path
 import struct
+import subprocess
 from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
@@ -19,6 +20,52 @@ def digest(data):
 
 
 class ClientRepairs(unittest.TestCase):
+    def test_sandbox_blob_matches_native_room_parser(self):
+        blob, entries = client_sandbox.build_blob()
+        self.assertEqual(blob, client_sandbox.BLOB)
+        self.assertEqual(entries, client_sandbox.ENTRIES)
+        self.assertIn(client_sandbox.PREVIOUS_SANDBOX_SHA256,
+                      client_sandbox.PREVIOUS_ENTRIES)
+        self.assertIn(client_sandbox.PREVIOUS_CONTROLS_SHA256,
+                      client_sandbox.PREVIOUS_ENTRIES)
+
+    def test_battle_settings_adapters_match_assembly(self):
+        from solbreaker import client_battle_settings
+
+        source = Path(client_battle_settings.__file__).with_name('native')
+        with TemporaryDirectory() as directory:
+            obj, linked, code = (Path(directory) / name for name in
+                                 ('settings.o', 'settings.elf', 'settings.bin'))
+            for defines, expected in (
+                ([], client_battle_settings.DIRECT_HANGAR_EXTENSION),
+                (['--defsym', 'standalone_settings=1'],
+                 client_battle_settings.STANDALONE_SETTINGS_EXTENSION),
+            ):
+                with self.subTest(defines=defines):
+                    subprocess.run(['as', '--32', '-I', source, '--defsym', 'direct_hangar=1',
+                                    *defines, source / 'battle_settings_client.S', '-o', obj],
+                                   check=True)
+                    subprocess.run(['ld', '-m', 'elf_i386', '-Ttext=0x4b1de00',
+                                    '--section-start=.battle_maps=0x4b21a00',
+                                    '-e', 'settings_get', '-o', linked, obj], check=True)
+                    subprocess.run(['objcopy', '-O', 'binary', '--only-section=.text', linked, code],
+                                   check=True)
+                    self.assertEqual(code.read_bytes(), expected)
+
+    def test_standalone_battle_settings_header_routes_back_to_the_lobby(self):
+        from solbreaker import client_battle_settings
+
+        source = self.root/'Training.yaml.dvpl'
+        template = {'Controls': [{'name': 'Screen', 'children': [{'path': 'Content'}]}]}
+        source.write_bytes(dvpl.encode(yaml.safe_dump(template).encode()))
+        standalone = yaml.safe_load(dvpl.decode(client_battle_settings.standalone_screen(source)))
+        self.assertEqual(standalone['Controls'][0]['children'], [
+            {'path': 'Content'},
+            {'path': 'Header/menuButton', 'input': True,
+             'components': {'UIInputEventComponent': {'onTouchUpInside': 'BACK_EVENT'}}},
+        ])
+        self.assertEqual(yaml.safe_load(dvpl.read(source)), template)
+
     def test_chat_filter_is_disabled_only_in_the_prepared_client(self):
         from solbreaker.client_ui import install_chat_filter
 

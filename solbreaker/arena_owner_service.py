@@ -96,6 +96,7 @@ class ArenaOwnerService:
             custom_bot_slots=arena.custom_bot_slots,
             prebattle_seconds=arena.prebattle_seconds,
             sandbox_enabled=arena.sandbox_enabled,
+            scenario_editor_accounts=tuple(sorted(arena.scenario_editor_accounts)),
             room_mode=arena.room_mode, room_settings=arena.room_settings,
             map_cache=getattr(self.endpoint, 'map_cache', None))
 
@@ -284,7 +285,7 @@ class ArenaOwnerService:
                 arena.vehicles[entity_id].flags=flags
         else:
             arena.owner_training_reentry = state.get('training_reentry', False)
-            if getattr(arena, 'practice', False):
+            if getattr(arena, 'scenario_editor', False):
                 arena.practice_spawned = set(state['practice_spawned'])
                 arena.practice_client_ids = dict(state.get('practice_client_ids', {}))
                 if getattr(arena, 'proving_ground', None):

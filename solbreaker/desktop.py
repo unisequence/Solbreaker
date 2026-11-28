@@ -183,6 +183,21 @@ def remote_profile(settings):
     return ''
 
 
+def server_choice_label(settings, local):
+    """Compact, useful label for the connection picker on the home page."""
+    if local:
+        profile = document(settings.local_profile_path)
+        name = profile.get('server_name') or settings.server_name
+        return f'{tr("Этот компьютер")} — {name}'
+    path = remote_profile(settings)
+    profile = document(path) if path else {}
+    advertise = profile.get('advertise') if isinstance(profile.get('advertise'), dict) else {}
+    name = (profile.get('server_name') or advertise.get('login')
+            or settings.server_url.strip() or (Path(path).stem if path else ''))
+    return (f'{tr("Другой сервер")} — {name}' if name
+            else tr('Подключить другой сервер…'))
+
+
 def connection_matches(settings, local):
     lab = Path(settings.client).expanduser()
     if not local and settings.server_url.strip():
@@ -989,16 +1004,29 @@ class Window(QMainWindow):
         column.setContentsMargins(0, 0, 0, 0)
         column.setSpacing(8)
         column.addWidget(LauncherBanner(), 1)
-        self.own = QRadioButton(tr('На своём компьютере'))
-        self.remote = QRadioButton(tr('На другом сервере'))
+        # Kept as the internal source of truth for existing launch flows; the
+        # visible control is a compact server picker that also fits 920 px.
+        self.own = QRadioButton(tr('На своём компьютере'), page)
+        self.remote = QRadioButton(tr('На другом сервере'), page)
         self.own.setChecked(self.manager.settings.local_connection)
         self.remote.setChecked(not self.own.isChecked())
+        self.own.hide()
+        self.remote.hide()
         choice = QHBoxLayout()
-        choice.addWidget(label(tr('Подключение'), 'muted'))
-        choice.addSpacing(10)
-        choice.addWidget(self.own)
-        choice.addWidget(self.remote)
-        choice.addStretch()
+        choice.addWidget(label(tr('Сервер игры'), 'muted'))
+        self.server_choice = QComboBox()
+        self.server_choice.setObjectName('serverChoice')
+        self.server_choice.setAccessibleName(tr('Сервер игры'))
+        self.server_choice.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.server_choice.setMinimumContentsLength(24)
+        self.server_choice.addItem(server_choice_label(self.manager.settings, True), 'local')
+        self.server_choice.addItem(server_choice_label(self.manager.settings, False), 'remote')
+        self.server_choice.setCurrentIndex(self.server_choice.findData(
+            'local' if self.own.isChecked() else 'remote'))
+        choice.addWidget(self.server_choice, 1)
+        self.server_setup_button = button(tr('Настроить…'), self.configure_server)
+        self.server_setup_button.setObjectName('serverSetup')
+        choice.addWidget(self.server_setup_button)
         column.addLayout(choice)
         self.mode_help = label('', 'muted')
         column.addWidget(self.mode_help)
@@ -1058,7 +1086,48 @@ class Window(QMainWindow):
         actions.addLayout(status, 1)
         column.addWidget(dock)
         self.stack.addWidget(page)
-        self.own.toggled.connect(self.refresh_status)
+        self.own.toggled.connect(self.connection_radio_changed)
+        self.remote.toggled.connect(self.connection_radio_changed)
+        self.server_choice.currentIndexChanged.connect(self.change_server_choice)
+
+    def connection_radio_changed(self, checked):
+        if not checked:
+            return
+        self.server_choice.blockSignals(True)
+        self.server_choice.setCurrentIndex(self.server_choice.findData(
+            'local' if self.own.isChecked() else 'remote'))
+        self.server_choice.blockSignals(False)
+        self.refresh_status()
+
+    def change_server_choice(self, index):
+        local = self.server_choice.itemData(index) == 'local'
+        self.own.setChecked(local)
+        self.remote.setChecked(not local)
+        try:
+            settings = replace(self.manager.settings, play_mode='local' if local else 'remote')
+            self.manager.update_settings(settings)
+            settings.save(self.config)
+        except (OSError, ValueError) as error:
+            self.server_choice.blockSignals(True)
+            self.server_choice.setCurrentIndex(self.server_choice.findData(
+                'local' if self.manager.settings.local_connection else 'remote'))
+            self.server_choice.blockSignals(False)
+            self.error(error)
+            return
+        self.refresh_status()
+
+    def refresh_server_choices(self):
+        selected = 'local' if self.own.isChecked() else 'remote'
+        self.server_choice.blockSignals(True)
+        self.server_choice.setItemText(self.server_choice.findData('local'),
+                                       server_choice_label(self.manager.settings, True))
+        self.server_choice.setItemText(self.server_choice.findData('remote'),
+                                       server_choice_label(self.manager.settings, False))
+        self.server_choice.setCurrentIndex(self.server_choice.findData(selected))
+        self.server_choice.blockSignals(False)
+
+    def configure_server(self):
+        self.start_wizard(reuse_client=prepared_client(self.manager.settings))
 
     def change_login_preference(self, checked):
         try:
@@ -1089,10 +1158,10 @@ class Window(QMainWindow):
         column.addWidget(label(tr('Сначала подготовь сервер. Для смены названия останови его, сохрани имя и запусти снова. Игроки увидят его после переподключения.'), 'muted'))
         self.server_label = label('', 'subheading')
         column.addWidget(self.server_label)
-        self.sandbox = QCheckBox(tr('Песочница во всех боях'))
+        self.sandbox = QCheckBox(tr('Свободный бой во всех режимах'))
         self.sandbox.setToolTip(tr('Num 1 — форсаж, Num 2 — полёт, Num 3 — камера ПТУР. '
                                    'В полёте используй WASD, пробел для подъёма и Ctrl для снижения. '
-                                   'На Полигоне Num 4 ставит мишень в точке прицеливания.'))
+                                   'В одиночном бою и владельцу комнаты доступен редактор мишеней.'))
         self.sandbox.setChecked(self.manager.settings.sandbox)
         column.addWidget(self.sandbox)
         column.addWidget(label(tr('Кнопка «Играть» сама запускает свой сервер. Здесь можно управлять им вручную.'), 'muted'))
@@ -1292,6 +1361,7 @@ class Window(QMainWindow):
         if self.wizard is not None:
             self.wizard.deleteLater()
             self.wizard = None
+        self.refresh_server_choices()
         self.refresh_status()
 
     def primary_action(self):
@@ -1654,6 +1724,8 @@ class Window(QMainWindow):
         self.open_replay_button.setEnabled(not self.manager.busy)
         self.replay_folder_button.setVisible(states[1])
         self.remember_login.setEnabled(not self.manager.busy)
+        self.server_choice.setEnabled(not self.manager.busy)
+        self.server_setup_button.setEnabled(not self.manager.busy)
         status = self.manager.server_status()
         can_prepare = local and self.manager.can_prepare_maps
         self.prepare_maps_button.setVisible(can_prepare)

@@ -13,7 +13,7 @@ import struct
 
 import yaml
 
-from .dava_scene import active_nodes, scene
+from .dava_scene import active_nodes, components, scene
 from .dvpl import read
 from .base_capture import CapturePoint
 from .supremacy import StrategicPoint
@@ -75,24 +75,84 @@ def map_camouflage_slot(map_id):
 
 
 def room_team_capacity(map_id, mode, settings):
-    from .roster import LARGE_ROOM_MAP_ID, LARGE_TEAM_SIZE
+    from .roster import LARGE_TEAM_SIZE, TEAM_SIZE
     if settings is not None and settings.large_teams:
-        if map_id != LARGE_ROOM_MAP_ID or mode != 'encounter':
-            raise ValueError('15×15 is available for Encounter on Rudniki')
+        if map_team_capacity(map_id) < TEAM_SIZE:
+            raise ValueError('A 30-tank battle is unavailable on 5×5 maps')
         return LARGE_TEAM_SIZE
     return map_team_capacity(map_id)
+
+
+def room_battle_capacity(map_id, mode, settings):
+    from .roster import LARGE_BATTLE_SIZE
+    if settings is not None and settings.large_teams:
+        # room_team_capacity owns the small-map validation.
+        room_team_capacity(map_id, mode, settings)
+        return LARGE_BATTLE_SIZE
+    return 2 * map_team_capacity(map_id)
+
+
+_LARGE_SPAWN_CLUSTER_RADIUS = 60.
+_LARGE_SPAWN_SIDE_SPACING = 14.
+_LARGE_SPAWN_ROW_SPACING = 20.
+_LARGE_SPAWN_BORDER_MARGIN = 10.
+
+
+def _spawn_cluster_center(points):
+    """Pick the densest native spawn group without averaging split bases."""
+    radius2 = _LARGE_SPAWN_CLUSTER_RADIUS ** 2
+    ranked = []
+    for index, point in enumerate(points):
+        cluster = tuple(other for other in points
+                        if (point[0]-other[0])**2 + (point[1]-other[1])**2 <= radius2)
+        spread = sum((point[0]-other[0])**2 + (point[1]-other[1])**2
+                     for other in cluster)
+        ranked.append((len(cluster), -spread, -index, cluster))
+    cluster = max(ranked)[3]
+    return tuple(sum(point[axis] for point in cluster) / len(cluster) for axis in (0, 1))
+
+
+def _fit_large_spawn(points, bounds):
+    """Translate one formation inside the border while preserving spacing."""
+    min_x, min_z, max_x, max_z = bounds
+    margin = _LARGE_SPAWN_BORDER_MARGIN
+    shifts = []
+    for axis, low, high in ((0, min_x, max_x), (1, min_z, max_z)):
+        first = min(point[axis] for point in points)
+        last = max(point[axis] for point in points)
+        if last-first + 2*margin >= high-low:
+            raise ValueError('30-tank formation does not fit inside the map border')
+        shift = low+margin-first if first < low+margin else high-margin-last if last > high-margin else 0.
+        shifts.append(shift)
+    return tuple((x+shifts[0], z+shifts[1]) for x, z in points)
 
 
 def room_map_spec(spec, capacity):
     from .roster import LARGE_TEAM_SIZE
     if capacity != LARGE_TEAM_SIZE:
         return spec
-    points = tuple(tuple((center_x + (slot % 5 - 2)*7.5, front_z + side*9.*(slot//5))
-                         for slot in range(capacity))
-                   for center_x, front_z, side in ((103., -146., -1.), (51., 183., 1.)))
-    min_x, min_z, max_x, max_z = spec.bounds
-    if any(not (min_x < x < max_x and min_z < z < max_z) for team in points for x, z in team):
-        raise ValueError('15×15 spawn is outside the map border')
+    centers = tuple(_spawn_cluster_center(team) for team in spec.team_spawns)
+    points = []
+    # The first 15 cells retain a compact 5x3 formation. A heavily asymmetric
+    # team then expands sideways and into two more rows, up to 29 starts.
+    offsets = [(column, row) for row in (0, -1, 1) for column in (0, -1, 1, -2, 2)]
+    offsets += [(column, row) for row in (0, -1, 1) for column in (-3, 3)]
+    offsets += [(column, row) for row in (-2, 2) for column in (0, -1, 1, -2, 2)]
+    for team, center in enumerate(centers):
+        opposing = centers[1-team]
+        dx, dz = opposing[0]-center[0], opposing[1]-center[1]
+        length = math.hypot(dx, dz)
+        if length < 1.:
+            raise ValueError('30-tank teams require distinct spawn areas')
+        forward_x, forward_z = dx/length, dz/length
+        side_x, side_z = forward_z, -forward_x
+        formation = tuple((center[0] + column*_LARGE_SPAWN_SIDE_SPACING*side_x
+                           + row*_LARGE_SPAWN_ROW_SPACING*forward_x,
+                           center[1] + column*_LARGE_SPAWN_SIDE_SPACING*side_z
+                           + row*_LARGE_SPAWN_ROW_SPACING*forward_z)
+                          for column, row in offsets[:capacity])
+        points.append(_fit_large_spawn(formation, spec.bounds))
+    points = tuple(points)
     return replace(spec, team_spawns=points)
 
 
@@ -136,6 +196,7 @@ class MapSpec:
     allow_empty_obstacles: bool = False
     capture_point: CapturePoint | None = None
     strategic_points: tuple[StrategicPoint, ...] = ()
+    native_strategic_points: tuple[StrategicPoint, ...] | None = None
 
     def spawn(self, team, slot):
         if type(team) is not int or team not in (1, 2):
@@ -272,22 +333,28 @@ def _load_map_spec(game, key):
     borders, terrain_data, landscapes = [], [], []
     capture_points = []
     strategic_points = []
+
+    def strategic_point(comps):
+        properties = comps.get('CustomPropertiesComponent', {}).get('cpc.properties.archive', {})
+        position = comps.get('TransformComponent', {}).get('tc.worldTranslation')
+        if properties.get('type') != 'strategicpoint' or position is None:
+            return None
+        return StrategicPoint(
+            (float(position[0]), float(position[2]), float(position[1])),
+            radius=float(properties.get('radius', 15.)),
+            points_per_second=float(properties.get('pointsPerSecond', 1.)),
+            max_points_per_second=float(properties.get('maxPointsPerSecond', 3.)),
+            base_id=int(properties['baseID']),
+            capture_points=int(properties.get('capturePoints', 15)),
+            income=int(properties.get('incomeVictoryPoints', 5)),
+            income_seconds=float(properties.get('spawnVictoryPointsTime', 2.)),
+            capture_bonus=int(properties.get('bonusCapture', 0)),
+            loss_penalty=int(properties.get('penaltyLoss', 0)))
+
     for node, comps in active_nodes(data.get("#hierarchy", []), tag):
         properties = comps.get('CustomPropertiesComponent', {}).get('cpc.properties.archive', {})
-        if properties.get('type') == 'strategicpoint':
-            position = comps.get('TransformComponent', {}).get('tc.worldTranslation')
-            if position is not None:
-                strategic_points.append(StrategicPoint(
-                    (float(position[0]), float(position[2]), float(position[1])),
-                    radius=float(properties.get('radius', 15.)),
-                    points_per_second=float(properties.get('pointsPerSecond', 1.)),
-                    max_points_per_second=float(properties.get('maxPointsPerSecond', 3.)),
-                    base_id=int(properties['baseID']),
-                    capture_points=int(properties.get('capturePoints', 15)),
-                    income=int(properties.get('incomeVictoryPoints', 5)),
-                    income_seconds=float(properties.get('spawnVictoryPointsTime', 2.)),
-                    capture_bonus=int(properties.get('bonusCapture', 0)),
-                    loss_penalty=int(properties.get('penaltyLoss', 0))))
+        if (point := strategic_point(comps)) is not None:
+            strategic_points.append(point)
         if properties.get('type') == 'controlpoint':
             position = comps.get('TransformComponent', {}).get('tc.worldTranslation')
             if position is not None:
@@ -388,12 +455,37 @@ def _load_map_spec(game, key):
     minimum = map_team_capacity(_SUPPORTED[key])
     if any(len(team) < minimum for team in points):
         raise ValueError(f"Pinned map {key} has fewer than {minimum} team spawns")
+    native_strategic_points = tuple(sorted(strategic_points, key=lambda p: p.base_id))
+    if not strategic_points:
+        # Variant scenes keep their Supremacy state in the hierarchy even when
+        # another room tag is active. Use those authored bases when the server
+        # explicitly selects Supremacy, without changing Mad Games behaviour.
+        def all_nodes(nodes):
+            for node in nodes:
+                yield components(node)
+                yield from all_nodes(node.get('#hierarchy', []))
+
+        strategic_points = [point for comps in all_nodes(data.get('#hierarchy', []))
+                            if (point := strategic_point(comps)) is not None]
+    if not strategic_points and len(capture_points) == 1:
+        # Older scenes expose only their visible Encounter base. A one-base
+        # Supremacy battle still has score/capture rules and a native objective
+        # marker instead of starting an unwinnable empty mode.
+        capture = capture_points[0]
+        strategic_points = [StrategicPoint(capture.position, radius=capture.radius,
+            points_per_second=capture.points_per_second,
+            max_points_per_second=capture.max_points_per_second,
+            base_id=capture.base_id)]
+    strategic_points = tuple(sorted(strategic_points, key=lambda point: point.base_id))
+    if len({point.base_id for point in strategic_points}) != len(strategic_points):
+        raise ValueError(f'Pinned map {key} has duplicate Supremacy base IDs')
     return MapSpec(key, _SUPPORTED[key], tag, local_name, map_root,
                    scene_path, geometry_path, lka_path, heightmap_path,
                    mkm_path, effects_path, bounds, bbox, points,
                    "maps.yaml with local camera-clearance adjustment" if key in _LOCAL_SPAWN_ADJUSTMENTS
                    else "maps.yaml", capture_point=capture_points[0] if len(capture_points) == 1 else None,
-                   strategic_points=tuple(sorted(strategic_points, key=lambda p: p.base_id)))
+                   strategic_points=strategic_points,
+                   native_strategic_points=native_strategic_points)
 
 
 def _spawn_points(key, row):

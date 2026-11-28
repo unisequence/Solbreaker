@@ -8,8 +8,10 @@ from .consumables import ConsumableSpec
 
 
 MODE = 'big_boss'
+DEFAULT_BATTLE_SECONDS = 20 * 60
 TICKETS = 30
 LIVES = 3
+LARGE_BOSSES_PER_TEAM = 3
 HEALTH_MULTIPLIER = 4
 RELOAD_RATE = 2.
 SHELL_DAMAGE = 1.4
@@ -128,17 +130,22 @@ class GravityTrap(NamedTuple):
 
 
 class BigBoss:
-    def __init__(self, vehicles, seed, *, endless=False):
+    def __init__(self, vehicles, seed, *, endless=False, bosses_per_team=1):
+        if type(bosses_per_team) is not int or bosses_per_team < 1:
+            raise ValueError('Big Boss requires at least one boss per team')
         rng = random.Random(seed + ':bosses')
         self.selected = {}
         self.bosses = set()
         for team in (1, 2):
             candidates = [v for v in vehicles.values() if v.team == team]
             humans = [v for v in candidates if v.account_id is not None]
-            if candidates:
-                self.bosses.add(rng.choice(humans or candidates).entity_id)
+            bots = [v for v in candidates if v.account_id is None]
+            count = min(bosses_per_team, len(candidates))
+            selected = rng.sample(humans, min(count, len(humans)))
+            selected += rng.sample(bots, count-len(selected))
+            self.bosses.update(vehicle.entity_id for vehicle in selected)
         self.lives = dict.fromkeys(self.bosses, LIVES)
-        self.tickets = [] if endless else [TICKETS, TICKETS]
+        self.tickets = [] if endless else [TICKETS * bosses_per_team] * 2
         self.impulses = {}
         self.blast_landings = {}
         self._role_rng = random.Random(seed + ':minions')

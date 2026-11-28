@@ -143,6 +143,26 @@ def _presets():
     return picker._sandbox_panel('SolSetupPresets', 'SetupPresets', 425., controls)
 
 
+def settings_rows():
+    """Matching top-level editors for solo and training-room battle forms."""
+    from .client_battle_settings import _row
+    rows = []
+    for name, command, row_name, visibility in (
+        ('Presets', 103, 'SolSetupPresetRow', 'true'),
+        ('Lineup', 101, 'SolSetupLineupRow', 'localBotSetup'),
+        ('Lineup', 106, 'SolRoomLineupRow', 'not localBotSetup'),
+    ):
+        editor = _button('Open', _key('Edit'), 0., 0., 228., command)
+        editor['components']['SizePolicy'] = {
+            'horizontalPolicy': 'FixedSize', 'horizontalValue': 228.,
+            'verticalPolicy': 'FixedSize', 'verticalValue': 40.,
+        }
+        row = _row(row_name, _key(name), [editor])
+        row['bindings'] = [['visible', visibility]]
+        rows.append(row)
+    return rows
+
+
 def patch_form(document, root):
     packages = document['ImportedPackages']
     for name in ('Common.yaml', 'Common/Slider.yaml', 'Common/TextFieldPanel.yaml'):
@@ -153,17 +173,7 @@ def patch_form(document, root):
     container, = (node for node in _walk(root) if node.get('name') == 'scrollContainerControl')
     container['children'][:] = [node for node in container['children']
                                 if node.get('name') not in ('SolSetupLineupRow', 'SolSetupPresetRow', 'SolRoomLineupRow')]
-    for name, command, row_name in (
-        ('Lineup', 101, 'SolSetupLineupRow'), ('Presets', 103, 'SolSetupPresetRow'),
-        ('Lineup', 106, 'SolRoomLineupRow'),
-    ):
-        editor = _button('Open', _key('Edit'), 0., 0., 228., command)
-        editor['components']['SizePolicy'] = {'horizontalPolicy': 'FixedSize', 'horizontalValue': 228.,
-                                              'verticalPolicy': 'FixedSize', 'verticalValue': 40.}
-        row = _row(row_name, _key(name), [editor])
-        if command == 106:
-            row['bindings'] = [['visible', 'not localBotSetup']]
-        container['children'].insert(0, row)
+    container['children'][:0] = settings_rows()
 
     source = {'components': {'UIDataLocalVarsComponent': {'data': []}}, 'children': []}
     picker.patch_menu({'ImportedPackages': []}, source, [])

@@ -14,7 +14,7 @@ import stat
 import tempfile
 
 from .bot_ai import DEFAULT_DIFFICULTY, DIFFICULTIES, training_bot_requested
-from .roster import TEAM_SIZE
+from .roster import LARGE_BATTLE_SIZE, LARGE_TEAM_SIZE, TEAM_SIZE
 
 SCHEMA_VERSION = 1
 FILE_NAME = 'training.json'
@@ -42,6 +42,7 @@ class RoomBattleSettings:
     minutes: int | None = None
     unlimited_ammo: bool = False
     large_teams: bool = False
+    bot_difficulty: str = DEFAULT_DIFFICULTY
 
     def __post_init__(self):
         if type(self.unlimited_lives) is not bool:
@@ -49,7 +50,9 @@ class RoomBattleSettings:
         if type(self.unlimited_ammo) is not bool:
             raise ValueError('Unlimited ammunition must be boolean')
         if type(self.large_teams) is not bool:
-            raise ValueError('15×15 must be enabled or disabled')
+            raise ValueError('The 30-tank format must be enabled or disabled')
+        if type(self.bot_difficulty) is not str or self.bot_difficulty not in DIFFICULTIES:
+            raise ValueError('Bot difficulty must be one of ' + ', '.join(DIFFICULTIES))
         if self.minutes is not None and (type(self.minutes) is not int
                                          or not 0 <= self.minutes <= MAX_ROOM_MINUTES):
             raise ValueError(f'Choose 1 to {MAX_ROOM_MINUTES} minutes or an endless battle')
@@ -72,17 +75,23 @@ class TrainingConfig:
     unlimited_lives: bool = False
     minutes: int | None = None
     unlimited_ammo: bool = False
+    large_teams: bool = False
 
     def __post_init__(self):
-        RoomBattleSettings(self.unlimited_lives, self.minutes, self.unlimited_ammo)
+        RoomBattleSettings(self.unlimited_lives, self.minutes, self.unlimited_ammo,
+                           self.large_teams)
         if type(self.battle_mode) is not str or self.battle_mode not in BATTLE_MODES:
             raise ValueError('Battle mode must be one of ' + ', '.join(BATTLE_MODES))
         if type(self.mode) is not str or self.mode not in MODES:
             raise ValueError('Training mode must be target or bots')
-        if type(self.enemies) is not int or not 1 <= self.enemies <= MAX_ENEMIES:
-            raise ValueError(f'Training enemies must be 1 to {MAX_ENEMIES}')
-        if type(self.allies) is not int or not 0 <= self.allies <= MAX_ALLIES:
-            raise ValueError(f'Training allies must be 0 to {MAX_ALLIES}')
+        enemy_limit = LARGE_TEAM_SIZE if self.large_teams else MAX_ENEMIES
+        ally_limit = enemy_limit - 1
+        if type(self.enemies) is not int or not 1 <= self.enemies <= enemy_limit:
+            raise ValueError(f'Training enemies must be 1 to {enemy_limit}')
+        if type(self.allies) is not int or not 0 <= self.allies <= ally_limit:
+            raise ValueError(f'Training allies must be 0 to {ally_limit}')
+        if self.large_teams and self.allies + self.enemies + 1 != LARGE_BATTLE_SIZE:
+            raise ValueError('A 30-tank solo battle requires exactly 29 bots')
         if type(self.difficulty) is not str or self.difficulty not in DIFFICULTIES:
             raise ValueError('Training difficulty must be one of ' + ', '.join(DIFFICULTIES))
         if self.map is not None and (type(self.map) is not str
@@ -91,7 +100,8 @@ class TrainingConfig:
 
     @property
     def battle_settings(self):
-        return RoomBattleSettings(self.unlimited_lives, self.minutes, self.unlimited_ammo)
+        return RoomBattleSettings(self.unlimited_lives, self.minutes, self.unlimited_ammo,
+                                  self.large_teams, bot_difficulty=self.difficulty)
 
     @property
     def bots_enabled(self):

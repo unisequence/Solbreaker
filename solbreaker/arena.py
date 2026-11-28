@@ -76,6 +76,7 @@ class Arena:
     MISSILE_UPDATE_STEPS = 6
     MAX_CATCHUP = .25
     POSTBATTLE_SECONDS = 5.
+    SCENARIO_TARGET_SLOTS = 8
     CONTROL_INPUT_TIMEOUT = 3.
     AIRBORNE_CONTROL_GRACE = 8.
     # Local grip tuning: lower than the XML climb-angle boundary so a steep
@@ -93,7 +94,7 @@ class Arena:
                  bot_enabled=False, training=None, step_budget=None, result_id=None,
                  build_world=True, bot_roster=None, bot_game=None, bot_scene_settings=(), custom_bot_slots=False,
                  prebattle_seconds=0., sandbox_enabled=False,
-                 room_mode='encounter', room_settings=None):
+                 room_mode='encounter', room_settings=None, scenario_editor_accounts=None):
         if (isinstance(prebattle_seconds, bool) or not isinstance(prebattle_seconds, (int, float))
                 or not math.isfinite(prebattle_seconds) or not 0 <= prebattle_seconds <= 60):
             raise ValueError('Invalid prebattle duration')
@@ -126,8 +127,9 @@ class Arena:
         if room_settings is not None and (solo or not isinstance(room_settings, RoomBattleSettings)):
             raise ValueError('Invalid training room settings')
         self.room_settings = room_settings
-        self.large_teams = room_settings is not None and room_settings.large_teams
         settings = training.battle_settings if solo else room_settings or RoomBattleSettings()
+        self.large_teams = settings.large_teams
+        bot_difficulty = training.difficulty if solo else settings.bot_difficulty
         self.endless = settings.minutes == 0 or self.proving_ground is not None
         self.unlimited_lives = settings.unlimited_lives or self.proving_ground is not None
         self.unlimited_ammo = settings.unlimited_ammo
@@ -162,6 +164,16 @@ class Arena:
             self.unlimited_lives = False
         self._gravity_game = bot_game if self.gravity_mode else None
         self.practice = self.proving_ground is not None or sandbox_enabled and solo and not bot_enabled
+        account_ids = tuple(account['id'] for account in accounts)
+        if scenario_editor_accounts is None:
+            scenario_editor_accounts = account_ids if solo or self.proving_ground else account_ids[:1]
+        if (not isinstance(scenario_editor_accounts, (tuple, list, set, frozenset))
+                or any(type(account_id) is not int for account_id in scenario_editor_accounts)
+                or not scenario_editor_accounts
+                or not set(scenario_editor_accounts) <= set(account_ids)):
+            raise ValueError('Invalid scenario editor accounts')
+        self.scenario_editor = sandbox_enabled
+        self.scenario_editor_accounts = frozenset(scenario_editor_accounts) if self.scenario_editor else frozenset()
         self.range_abilities = proving_ground_rules.ABILITIES if self.proving_ground and solo else ()
         self.practice_clock_repeats = self.practice and not self.proving_ground and settings.minutes is None
         self.practice_slots = set()
@@ -176,7 +188,7 @@ class Arena:
         self.practice_active = set()
         self.practice_selection = 0
         self.practice_types = {}
-        self.practice_game = bot_game if self.practice else None
+        self.practice_game = bot_game if self.scenario_editor else None
         self.practice_target = None
         self.practice_next_pick = 0.
         self.practice_default_scenes = {}
@@ -197,14 +209,21 @@ class Arena:
         self.map_id = map_spec.map_id if map_spec is not None else 6
         point = getattr(map_spec, 'capture_point', None)
         strategic_points = getattr(map_spec, 'strategic_points', ())
-        capture_enabled = rules in ('encounter', uprising.MODE) or (self.mad_games_mode and not strategic_points)
+        native_strategic_points = getattr(map_spec, 'native_strategic_points', None)
+        if native_strategic_points is None:
+            native_strategic_points = strategic_points
+        mode_strategic_points = (strategic_points if rules == 'supremacy'
+                                 else native_strategic_points if self.mad_games_mode else ())
+        capture_enabled = (rules in ('encounter', uprising.MODE)
+                           or self.mad_games_mode and not native_strategic_points)
         self.base_capture = BaseCapture(point) if point is not None and capture_enabled else None
-        self.supremacy = (Supremacy(strategic_points)
-                         if rules == 'supremacy' or (self.mad_games_mode and strategic_points) else None)
+        self.supremacy = Supremacy(mode_strategic_points) if mode_strategic_points else None
         self.client_map_id = self.map_id | (0x10000 if self.supremacy is not None or self.big_boss_mode else 0)
         self.battle_seconds = 420 if self.base_capture is not None or self.supremacy is not None else 600
         if settings.minutes:
             self.battle_seconds = settings.minutes * 60
+        elif self.big_boss_mode:
+            self.battle_seconds = big_boss.DEFAULT_BATTLE_SECONDS
         self.epoch = time.monotonic() if now is None else now
         if not math.isfinite(self.epoch):
             raise ValueError('Invalid simulation start time')
@@ -235,6 +254,8 @@ class Arena:
         self.finish_reason = ''
         self.players = {}
         self.vehicles = {}
+        self.spawn_slots = {}
+        self.large_spawn_adjustments = {}
         self.training_bot = None
         self.training_bots = {}
         self.disabled_training_bots = set()
@@ -317,10 +338,13 @@ class Arena:
             bot_roster = tuple(bot_roster or ())
             if not accounts or any(not isinstance(row, BotVehicle) for row in bot_roster):
                 raise ValueError('Invalid room bot roster')
-            from .map_catalog import room_team_capacity
+            from .map_catalog import room_battle_capacity, room_team_capacity
+            battle_capacity = room_battle_capacity(self.map_id, room_mode, settings)
             validate_teams(teams + [row.team for row in bot_roster],
                            practice=self.proving_ground is not None,
-                           capacity=room_team_capacity(self.map_id, room_mode, settings))
+                           capacity=room_team_capacity(self.map_id, room_mode, settings),
+                           total_capacity=battle_capacity,
+                           exact_total=settings.large_teams)
         if len({a['id'] for a in accounts}) != len(accounts):
             raise ValueError('Arena participants must have distinct accounts')
         scenes = dict(vehicle_scenes or {})
@@ -333,8 +357,9 @@ class Arena:
             player = Player(account['id'],account['nickname'],entity_base+101+i,entity_base+200+i,team)
             player.inventory_id = account.get('inventory_id')
             self.players[player.account_id] = player
-            x,z = training_spawn(map_spec,team,slots[team])
-            yaw = training_yaw(map_spec,team,slots[team])
+            slot = slots[team]
+            x,z = training_spawn(map_spec,team,slot)
+            yaw = training_yaw(map_spec,team,slot)
             slots[team] += 1
             pose = Pose((x,terrain.height(x,z),z),yaw)
             assets = scenes.get(player.account_id,collision_scene)
@@ -342,6 +367,7 @@ class Arena:
             self.vehicles[player.vehicle_id] = Vehicle(player.vehicle_id,player.account_id,
                     player.nickname,team,actual_descriptor,pose,
                     camouflage=account.get('camouflage', 0))
+            self.spawn_slots[player.vehicle_id] = (team, slot)
             own = self.vehicles[player.vehicle_id]
             own.definition = assets.definition if assets else None
             if self.sandbox_enabled:
@@ -384,7 +410,9 @@ class Arena:
                              if any(v.team != team for v in self.vehicles.values())]
                 elif solo:
                     from .map_catalog import map_team_capacity
-                    capacity = map_team_capacity(self.map_id)
+                    team_spawns = getattr(self.map_spec, 'team_spawns', None)
+                    capacity = (min(map(len, team_spawns)) if team_spawns else
+                                map_team_capacity(self.map_id))
                     enemies = min(capacity, training.enemies)
                     allies = min(capacity-1, training.active_allies)
                     slots = [(2, i) for i in range(capacity if self.practice else enemies)]
@@ -400,7 +428,7 @@ class Arena:
                     if bot_roster is None and bot_enabled and bot_game is not None and own.definition is not None:
                         from .bot_roster import select_bot_roster
                         bot_roster = select_bot_roster(bot_game, own.definition,
-                            enemies=enemies, allies=allies, seed=self.result_id)
+                            enemies=enemies, allies=allies, seed=self.result_id, capacity=capacity)
                 else:
                     slots = [(team, slot) for team in (2, 1)
                              for slot in range(slots[team], slots[team] +
@@ -448,13 +476,14 @@ class Arena:
                         definition = practice_definitions[choice]
                     actual_descriptor = definition.descriptor if definition is not None else own.descriptor
                     target = self.vehicles[eid] = Vehicle(eid,None,name,team,actual_descriptor,pose)
+                    self.spawn_slots[eid] = (team, slot)
                     if self.practice:
                         self.practice_slots.add(eid)
                         target.health = 0
                     if bot_enabled:
                         kind = (self.bot_roster[index].vehicle_class if self.bot_roster
                                 else vehicle_class(bot_game, definition))
-                        ai = self.training_bots[eid] = TrainingBot(eid, training.difficulty, vehicle_class=kind)
+                        ai = self.training_bots[eid] = TrainingBot(eid, bot_difficulty, vehicle_class=kind)
                         if self.training_bot is None:
                             self.training_bot = ai
                     target.definition = definition
@@ -501,23 +530,56 @@ class Arena:
                         self._configure_fuel_fire(target, metadata)
                         self._configure_crew(target, metadata)
                         self._configure_ammunition(target)
+            if self.scenario_editor and not self.practice:
+                owner_id = next(iter(self.scenario_editor_accounts))
+                own = self.vehicle_for(owner_id)
+                source_assets = entity_assets.get(own.entity_id)
+                bounds = getattr(collision_scene, 'bounds', None)
+                for index in range(self.SCENARIO_TARGET_SLOTS):
+                    eid = entity_base + 900 + index
+                    if eid in self.vehicles:
+                        raise ValueError('Scenario target identity overlaps the battle roster')
+                    if bounds is None:
+                        x = own.pose.position[0] - 100.
+                        z = own.pose.position[2] - 100. - 20.*index
+                    else:
+                        x = bounds[0] - 70.
+                        z = bounds[1] - 70. - 20.*index
+                    try:
+                        y = terrain.height(x, z)
+                    except (IndexError, ValueError):
+                        y = own.pose.position[1]
+                    team = 2 if own.team == 1 else 1
+                    target = self.vehicles[eid] = Vehicle(
+                        eid, None, 'Scenario target', team, own.descriptor, Pose((x, y, z), 0.))
+                    target.definition = own.definition
+                    target.movable_armor_state = own.movable_armor_state
+                    target.health = 0
+                    self.practice_slots.add(eid)
+                    self.practice_types.setdefault(0, []).append(eid)
+                    if source_assets is not None:
+                        entity_assets[eid] = source_assets
         except BaseException:
             for resource in self._owned_bot_scenes:
                 resource.close()
             self._owned_bot_scenes.clear()
             raise
         if self.mad_games_mode:
-            for vehicle in self.vehicles.values():
+            for vehicle in self._mode_vehicles():
                 self._install_mad_games_ability(vehicle)
         if self.uprising is not None:
-            for vehicle in self.vehicles.values():
+            for vehicle in self._mode_vehicles():
                 self._install_uprising_ability(vehicle)
         if self.team_spotting and collision_scene is not None:
             for vehicle in self.vehicles.values():
                 vehicle.mad_unspotted = True
         if self.big_boss_mode:
-            self.big_boss = big_boss.BigBoss(self.vehicles, self.result_id, endless=self.endless)
-            for vehicle in self.vehicles.values():
+            bosses_per_team = big_boss.LARGE_BOSSES_PER_TEAM if self.large_teams else 1
+            self.big_boss = big_boss.BigBoss(
+                                             {v.entity_id: v for v in self._mode_vehicles()},
+                                             self.result_id, endless=self.endless,
+                                             bosses_per_team=bosses_per_team)
+            for vehicle in self._mode_vehicles():
                 self._set_boss_role_ability(vehicle)
                 if self._is_boss(vehicle):
                     vehicle.mad_unspotted = False
@@ -602,6 +664,8 @@ class Arena:
                     self.bot_director.navigation=complete.value
                     self._bot_navigation_builder=None
                     self.navigation_build_ms = (time.monotonic()-self._navigation_build_started)*1000
+                    if self.large_teams:
+                        self._settle_large_team_spawns(complete.value)
                 finally:
                     self._navigation_cpu_ms += (time.thread_time()-cpu)*1000
         # Replica construction belongs to loading for both build modes. A
@@ -615,8 +679,99 @@ class Arena:
         self.building = False
         return True
 
+    @staticmethod
+    def _large_spawn_candidates(navigation, position, rings=18):
+        node = navigation.node(position)
+        if node is None:
+            return
+        origin_z, origin_x = divmod(node, navigation.nx)
+        for ring in range(rings + 1):
+            candidates = []
+            for dz in range(-ring, ring + 1):
+                for dx in range(-ring, ring + 1):
+                    if max(abs(dx), abs(dz)) != ring:
+                        continue
+                    x, z = origin_x + dx, origin_z + dz
+                    if not (0 <= x < navigation.nx and 0 <= z < navigation.nz
+                            and navigation.walkable[z, x]):
+                        continue
+                    candidate = z*navigation.nx+x
+                    point = navigation.point(candidate)
+                    distance = (point[0]-position[0])**2 + (point[2]-position[2])**2
+                    candidates.append((distance, candidate, point))
+            for _, _, point in sorted(candidates):
+                yield point
+
+    def _settle_large_team_spawns(self, navigation):
+        """Move formation cells off blockers or isolated navigation islands."""
+        points = [list(team) for team in self.map_spec.team_spawns]
+        flat = navigation.walkable.ravel()
+        minimum_spacing2 = 12.**2
+        adjustments = {}
+        routed = {
+            team: [self.world.poses[entity].position for entity, vehicle in self.vehicles.items()
+                   if vehicle.team == team and entity in self.training_bots
+                   and (search := navigation.searches.get(entity)) is not None
+                   and search.route is not None]
+            for team in TEAMS
+        }
+        for entity, (team, slot) in self.spawn_slots.items():
+            vehicle = self.vehicles[entity]
+            position = self.world.poses[entity].position
+            node = navigation.node(position)
+            route = navigation.searches.get(entity) if entity in self.training_bots else None
+            if (node is not None and flat[node]
+                    and (entity not in self.training_bots or route is not None and route.route is not None)):
+                continue
+            others = [other.position for other_entity, other in self.world.poses.items()
+                      if other_entity != entity]
+            anchors = [position]
+            anchors += sorted(routed[team], key=lambda point:
+                              (point[0]-position[0])**2 + (point[2]-position[2])**2)
+            candidates = (point for anchor in anchors
+                          for point in self._large_spawn_candidates(navigation, anchor))
+            seen = set()
+            for x, _, z in candidates:
+                candidate_node = navigation.node((x, 0., z))
+                if candidate_node in seen:
+                    continue
+                seen.add(candidate_node)
+                if any((x-other[0])**2 + (z-other[2])**2 < minimum_spacing2
+                       for other in others):
+                    continue
+                pose = self.world.training_placement(entity, x, z, vehicle.pose.yaw, stationary=True)
+                if pose is None:
+                    continue
+                self.world.relocate_training_body(entity, pose)
+                vehicle.pose = pose
+                points[team-1][slot] = (pose.position[0], pose.position[2])
+                adjustments[entity] = math.dist(position[::2], pose.position[::2])
+                routed[team].append(pose.position)
+                break
+            else:
+                raise ValueError('30-tank spawn has no nearby navigable placement')
+        if not adjustments:
+            return
+        self.map_spec = dataclasses.replace(self.map_spec,
+            team_spawns=tuple(tuple(team) for team in points))
+        self.large_spawn_adjustments = adjustments
+        for entity in adjustments.keys() & self.training_bots.keys():
+            bot = self.vehicles[entity]
+            goal = self.bot_director.patrol_goal(bot, self.training_bots[entity])
+            navigation.request(entity, bot.pose.position, goal, restart=True)
+
     def _is_boss(self, vehicle):
         return self.big_boss is not None and vehicle.entity_id in self.big_boss.bosses
+
+    def _mode_vehicles(self):
+        """Battle roster only; scenario targets are physical but never participants."""
+        return (vehicle for vehicle in self.vehicles.values()
+                if vehicle.entity_id not in self.practice_slots)
+
+    def scenario_editor_allowed(self, account_id):
+        if account_id is None and len(self.scenario_editor_accounts) == 1:
+            account_id = next(iter(self.scenario_editor_accounts))
+        return self.scenario_editor and account_id in self.scenario_editor_accounts
 
     def _new_consumable(self, vehicle, spec):
         limit = sandbox.reload_limit(vehicle)
@@ -1600,7 +1755,8 @@ class Arena:
             return
         before = capture.view()
         members = {vehicle.entity_id: vehicle.team for vehicle in self.vehicles.values()
-                   if vehicle.alive and capture.point.contains(vehicle.pose.position)
+                   if vehicle.entity_id not in self.practice_slots
+                   and vehicle.alive and capture.point.contains(vehicle.pose.position)
                    and (vehicle.account_id is None or self.players[vehicle.account_id].attached)}
         winner = capture.advance(members, self.STEP, now)
         if capture.view() != before:
@@ -1615,7 +1771,7 @@ class Arena:
         if self.supremacy is None or self.finished_at:
             return
         before = self.supremacy.state()
-        living = [v for v in self.vehicles.values() if v.alive
+        living = [v for v in self.vehicles.values() if v.entity_id not in self.practice_slots and v.alive
                   and (v.account_id is None or self.players[v.account_id].attached)]
         members = [{v.entity_id: v.team for v in living if point.contains(v.pose.position)}
                    for point in self.supremacy.points]
@@ -1899,7 +2055,7 @@ class Arena:
                 for vehicle in self.vehicles.values():
                     self._update_recon_camouflage(vehicle, self.started)
             if self.mad_games_mode:
-                for vehicle in self.vehicles.values():
+                for vehicle in self._mode_vehicles():
                     mad_games.charge_shield(vehicle, now)
                 self._update_mad_games(now)
             elif self.team_spotting and self.world is not None:
@@ -1988,15 +2144,16 @@ class Arena:
                 or not self.started or self.finished_at or not self.vehicle_for(account_id).alive):
             return
         if control.flags == sandbox.PRACTICE_MENU:
-            if self.sandbox_enabled and self.practice and self.world is not None:
+            if self.scenario_editor_allowed(account_id) and self.world is not None:
                 self._practice_menu_action(self.vehicle_for(account_id), control.shot)
             return
         if control.flags == sandbox.PICK_TARGET:
-            if self.practice and self.practice_game is not None and self.world is not None:
+            if (self.scenario_editor_allowed(account_id) and self.practice_game is not None
+                    and self.world is not None):
                 self._pick_practice_target(self.vehicle_for(account_id), control.shot)
             return
         if control.flags == sandbox.TARGET_AI:
-            if sandbox.target_ai_available(self) and self.world is not None:
+            if sandbox.target_ai_available(self, account_id) and self.world is not None:
                 self._set_enemy_ai(self.vehicle_for(account_id), control.shot)
             return
         if control.flags == sandbox.TANK_STATS:
@@ -2037,7 +2194,7 @@ class Arena:
                 vehicle = self.vehicle_for(account_id)
                 if (state := mad_games.irradiator_state(vehicle)) is not None:
                     self._activate_mad_irradiator(vehicle, state, self.simulation_time, None)
-        if self.practice:
+        if self.scenario_editor_allowed(account_id):
             vehicle = self.vehicle_for(account_id)
             controls = self._practice_controls(vehicle)
             if control.flags & sandbox.NEXT_TARGET and self.practice_types:
@@ -2075,16 +2232,18 @@ class Arena:
     def _set_enemy_ai(self, player_vehicle, selection):
         everyone, level = divmod(selection, sandbox.AI_APPLY_ALL)
         difficulty = sandbox.AI_LEVELS[level]
-        group = self._owned_targets(player_vehicle) if self.practice else self.training_bots
+        editor = self.scenario_editor_allowed(player_vehicle.account_id)
+        group = ((self._owned_targets(player_vehicle) | self.training_bots.keys())
+                 if editor else self.training_bots)
         if not everyone:
             entity, _ = self.aim_hit(player_vehicle)
             group = (entity,) if entity in group else ()
         targets = [self.vehicles[entity] for entity in sorted(group)
                    if self.vehicles[entity].team != player_vehicle.team
-                   and (self.vehicles[entity].alive or everyone and not self.practice)]
+                   and (self.vehicles[entity].alive or everyone and entity in self.training_bots)]
         for target in targets:
             entity = target.entity_id
-            if self.practice:
+            if entity in self.practice_slots:
                 if difficulty is None:
                     self.practice_gunners.pop(entity, None)
                 elif entity in self.practice_gunners:
@@ -2386,7 +2545,7 @@ class Arena:
     def _practice_gunner_pairs(self):
         for entity, gunner in self.practice_gunners.items():
             target = (self.vehicles.get(self.proving_ground.owners.get(entity)) if self.proving_ground
-                      else self.vehicle_for(next(iter(self.players))))
+                      else self.vehicle_for(next(iter(self.scenario_editor_accounts))))
             bot = self.vehicles[entity]
             if target and target.alive and bot.alive and self._player_attached(target):
                 yield bot, gunner, target
@@ -2682,7 +2841,8 @@ class Arena:
         previous_abilities = None
         if (selection := self.boss_pending_roles.pop(entity, None)) is not None:
             previous_abilities = self._pin_boss_role(restored, *selection)
-        elif self.big_boss is not None and (replacement is not None or entity in self.big_boss.roles):
+        elif (entity not in self.practice_slots and self.big_boss is not None
+              and (replacement is not None or entity in self.big_boss.roles)):
             if replacement is None:
                 self.big_boss.assign_role(entity)
             previous_abilities = self._set_boss_role_ability(restored)
@@ -2697,11 +2857,11 @@ class Arena:
             self._update_sandbox_health(restored)
             restored.gun.set_factors(self._crew_role_factor(restored, 'gunner')
                                      * sandbox.stat_bonus(restored, sandbox.STAT_TURRET), 1.)
-        if self.mad_games_mode:
+        if self.mad_games_mode and entity not in self.practice_slots:
             self._clear_mad_irradiator(restored)
             self._install_mad_games_ability(restored)
             mad_games.charge_shield(restored, self.simulation_time)
-        if self.uprising is not None:
+        if self.uprising is not None and entity not in self.practice_slots:
             self._install_uprising_ability(restored)
         if self.team_spotting:
             restored.mad_unspotted = not self._is_boss(restored)
@@ -2715,7 +2875,7 @@ class Arena:
         self.vehicles[entity] = restored
         if self.bot_director is not None:
             self.bot_director.orders.respawn(entity)
-        if self.uprising is not None:
+        if self.uprising is not None and entity not in self.practice_slots:
             self._clear_uprising_mark(entity)
             self._clear_uprising_curse(entity)
             self.uprising.history.pop(entity, None)
@@ -2799,8 +2959,6 @@ class Arena:
             self.motion_frame = None
 
     def reenter_training(self, account_id, scene, shells, consumables, *, camouflage=0):
-        from .map_catalog import room_team_capacity
-
         previous = self.vehicle_for(account_id)
         entity = previous.entity_id
         if self.time_stop is not None and self.time_stop.entity == entity:
@@ -2815,9 +2973,12 @@ class Arena:
         if self.gravity_mode and vehicle_class(self._gravity_game, scene.definition) in (
                 'lightTank', 'mediumTank', 'AT-SPG'):
             consumables += (None,) * max(0, 3-len(consumables)) + (GRAVITY_JUMP_SPEC,)
+        from .map_catalog import map_team_capacity
+        team_spawns = getattr(self.map_spec, 'team_spawns', None)
+        capacity = min(map(len, team_spawns)) if team_spawns else map_team_capacity(self.map_id)
         spawns = ((*training_spawn(self.map_spec, previous.team, slot),
                    training_yaw(self.map_spec, previous.team, slot))
-                  for slot in range(room_team_capacity(self.map_id, self.room_mode, self.room_settings)))
+                  for slot in range(capacity))
         enemy_positions = [vehicle.pose.position for vehicle in self.vehicles.values()
                            if vehicle.team != previous.team and vehicle.alive
                            and self._player_attached(vehicle)]
@@ -2864,8 +3025,9 @@ class Arena:
     def _advance_respawns(self, now):
         if not self.respawn_at or self.world is None:
             return
-        from .map_catalog import room_team_capacity
-        capacity = room_team_capacity(self.map_id, self.room_mode, self.room_settings)
+        from .map_catalog import map_team_capacity
+        team_spawns = getattr(self.map_spec, 'team_spawns', None)
+        capacity = min(map(len, team_spawns)) if team_spawns else map_team_capacity(self.map_id)
         stagger = self.large_teams
         cursor = self._capacity_respawn_cursor
         for entity, due in tuple(self.respawn_at.items()):
@@ -3821,7 +3983,8 @@ class Arena:
         ray = self._ability_ray(vehicle)
         entity, point = self.aim_hit(vehicle, ray=ray)
         target = self.vehicles.get(entity)
-        if (target is None or not target.alive or target.team == vehicle.team
+        if (target is None or target.entity_id in self.practice_slots
+                or not target.alive or target.team == vehicle.team
                 or not self._player_attached(target) or mad_games.concealed(target, vehicle.team)
                 or requested not in (None, entity) or uprising.active(target, uprising.PLAY_DEAD, now)):
             return False
@@ -3960,7 +4123,8 @@ class Arena:
 
     def _update_mad_games(self, now):
         living = tuple(vehicle for vehicle in self.vehicles.values()
-                       if vehicle.alive and self._player_attached(vehicle))
+                       if vehicle.entity_id not in self.practice_slots
+                       and vehicle.alive and self._player_attached(vehicle))
         for vehicle in living:
             if vehicle.mad_revenge:
                 self._expire_mad_revenge(vehicle, now)
@@ -4163,7 +4327,7 @@ class Arena:
 
     def _update_team_spotting(self, now):
         living = tuple(v for v in self.vehicles.values() if v.alive and self._player_attached(v))
-        targets = tuple(v for v in living if v.entity_id not in self.practice_slots) if self.practice else living
+        targets = tuple(v for v in living if v.entity_id not in self.practice_slots)
         observers = tuple(v for v in living if v.account_id not in self.hangar_players)
         if self.practice_gunners:
             observers += tuple(self.vehicles[entity] for entity in self.practice_gunners
@@ -4781,6 +4945,7 @@ class Arena:
                       detonate_ammo_rack=False, fire_at=None, hit_state=None):
         shooter = self.vehicles[event.shooter]
         target = self.vehicles.get(target_id)
+        scenario_target = target is not None and target.entity_id in self.practice_slots
         if self.proving_ground and not self.proving_ground.can_hit(shooter, target, event.shot):
             if direct:
                 self.emit('shot_end', event.shooter, shot=event.shot, point=event.point,
@@ -4814,9 +4979,9 @@ class Arena:
         # with ShieldKit or the implemented anti-HE provision.
         he = shell is not None and shell.kind=='HIGH_EXPLOSIVE'
         factor = self._armor_mover_factor(target,event.at) if enemy and shell is not None else 1.
-        if enemy and shell is not None and self.big_boss is not None:
+        if enemy and not scenario_target and shell is not None and self.big_boss is not None:
             factor *= self.big_boss.damage_factor(target.entity_id)
-        if enemy and shell is not None and self.uprising is not None:
+        if enemy and not scenario_target and shell is not None and self.uprising is not None:
             factor *= self.uprising.mark_damage_factor(shooter, target, event.at)
             if uprising.active(target, uprising.BERSERK, event.at):
                 factor *= uprising.BERSERK_INCOMING
@@ -4829,7 +4994,7 @@ class Arena:
             factor *= self._shield_factor(target,event.at)
         raw = result.damage
         reflected = 0.
-        if self.mad_games_mode and enemy and target.alive:
+        if self.mad_games_mode and enemy and not scenario_target and target.alive:
             factor *= self._mad_outgoing_factor(shooter, target, event.at)
             if direct and (result.hit is not None or raw > 0):
                 expiry = shooter.mad_revenge.pop((target.entity_id, target.generation), None)
@@ -4843,7 +5008,7 @@ class Arena:
         mitigated = factor!=1 and raw>0 and target.alive
         if mitigated:
             result = dataclasses.replace(result,damage=int(factor*raw+.5))
-        if (enemy and self.uprising is not None and shell is not None and target.alive
+        if (enemy and not scenario_target and self.uprising is not None and shell is not None and target.alive
                 and (raw > 0 or direct and result.hit is not None)
                 and self._uprising_blocks_shell(target, event.shot, event.at)):
             result = dataclasses.replace(result, outcome='not_penetrated', damage=0)
@@ -4851,7 +5016,7 @@ class Arena:
         if enemy and target.sandbox_god_mode:
             result = dataclasses.replace(result, outcome='not_penetrated', damage=0)
             detonate_ammo_rack = False
-        if (self.uprising is not None and direct and enemy and target.alive and shooter.alive
+        if (not scenario_target and self.uprising is not None and direct and enemy and target.alive and shooter.alive
                 and shell is not None and result.outcome == 'penetrated' and result.damage > 0):
             limit = sandbox.reload_limit(shooter)
             triggered = self.uprising.trigger_shot_upgrade(shooter.entity_id, 'lightning', event.at, limit)
@@ -4862,14 +5027,14 @@ class Arena:
                 result = dataclasses.replace(result, damage=result.damage + bonus)
         damage = (target.health if detonate_ammo_rack and enemy and target.alive
                   else result.damage if enemy else 0)
-        if self.mad_games_mode and enemy and target.alive and not detonate_ammo_rack:
+        if self.mad_games_mode and enemy and not scenario_target and target.alive and not detonate_ammo_rack:
             shielded = self._mad_shield_damage(target, damage, fire_at)
             if shielded != damage:
                 result = dataclasses.replace(result, damage=shielded)
                 damage = shielded
         if enemy:
             damage = min(target.health, damage)
-        if damage > 0 and self._consume_boss_shield(target, fire_at):
+        if not scenario_target and damage > 0 and self._consume_boss_shield(target, fire_at):
             damage = 0
             result = dataclasses.replace(result, damage=0, outcome='not_penetrated')
         blocked = (int(shell.damage+.5) if direct and enemy and target.alive
@@ -4915,22 +5080,24 @@ class Arena:
                     direction = tuple(a - b for a, b in zip(result.hit.point, event.point))
                     strength = .75 * (1. - math.hypot(*direction) / radius)
                     self._gravity_shell_impulse(target, shell, direction, strength=strength)
-            if direct:
+            if direct and not scenario_target:
                 shooter.direct_hits += 1
                 target.hits_received += 1
                 if blocked:
                     target.blocked_damage += blocked
                     self.emit('blocked_statistics',target.entity_id,damage=target.blocked_damage)
-            if result.outcome=='penetrated':
+            if not scenario_target and result.outcome=='penetrated':
                 shooter.piercings += 1
                 target.piercings_received += 1
             self.emit('feedback',event.shooter,target.entity_id,outcome=result.outcome)
         if damage:
             damage = self._damage_health(target, damage, event.shooter, fire_at, shell_hit=True,
                                          hit_effect=hit_effect, reflector_hit=bool(reflected and hit_effect))
-            if target.alive and shell is not None and shell.poison_level is not None:
+            if (not scenario_target and target.alive and shell is not None
+                    and shell.poison_level is not None):
                 self._boss_poison(shooter, target, shell.poison_level, fire_at)
-            if direct and target.alive and shooter.alive and target.mad_passive == mad_games.TOXIC_STARE:
+            if (not scenario_target and direct and target.alive and shooter.alive
+                    and target.mad_passive == mad_games.TOXIC_STARE):
                 key = (shooter.entity_id, shooter.generation)
                 already_marked = key in target.mad_revenge
                 target.mad_revenge[key] = fire_at + mad_games.REVENGE_DURATION
@@ -4943,10 +5110,10 @@ class Arena:
                 hit = direct and result.hit is not None
                 series.contact(event.shot, direct=hit, penetrated=hit and result.outcome=='penetrated',
                                damage=damage)
-        if reflected:
+        if reflected and not scenario_target:
             self._apply_mad_reflected_damage(target, shooter,
                 damage * mad_games.REFLECTED_DAMAGE if damage else reflected, fire_at)
-        if (self.mad_games_mode and enemy and direct and shell is not None
+        if (not scenario_target and self.mad_games_mode and enemy and direct and shell is not None
                 and target.entity_id in self.training_bots and target.alive
                 and (damage or result.hit is not None and not result.hit.external)):
             # React to the completed hit. Only later projectiles can be
@@ -4961,6 +5128,32 @@ class Arena:
             self._damage_health(attacker, int(amount+.5), reflector.entity_id, at,
                                 shell_hit=False, reflected=True)
 
+    def _damage_scenario_target(self, target, amount, source, at, *, shell_hit,
+                                hit_effect=None, reflector_hit=False):
+        """Damage a physical target without feeding any battle-mode state."""
+        damage = min(target.health, amount)
+        if damage <= 0:
+            return 0
+        target.health -= damage
+        target.damage_received += damage
+        self.emit('health', source or 0, target.entity_id, health=target.health,
+                  **({'received_damage': damage} if shell_hit and source is not None else {}),
+                  **({'reflector_hit': True} if reflector_hit else {}),
+                  **({'hit_effect': hit_effect} if hit_effect is not None else {}))
+        if not target.alive:
+            target.flags = 0
+            target.engine_mode = (0, 0)
+            target.killer = source or 0
+            target.death_at = at
+            target.submerged_since = None
+            self._set_hazard_warning(target, None)
+            self._stop_fire(target, at, 'scenario_target')
+            self._stop_consumables(target)
+            self.practice_gunners.pop(target.entity_id, None)
+            self.emit('killed', source or 0, target.entity_id, keep_roster=False)
+            self._lose_target(target.entity_id)
+        return damage
+
     def _damage_health(self, target, amount, source, at, *, shell_hit, hit_effect=None,
                        kinetic=False, manual_respawn=False, reflected=False, reflector_hit=False,
                        ram_blast_energy=0.):
@@ -4972,6 +5165,11 @@ class Arena:
         shooter = self.vehicles[source] if source is not None else None
         if self.proving_ground and not self.proving_ground.can_hit(shooter, target):
             return 0
+        if target.entity_id in self.practice_slots:
+            return self._damage_scenario_target(
+                target, amount, source, at, shell_hit=shell_hit,
+                hit_effect=hit_effect, reflector_hit=reflector_hit)
+        scenario_source = shooter is not None and shooter.entity_id in self.practice_slots
         enemy = shooter is not None and shooter.team != target.team
         if self.mad_games_mode and enemy and not (shell_hit or kinetic or reflected):
             amount = int(amount * self._mad_outgoing_factor(shooter, target, at) + .5)
@@ -4985,6 +5183,10 @@ class Arena:
             if uprising.active(target, uprising.BERSERK, at):
                 factor *= uprising.BERSERK_INCOMING
             amount = int(amount * factor + .5)
+        if scenario_source:
+            # Return fire is useful pressure, but an auxiliary tank must never
+            # decide a round by delivering the lethal point of damage.
+            amount = min(amount, max(0, target.health - 1))
         damage = min(target.health, amount)
         if damage <= 0:
             return 0
@@ -6517,7 +6719,7 @@ class Arena:
                 if self.step_count % spacing == 0:
                     self._update_team_spotting(now)
             teams = {v.team for v in self.vehicles.values()
-                     if (v.alive or self.uprising is not None and (
+                     if v.entity_id not in self.practice_slots and (v.alive or self.uprising is not None and (
                          v.entity_id in self.respawn_at or v.account_id in self.hangar_players
                          and self.uprising.remaining(v.entity_id) > 0)) and
                      (v.account_id is None or self.players[v.account_id].attached)}
@@ -6527,7 +6729,8 @@ class Arena:
             # still finishes immediately and explicitly cancels the burst.
             if self.proving_ground:
                 self.proving_ground.finish_frame(self.projectiles)
-            pending_burst = any(v.entity_id != phased and v.alive and v.burst_pending and
+            pending_burst = any(v.entity_id not in self.practice_slots
+                                and v.entity_id != phased and v.alive and v.burst_pending and
                                 (v.account_id is None or self.players[v.account_id].attached)
                                 for v in self.vehicles.values())
             if (self.solo and not self.practice and not self.training_bots and teams == {1}
@@ -6614,7 +6817,8 @@ class ArenaManager:
                vehicle_scenes=None, terrain=None, map_spec=None, bot_enabled=False, training=None,
                build_world=True, result_id=None, bot_roster=None, bot_game=None, bot_scene_settings=(),
                custom_bot_slots=False,
-               prebattle_seconds=0., room_mode='encounter', room_settings=None):
+               prebattle_seconds=0., room_mode='encounter', room_settings=None,
+               scenario_editor_accounts=None):
         space = self.next_space
         self.next_space += 1
         terrain = self.terrain if terrain is None else terrain
@@ -6628,7 +6832,8 @@ class ArenaManager:
                       bot_roster=bot_roster, bot_game=bot_game, bot_scene_settings=bot_scene_settings,
                       custom_bot_slots=custom_bot_slots,
                       prebattle_seconds=prebattle_seconds, sandbox_enabled=self.sandbox_enabled,
-                      room_mode=room_mode, room_settings=room_settings)
+                      room_mode=room_mode, room_settings=room_settings,
+                      scenario_editor_accounts=scenario_editor_accounts)
         if self.recon_point_tolerance is not None and arena.recon is not None:
             arena.enable_recon_point_probe(tolerance=self.recon_point_tolerance)
         self.arenas[arena.result_id] = arena
