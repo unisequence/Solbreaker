@@ -15,6 +15,8 @@ jobs:
     timeout-minutes: 35
     env:
       QT_QPA_PLATFORM: offscreen
+      # The embedded sandbox executable was generated with GCC 14.2.
+      SOLBREAKER_SANDBOX_CC: gcc-14
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
@@ -35,7 +37,7 @@ jobs:
       - name: Install locked dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libegl1 libgl1 libxkbcommon0 fonts-dejavu-core
+          sudo apt-get install -y --no-install-recommends gcc-14 libegl1 libgl1 libxkbcommon0 fonts-dejavu-core
           python -m venv "$RUNNER_TEMP/solbreaker-ci"
           for profile in gui tui; do
             "$RUNNER_TEMP/solbreaker-ci/bin/python" tools/install_dependencies.py --profile "$profile"

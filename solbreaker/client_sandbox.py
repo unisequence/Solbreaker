@@ -1,6 +1,7 @@
 """Version-pinned sandbox controls and rendering on the prepared PE32 client."""
 import base64
 import hashlib
+import os
 from pathlib import Path
 import struct
 import subprocess
@@ -3677,7 +3678,8 @@ PREVIOUS_ENTRIES = {
     },
 }
 CFLAGS = ('-m32', '-Os', '-std=c11', '-ffreestanding', '-fno-builtin', '-fpie',
-          '-fno-stack-protector', '-fno-asynchronous-unwind-tables', '-fno-unwind-tables',
+          '-fno-stack-protector', '-fno-stack-clash-protection',
+          '-fno-asynchronous-unwind-tables', '-fno-unwind-tables',
           '-fno-jump-tables', '-fno-ident', '-msse2', '-mfpmath=sse',
           '-mpreferred-stack-boundary=2', '-Wall', '-Wextra', '-Werror')
 
@@ -3688,7 +3690,8 @@ def build_blob():
     with tempfile.TemporaryDirectory(prefix='solbreaker-sandbox-build-') as temporary:
         work = Path(temporary)
         obj, script, elf, raw = (work/name for name in ('client.o', 'layout.ld', 'client.elf', 'code.bin'))
-        subprocess.run(['gcc', *CFLAGS, '-c', str(source), '-o', str(obj)], check=True)
+        compiler = os.environ.get('SOLBREAKER_SANDBOX_CC', 'gcc')
+        subprocess.run([compiler, *CFLAGS, '-c', str(source), '-o', str(obj)], check=True)
         listing = subprocess.check_output(['objdump', '-r', str(obj)], text=True)
         absolute = [line.split() for line in listing.splitlines() if 'R_386_32 ' in line]
         if absolute != [['00000007', 'R_386_32', '.text']]:
